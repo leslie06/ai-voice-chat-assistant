@@ -1,0 +1,110 @@
+{
+  "uid": "vca-voice",
+  "title": "VCA 实时语音",
+  "tags": ["vca", "voice"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "服务状态",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "vca-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green" } } }
+          ],
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+        }
+      },
+      "targets": [
+        { "refId": "A", "expr": "up{job=\"vca\"}", "datasource": { "type": "prometheus", "uid": "vca-prometheus" } }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "TTS 首包 p95 (开口延迟)",
+      "gridPos": { "h": 4, "w": 5, "x": 4, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "vca-prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 2 } ] }
+        }
+      },
+      "targets": [
+        { "refId": "A", "expr": "vca_turn_tts_first_audio_seconds{quantile=\"0.95\"}", "datasource": { "type": "prometheus", "uid": "vca-prometheus" } }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "累计回合数",
+      "gridPos": { "h": 4, "w": 5, "x": 9, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "vca-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
+      "targets": [
+        { "refId": "A", "expr": "sum(vca_turn_count_total)", "datasource": { "type": "prometheus", "uid": "vca-prometheus" } }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "TTS 首包延迟 (用户感知开口延迟)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "vca-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 } } },
+      "targets": [
+        { "refId": "A", "expr": "vca_turn_tts_first_audio_seconds{quantile=\"0.5\"}", "legendFormat": "p50", "datasource": { "type": "prometheus", "uid": "vca-prometheus" } },
+        { "refId": "B", "expr": "vca_turn_tts_first_audio_seconds{quantile=\"0.95\"}", "legendFormat": "p95", "datasource": { "type": "prometheus", "uid": "vca-prometheus" } },
+        { "refId": "C", "expr": "rate(vca_turn_tts_first_audio_seconds_sum[1m]) / rate(vca_turn_tts_first_audio_seconds_count[1m])", "legendFormat": "avg(1m)", "datasource": { "type": "prometheus", "uid": "vca-prometheus" } }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "LLM 首 token 延迟 (思考延迟)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "vca-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 } } },
+      "targets": [
+        { "refId": "A", "expr": "vca_turn_llm_first_token_seconds{quantile=\"0.5\"}", "legendFormat": "p50", "datasource": { "type": "prometheus", "uid": "vca-prometheus" } },
+        { "refId": "B", "expr": "vca_turn_llm_first_token_seconds{quantile=\"0.95\"}", "legendFormat": "p95", "datasource": { "type": "prometheus", "uid": "vca-prometheus" } }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "整轮耗时",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "vca-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 } } },
+      "targets": [
+        { "refId": "A", "expr": "vca_turn_total_seconds{quantile=\"0.5\"}", "legendFormat": "p50", "datasource": { "type": "prometheus", "uid": "vca-prometheus" } },
+        { "refId": "B", "expr": "vca_turn_total_seconds{quantile=\"0.95\"}", "legendFormat": "p95", "datasource": { "type": "prometheus", "uid": "vca-prometheus" } }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "回合速率 (按结果)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "vca-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "stacking": { "mode": "normal" } } } },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (rate(vca_turn_count_total[1m]))", "legendFormat": "{{outcome}}", "datasource": { "type": "prometheus", "uid": "vca-prometheus" } }
+      ]
+    }
+  ]
+}

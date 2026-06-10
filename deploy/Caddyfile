@@ -1,0 +1,14 @@
+# Caddy 反向代理 + 自动 HTTPS（Let's Encrypt）
+# 用法：把 your-domain.com 改成你的域名，然后 `caddy run --config ./Caddyfile`
+# Caddy 会自动申请/续期证书，并自动支持 WebSocket（wss），无需额外配置。
+
+your-domain.com {
+    encode zstd gzip
+    reverse_proxy localhost:8080 {
+        # 长连接：拉长流式读超时，避免语音长回合被切断
+        transport http {
+            read_timeout  3600s
+            write_timeout 3600s
+        }
+    }
+}

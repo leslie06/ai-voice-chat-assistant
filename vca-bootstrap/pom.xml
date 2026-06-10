@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+		<groupId>com.vca</groupId>
+		<artifactId>voice-chat-assistant</artifactId>
+		<version>0.0.1-SNAPSHOT</version>
+	</parent>
+
+	<artifactId>vca-bootstrap</artifactId>
+	<name>vca-bootstrap</name>
+	<description>启动模块: 组装全部模块为可执行应用。唯一打成可运行 jar 的模块。</description>
+
+	<dependencies>
+		<!-- 接入层(传递带入 orchestrator/gateway/domain/webflux) -->
+		<dependency>
+			<groupId>com.vca</groupId>
+			<artifactId>vca-web</artifactId>
+		</dependency>
+		<!-- 真实厂商 provider; 各自配置开关默认关闭, 配 key 后启用 -->
+		<dependency>
+			<groupId>com.vca</groupId>
+			<artifactId>vca-provider-llm-deepseek</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>com.vca</groupId>
+			<artifactId>vca-provider-llm-qwen</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>com.vca</groupId>
+			<artifactId>vca-provider-asr-aliyun</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>com.vca</groupId>
+			<artifactId>vca-provider-tts-aliyun</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>com.vca</groupId>
+			<artifactId>vca-provider-s2s-qwen</artifactId>
+		</dependency>
+		<!-- 可观测性: 健康检查/指标端点 + Prometheus 抓取格式 -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-registry-prometheus</artifactId>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+				<version>${spring-boot.version}</version>
+				<configuration>
+					<mainClass>com.vca.bootstrap.Application</mainClass>
+				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>repackage</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>

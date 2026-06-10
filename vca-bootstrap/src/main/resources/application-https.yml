@@ -1,0 +1,17 @@
+# HTTPS profile: 局域网内用自签证书跑 HTTPS, 让手机/其它电脑远程也能用麦克风。
+# 启用: SPRING_PROFILES_ACTIVE=real,https (与 real 叠加)
+#
+# 证书打包在 classpath 里(vca-bootstrap/src/main/resources/vca-keystore.p12, 自签,
+# 含 SAN: 本机 WiFi IP + localhost)。放 classpath 而非文件路径, 是为了无论用 IntelliJ
+# 还是 java -jar 启动、无论工作目录在哪都能加载到。
+# 换了网络/IP 变了 → 重新生成证书(把新 IP 写进 SAN), 见 docs/05-deployment.md。
+#
+# 注意: 浏览器只在 https 或 localhost 下允许麦克风(getUserMedia)。HTTP 远程访问拿不到麦克风。
+server:
+  port: ${HTTPS_PORT:8443}
+  ssl:
+    enabled: true
+    key-store: ${SSL_KEYSTORE:classpath:vca-keystore.p12}
+    key-store-password: ${SSL_KEYSTORE_PASSWORD:changeit}
+    key-store-type: PKCS12
+    key-alias: ${SSL_KEY_ALIAS:vca}

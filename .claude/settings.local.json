@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./mvnw -pl vca-orchestrator -am test -Dtest=HandsFreeVadTest -Dsurefire.failIfNoSpecifiedTests=false)",
+      "Bash(./mvnw -pl vca-orchestrator,vca-web -am test -Dsurefire.failIfNoSpecifiedTests=false)",
+      "Bash(java -version)",
+      "Bash(./mvnw -q -pl vca-bootstrap -am package -DskipTests)",
+      "Bash(SPRING_PROFILES_ACTIVE=default DEEPSEEK_ENABLED=false java -jar vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar)",
+      "Bash(echo \"pid $!\")",
+      "Read(//private/tmp/**)",
+      "Bash(python3 wstest.py)",
+      "Bash(curl -s http://localhost:8080/)",
+      "Bash(curl -s http://localhost:8099/)",
+      "Bash(SPRING_PROFILES_ACTIVE=default DEEPSEEK_ENABLED=false java -jar vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar --server.port=8099)",
+      "Bash(python3 barge2.py)"
+    ]
+  }
+}

@@ -1,0 +1,249 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: voice-chat-assistant
+  profiles:
+    # 默认激活 real: 全链路真实厂商(阿里云 ASR + Qwen/CosyVoice TTS + DeepSeek LLM)。
+    active: ${SPRING_PROFILES_ACTIVE:real}
+
+logging:
+  level:
+    com.vca: DEBUG
+
+# 可观测性: 健康检查 + 指标。注意这些 HTTP 端点当前无鉴权, 公网部署建议用反向代理限制 /actuator。
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+vca:
+  web:
+    path: /ws/voice
+    # 对话模式: pipeline=三段式(ASR→LLM→TTS); s2s=原生端到端语音大模型(更低延迟、保留语气)。
+    # 切 s2s 需同时开启 vca.providers.s2s.qwen.enabled 并配好 DASHSCOPE_API_KEY。
+    mode: ${VCA_MODE:s2s}
+    asr-vendor: aliyun
+    llm-vendor: deepseek    # 真实 DeepSeek
+    tts-vendor: aliyun
+    tts-voice: longxiaochun
+    # 端到端模式(mode=s2s)厂商/模型/音色; model/voice 留空用 provider 默认。
+    s2s-vendor: qwen
+    s2s-model: ${VCA_S2S_MODEL:}
+    s2s-voice: ${VCA_S2S_VOICE:}
+    # 提示词(人设/语气/约束)。pipeline 与 s2s 共用; s2s 下每回合作为 Qwen-Omni 的
+    # response.create.instructions 下发。长提示词写在文件末尾的 prompts: 段(块标量 | , 免转义),
+    # 这里只引用它; 换人设=改那段, 或把引用指向别的 key。也可用 VCA_SYSTEM_PROMPT 整段覆盖。
+    system-prompt: ${VCA_SYSTEM_PROMPT:${prompts.assistant}}
+    # 共享访问令牌: 留空=不校验(本地开发)。公网部署务必用环境变量 VCA_AUTH_TOKEN 设一个。
+    auth-token: ${VCA_AUTH_TOKEN:}
+    # 单会话最长存活秒数(防连着不挂烧账单); 同时在线连接上限。0=不限。
+    max-session-seconds: ${VCA_MAX_SESSION_SECONDS:600}
+    max-connections: ${VCA_MAX_CONNECTIONS:8}
+    vad:
+      # 免提开口/断句检测。use-silero=true 用 Silero(ONNX)语义级 VAD, 抗噪更好;
+      # false(默认)用能量阈值法。模型加载失败会自动降级回能量法, 不影响启动。
+      use-silero: ${VCA_VAD_SILERO:false}
+      # 自定义 Silero 模型路径; 留空用打包进 jar 的默认 silero_vad.onnx。
+      silero-model-path: ${VCA_VAD_SILERO_MODEL:}
+      # 阈值与所选检测器同尺度: 能量法约 0.015/0.020; Silero 为人声概率, 开了 use-silero
+      # 又没显式改这两个值时会自动取 0.5/0.6。其余 onset-ms/silence-ms/barge-ms/preroll-ms 通用。
+      #
+      # --- 抗"回声自打断"调钝(S2S 外放扬声器时尤其需要) ---
+      # 打断阈值抬高: 让机器人自己的回声够不着, 只有你明显更响的真插话才打断。
+      # 外放还自打断就继续往上调(0.08/0.1…); 戴耳机可调回更灵敏(0.02)。
+      barge-threshold: ${VCA_VAD_BARGE_THRESHOLD:0.05}
+      # 需持续这么久的人声才算打断(ms), 滤掉短促回声/杂音。
+      barge-ms: ${VCA_VAD_BARGE_MS:400}
+      # 起播保护期(ms): 机器人开口后这段时间内绝不打断, 防被自己头几个字的回声掐断。
+      barge-grace-ms: ${VCA_VAD_BARGE_GRACE_MS:600}
+      # --- 句尾判停: 静音多久算"你说完了" ---
+      # 学英语爱停顿找词, 默认 800ms 太短会把半句话提前提交、模型只听到片段→答非所问。
+      # 调大给你留出停顿空间; 太大则你说完后要多等一会儿才回复。1000~1500 之间按习惯权衡。
+      silence-ms: ${VCA_VAD_SILENCE_MS:1200}
+      # 开口判定: 人声需持续这么久(ms)才算开口, 顺带过滤短促杂音/咳嗽误触发新一轮。
+      onset-ms: ${VCA_VAD_ONSET_MS:200}
+      # --- 半双工(默认开): 机器人说话期间不收麦、不语音打断 ---
+      # 外放无回声消除时, 这是断掉"自己声音→麦克风→不停重复"死循环的根治开关。
+      # 代价: 不能用语音随时插嘴(想打断点屏幕 ⏹ 按钮)。戴耳机/有 AEC 时设 false 可恢复全双工语音打断。
+      half-duplex: ${VCA_VAD_HALF_DUPLEX:true}
+
+  gateway:
+    circuit:
+      failure-threshold: 5
+      open-duration: 10s
+    asr:
+      candidates:
+        - { vendor: aliyun, max-concurrency: 100 }
+    llm:
+      candidates:
+        - { vendor: deepseek, model: deepseek-v4-flash, max-concurrency: 50 }  # 真实 DeepSeek
+        - { vendor: qwen,     model: qwen3.7-plus,      max-concurrency: 50 }  # 通义千问(文本); 前端可切具体模型
+    tts:
+      candidates:
+        - { vendor: aliyun, voice: longxiaochun, max-concurrency: 100 }
+    s2s:
+      candidates:
+        - { vendor: qwen, max-concurrency: 50 }   # 端到端 Qwen-Omni(mode=s2s 时生效)
+
+  providers:
+    llm:
+      deepseek:
+        enabled: ${DEEPSEEK_ENABLED:true}
+        base-url: https://api.deepseek.com
+        default-model: deepseek-v4-flash
+        keys: ${DEEPSEEK_API_KEY:}   # 不写默认值: 必须由环境变量提供, 严禁把真实 key 写进仓库
+        # 本机开了代理(如 Clash)时直连会 TLS 握手超时, 让 DeepSeek 走代理(只影响它)。
+        # 优先用 DEEPSEEK_PROXY; 没设则自动沿用系统 https_proxy/HTTPS_PROXY; 都没有=直连。
+        proxy: ${DEEPSEEK_PROXY:${https_proxy:${HTTPS_PROXY:}}}
+      qwen:
+        # 通义千问文本 LLM, 走 DashScope OpenAI 兼容接口(与 ASR/TTS/S2S 共用 DASHSCOPE_API_KEY)。
+        # 前端模型下拉里的 qwen3.7-max / qwen3.7-plus 由此提供; default-model 仅在会话未指定时兜底。
+        # DashScope 在国内, 默认直连不走代理。
+        enabled: ${QWEN_LLM_ENABLED:true}
+        base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+        default-model: ${QWEN_LLM_MODEL:qwen3.7-plus}
+        keys: ${DASHSCOPE_API_KEY:}
+    asr:
+      aliyun:
+        # 真实阿里云 ASR: ALIYUN_ASR_ENABLED=true + DASHSCOPE_API_KEY=sk-...
+        enabled: ${ALIYUN_ASR_ENABLED:false}
+        api-key: ${DASHSCOPE_API_KEY:}
+        model: paraformer-realtime-v2
+    tts:
+      aliyun:
+        # 真实阿里云 TTS(CosyVoice): ALIYUN_TTS_ENABLED=true + DASHSCOPE_API_KEY=sk-...
+        # 输出 PCM 24kHz, 前端按此播放。
+        enabled: ${ALIYUN_TTS_ENABLED:false}
+        api-key: ${DASHSCOPE_API_KEY:}
+        model: ${COSYVOICE_MODEL:cosyvoice-v3-flash}
+      qwen:
+        # Qwen-TTS(通义千问语音, Realtime 流式; 音色如 Cherry/Ethan/Chelsie)。
+        # 与 CosyVoice 是不同模型/接口。默认关, real profile 开启。
+        enabled: ${QWEN_TTS_ENABLED:false}
+        api-key: ${DASHSCOPE_API_KEY:}
+        model: ${QWEN_TTS_MODEL:qwen3-tts-flash-realtime}
+    s2s:
+      qwen:
+        # 原生端到端语音大模型 Qwen-Omni Realtime(音频进、音频出, 内部融合 ASR+LLM+TTS)。
+        # 启用: QWEN_S2S_ENABLED=true + DASHSCOPE_API_KEY=sk-...; 再把 vca.web.mode 设为 s2s。
+        enabled: ${QWEN_S2S_ENABLED:true}
+        api-key: ${DASHSCOPE_API_KEY:}
+        model: ${QWEN_S2S_MODEL:qwen3.5-omni-plus-realtime}
+        voice: ${QWEN_S2S_VOICE:Tina}
+
+# ============ 长提示词集中区 ============
+# 用 YAML 块标量(|): 块内引号 " 、冒号 : 、换行、中文都原样保留, 无需转义。
+# 新增人设 = 在下面加一个 key, 再把上面 vca.web.system-prompt 的引用改成 ${prompts.你的key}。
+prompts:
+  # AI助手
+  assistant: |
+    你是一位专业的AI助手。
+    你的目标：
+    - 准确回答用户问题
+    - 帮助用户解决实际问题
+    - 提供结构化、清晰、易理解的回答
+    
+    回答原则：
+    
+    1. 优先准确
+    如果不确定，请明确说明。
+    
+    2. 不编造事实
+    不知道的内容直接说明。
+    
+    3. 回答结构化
+    优先使用：
+    - 概述
+    - 原因
+    - 解决方案
+    - 示例
+    
+    4. 代码规范
+    代码使用Markdown格式。
+    重要代码添加注释。
+    
+    5. 用户体验
+    回答不要过于简短。
+    也不要输出无意义废话。
+    
+    6. 上下文记忆
+    结合历史对话理解用户意图。
+    
+    7. 当问题模糊时
+    主动提问获取更多信息。
+    
+    8. 当存在多个方案时
+    说明优缺点并给出推荐。
+  # 语音版英语陪练: 你的回复会被 TTS 朗读, 所以严禁任何书面格式(标签/冒号/列表/序号), 全部口语化。
+  english-coach: |
+    你是我的英语口语陪练，一位美国本土英语母语者，像朋友一样陪我聊天来练口语。
+    最重要的一条：你说的每一句话都会被语音朗读出来，所以必须完全像真人说话，绝对不能出现任何书面格式——
+    不要标题、不要"Natural English:"或"Explanation:"这类冒号标签、不要列表、不要数字编号、不要 markdown、不要表情符号。
+    所有内容都要像正常聊天一样自然地说出来。
+
+    怎么聊：
+    全程用英语和我自然对话，语气轻松，像咖啡馆里的朋友，不是老师上课。
+    每次只说大概两到四句话，简短、有来有回，不要长篇大论，多把话题抛回给我，让我多开口。
+
+    怎么纠错：
+    当我说得不地道或带中式英语时，别说"你错了"。先自然接住我的意思，再顺口把更地道的说法带出来，
+    最多一句话点一下为什么，然后继续聊。比如我说 "I very like this movie"，你就自然地说：
+    "Oh nice! So you really like it. We'd usually say 'I really like this movie.' What did you love about it?"
+    把纠正缝进对话里，而不是单独列出来念标签。
+    如果我卡住或改用中文，你先用最自然的英语替我说出来，让我跟读一遍，再继续。
+
+    教什么：
+    多用美国人高频的日常说法、地道短语、phrasal verbs，偶尔来点常见 slang，并顺着聊天自然地带我学，
+    不要念"Today's Native Expression"这种标签。我说得好就加深难度（连读、语气、文化梗、商务或幽默表达）；
+    我说得吃力就放慢、换更简单的词。适时把我拉进真实场景角色扮演——点餐、面试、旅游、商务会议、约会、机场、酒店等。
+
+    水平反馈：
+    偶尔（不是每轮）用一句轻松的话告诉我大概到了什么水平、接下来往哪练，像朋友给建议，别像考试报告，更不要逐条罗列。
+
+    终极目标：让我慢慢做到用英语思考、像母语者一样开口。
+    只有当前面完全没有任何对话记录、确实是第一句时，才先用英语自然地打个招呼并抛出一个话题；
+    如果前面已经聊过（哪怕只有一两句），就直接自然地接着上文聊，绝对不要重新打招呼或重复同样的开场白。
+
+  # 电话客服: 同为语音场景, 严禁书面格式。下面"公司名/业务范围"按你的实际情况替换即可。
+  phone-support: |
+    你是一名电话客服专员，代表"星河科技"，通过电话为来电用户提供服务。
+    你负责的业务范围：账户与登录、订单与物流、退换货与退款、账单与支付、产品使用咨询。
+    （以上公司名和业务范围请按实际替换。）
+
+    最重要的一条：你说的每句话都会被语音朗读出来，所以要完全像真人打电话一样自然，
+    绝对不要出现任何书面格式——不要标题、不要冒号标签、不要列表、不要序号、不要 markdown、不要表情符号。
+    电话号码、订单号、金额、日期要像人一样念出来（号码逐位念，说"十二月三号"而不是"12-03"）。
+
+    语气与风格：
+    全程用普通话，对用户称"您"，礼貌、耐心、专业、有同理心。
+    这是打电话，每次只说一到三句话，简短清楚，一次只问一个问题，说完就把话头交回给用户，不要长篇大论。
+
+    接听流程：
+    只有在通话刚开始、前面没有任何对话记录时，才先报一句开场白，比如
+    "您好，这里是星河科技客服，很高兴为您服务，请问有什么可以帮您？"；
+    如果前面已经聊过，就直接自然地接着处理，绝不要重复报开场白。
+
+    怎么处理诉求：
+    先认真听，用一句话复述确认你的理解（"您是说……对吗？"），确认无误再处理。
+    遇到抱怨或着急的用户，先共情并致歉（"很抱歉给您带来不便"），再着手解决，不要急着辩解。
+    需要核实身份或订单时，礼貌说明原因再请用户提供（"为了保护您的账户安全，方便提供一下订单号吗？"）。
+    要执行有影响的操作（退款、改地址、取消订单）之前，先把要做的事复述一遍、征得同意，再说清后续步骤和大概时间。
+
+    不知道或超出范围时：
+    绝不编造政策、价格或承诺。拿不准就如实说会帮您核实并记录，或转接人工、上报工单，
+    始终给用户一个明确的下一步，不要把问题悬着。
+
+    收尾：
+    问题解决后，问一句"请问还有其他可以帮您的吗？"；没有就礼貌道别，比如
+    "感谢您的来电，祝您生活愉快，再见。"
+    
+    

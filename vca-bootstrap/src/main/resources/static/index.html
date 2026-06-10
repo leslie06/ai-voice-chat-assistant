@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>小智AI</title>
+  <style>
+    :root{
+      --bg:#ffffff; --panel:#f7f7f8; --line:#e5e5e5; --text:#1f2023; --sub:#8e8ea0;
+      --user:#2f6fed; --userText:#fff; --bot:#f4f4f5; --accent:#10a37f; --danger:#e23c3c;
+    }
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+    html,body{height:100%;margin:0;}
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
+      color:var(--text);background:var(--bg);display:flex;flex-direction:column;height:100dvh;}
+    /* 顶栏 */
+    header{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);
+      position:sticky;top:0;background:rgba(255,255,255,.9);backdrop-filter:blur(8px);z-index:5;}
+    header h1{font-size:16px;font-weight:600;margin:0;flex:1;}
+    .dot{width:9px;height:9px;border-radius:50%;background:#bbb;}
+    .dot.on{background:var(--accent);} .dot.off{background:var(--danger);}
+    .iconbtn{border:none;background:none;font-size:18px;cursor:pointer;color:var(--sub);padding:6px;border-radius:8px;}
+    .iconbtn:hover{background:var(--panel);}
+    .modelsel{font:inherit;font-size:14px;color:var(--text);background:var(--panel);border:1px solid var(--line);
+      border-radius:10px;padding:9px 10px;cursor:pointer;outline:none;width:100%;}
+    /* 设置面板(模态) */
+    .overlay{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;
+      z-index:20;padding:16px;}
+    .overlay[hidden]{display:none;}
+    .panel{background:var(--bg);border:1px solid var(--line);border-radius:16px;width:100%;max-width:420px;
+      padding:18px 20px 20px;box-shadow:0 12px 40px rgba(0,0,0,.18);}
+    .panel-head{display:flex;align-items:center;margin-bottom:14px;}
+    .panel-head h2{font-size:17px;font-weight:600;margin:0;flex:1;}
+    .field{margin-bottom:14px;}
+    .field label{display:block;font-size:13px;color:var(--sub);margin-bottom:7px;}
+    .field-hint{font-size:12px;color:var(--sub);margin-top:7px;line-height:1.5;}
+    /* 对话区 */
+    main{flex:1;overflow-y:auto;padding:20px 0 8px;}
+    .wrap{max-width:760px;margin:0 auto;padding:0 16px;}
+    .msg{display:flex;margin:14px 0;gap:10px;}
+    .msg.user{justify-content:flex-end;}
+    .avatar{width:30px;height:30px;border-radius:7px;flex:none;display:flex;align-items:center;justify-content:center;
+      font-size:16px;background:var(--bot);} .msg.user .avatar{background:var(--user);color:#fff;}
+    .bubble{max-width:80%;padding:10px 14px;border-radius:14px;line-height:1.65;font-size:15.5px;
+      white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;}
+    .msg.user .bubble{background:var(--user);color:var(--userText);border-bottom-right-radius:4px;}
+    .msg.bot  .bubble{background:var(--bot);color:var(--text);border-bottom-left-radius:4px;}
+    .bubble p{margin:0 0 8px;} .bubble p:last-child{margin:0;}
+    .bubble ul,.bubble ol{margin:6px 0;padding-left:22px;} .bubble li{margin:2px 0;}
+    .bubble code{background:rgba(0,0,0,.06);padding:1px 5px;border-radius:5px;font-size:.92em;
+      font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}
+    .msg.user .bubble code{background:rgba(255,255,255,.2);}
+    .bubble pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:10px;overflow-x:auto;margin:8px 0;}
+    .bubble pre code{background:none;padding:0;color:inherit;}
+    .cursor{display:inline-block;width:7px;height:1.05em;vertical-align:-2px;margin-left:1px;
+      background:var(--text);animation:blink 1s steps(2,start) infinite;border-radius:1px;}
+    @keyframes blink{to{opacity:0;}}
+    .sys{text-align:center;color:var(--sub);font-size:12.5px;margin:10px 0;}
+    .empty{color:var(--sub);text-align:center;margin-top:18vh;font-size:15px;line-height:2;}
+    /* 底部输入区 */
+    footer{border-top:1px solid var(--line);background:var(--bg);padding:8px 0 12px;position:sticky;bottom:0;}
+    .hint{max-width:760px;margin:0 auto 6px;padding:0 16px;min-height:18px;font-size:12.5px;color:var(--accent);text-align:center;}
+    .composer{max-width:760px;margin:0 auto;padding:0 12px;display:flex;align-items:flex-end;gap:8px;}
+    .voicebtn{flex:none;width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:var(--bg);
+      font-size:19px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+    .voicebtn:active{transform:scale(.94);}
+    .voicebtn.on{background:var(--danger);border-color:var(--danger);color:#fff;}
+    .voicebtn.talk.rec{background:var(--danger);border-color:var(--danger);color:#fff;}
+    .inputbox{flex:1;display:flex;align-items:flex-end;border:1px solid var(--line);border-radius:22px;
+      padding:6px 6px 6px 16px;background:var(--bg);}
+    .inputbox textarea{flex:1;border:none;outline:none;resize:none;font:inherit;font-size:15.5px;line-height:1.4;
+      max-height:120px;background:none;color:var(--text);padding:6px 0;}
+    .send{flex:none;width:34px;height:34px;border-radius:50%;border:none;background:var(--text);color:#fff;
+      font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+    .send:disabled{background:#c9c9cf;cursor:default;}
+    /* 调试面板 */
+    details.dbg{max-width:760px;margin:6px auto 0;padding:0 16px;font-size:12px;color:var(--sub);}
+    details.dbg pre{background:#1c1c1e;color:#9fe870;padding:8px;border-radius:8px;white-space:pre-wrap;overflow:auto;}
+    details.dbg button{font:inherit;padding:4px 10px;margin-right:6px;border:1px solid var(--line);border-radius:8px;background:var(--bg);cursor:pointer;}
+  </style>
+</head>
+<body>
+  <header>
+    <span class="dot" id="dot"></span>
+    <h1>小智AI</h1>
+    <button class="iconbtn" id="bargeBtn" title="打断" style="display:none">⏹</button>
+    <button class="iconbtn" id="settingsBtn" title="设置">⚙</button>
+  </header>
+
+  <main id="main">
+    <div class="wrap" id="chat">
+      <div class="empty" id="empty">👋 你好，我是语音助手<br>点击 🎙 开启免提语音，或直接打字</div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="hint" id="hint"></div>
+    <div class="composer">
+      <button class="voicebtn" id="handsfree" title="免提对话">🎙</button>
+      <button class="voicebtn talk" id="talk" title="按住说话">🎤</button>
+      <div class="inputbox">
+        <textarea id="text" rows="1" placeholder="发消息…" autocomplete="off"></textarea>
+        <button class="send" id="send" title="发送">➤</button>
+      </div>
+    </div>
+  </footer>
+
+  <!-- 设置面板(ChatGPT 式): 默认隐藏, 点 ⚙ 打开; 模型选择/调试信息都收在这里, 不暴露在主界面 -->
+  <div class="overlay" id="settings" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <h2>设置</h2>
+        <button class="iconbtn" id="settingsClose" title="关闭">✕</button>
+      </div>
+      <div class="field">
+        <label for="model">对话模型（打字）</label>
+        <select class="modelsel" id="model">
+          <option value="deepseek|deepseek-v4-flash">DeepSeek Flash</option>
+          <option value="deepseek|deepseek-v4-pro">DeepSeek Pro</option>
+          <option value="qwen|qwen3.7-plus">Qwen Plus</option>
+          <option value="qwen|qwen3.7-max">Qwen Max</option>
+        </select>
+        <div class="field-hint">仅作用于打字回复；语音仍走端到端模型。</div>
+      </div>
+      <details class="dbg">
+        <summary>调试信息</summary>
+        <div style="margin:6px 0">
+          <button id="enable">🔊 开启声音</button>
+          <button id="tone">▶ 测试音</button>
+        </div>
+        <pre id="dbg">—</pre>
+      </details>
+    </div>
+  </div>
+
+<script>
+// ============================================================================
+// 哑客户端: 只做浏览器必须做的事(采麦/播音/连WS/渲染)。断句/打断/状态机全在后端。
+// 显示侧: 后端逐 token 推 reply_delta -> 前端打字机式流式渲染(含 Markdown/换行)。
+// ============================================================================
+const chat = document.getElementById('chat');
+const empty = document.getElementById('empty');
+const dbg = document.getElementById('dbg');
+const dot = document.getElementById('dot');
+const hint = document.getElementById('hint');
+const talkBtn = document.getElementById('talk');
+const hfBtn = document.getElementById('handsfree');
+const bargeBtn = document.getElementById('bargeBtn');
+const ta = document.getElementById('text');
+
+let ws;
+const D = { ws:'未连接', state:'空闲', sr:'-', frames:0, bytes:0, played:0, last:'' };
+function paint(){ dbg.textContent =
+  `WS:${D.ws}  后端状态:${D.state}\n采样率:${D.sr}  收到帧:${D.frames} 字节:${D.bytes} 已排播:${D.played}\n最近:${D.last}`; }
+
+/* ---------- 消息渲染 ---------- */
+function esc(s){ return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// 轻量 Markdown: 代码块/行内代码/粗体/斜体/无序列表; 其余靠 white-space:pre-wrap 保留换行
+function md(text){
+  let h = esc(text);
+  h = h.replace(/```([\s\S]*?)```/g,(m,c)=>`<pre><code>${c.replace(/^\n/,'').replace(/\n$/,'')}</code></pre>`);
+  h = h.replace(/`([^`\n]+)`/g,'<code>$1</code>');
+  h = h.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+  h = h.replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>');
+  return h;
+}
+function atBottom(){ return main.scrollHeight - main.scrollTop - main.clientHeight < 80; }
+function scroll(){ main.scrollTop = main.scrollHeight; }
+function addMsg(role, text){
+  if(empty) { empty.remove(); }
+  const m=document.createElement('div'); m.className='msg '+role;
+  const av=document.createElement('div'); av.className='avatar'; av.textContent = role==='user'?'🙂':'🤖';
+  const b=document.createElement('div'); b.className='bubble';
+  if(role==='user'){ b.textContent=text; m.append(b,av); } else { b.innerHTML=md(text||''); m.append(av,b); }
+  chat.appendChild(m); scroll(); return b;
+}
+function addSys(text){ if(empty&&empty.parentNode) empty.remove();
+  const d=document.createElement('div'); d.className='sys'; d.textContent=text; chat.appendChild(d); scroll(); }
+// 点歌卡片: 渲染封面+歌名歌手+原生 <audio> 播放器, 在助手内直接播放(30 秒预览片段)
+let musicEl=null;   // 当前播放的 <audio>, 便于打断时停掉
+function addMusic(t){
+  if(empty&&empty.parentNode) empty.remove();
+  const m=document.createElement('div'); m.className='msg bot';
+  const av=document.createElement('div'); av.className='avatar'; av.textContent='🎵';
+  const b=document.createElement('div'); b.className='bubble';
+  const head=document.createElement('div'); head.style.cssText='display:flex;align-items:center;gap:10px;margin-bottom:8px;';
+  if(t.cover){ const img=document.createElement('img'); img.src=t.cover;
+    img.style.cssText='width:44px;height:44px;border-radius:8px;flex:none;'; head.appendChild(img); }
+  const meta=document.createElement('div');
+  const tag=t.full?'本地 · 完整播放':'30秒试听';
+  meta.innerHTML='<div style="font-weight:600">'+esc(t.title||t.query||'')+'</div>'+
+                 '<div style="color:var(--sub);font-size:13px">'+esc(t.artist||'')+' · '+tag+'</div>';
+  head.appendChild(meta);
+  const audio=document.createElement('audio'); audio.src=t.url; audio.controls=true; audio.autoplay=true;
+  audio.style.cssText='width:100%;margin-top:2px;';
+  b.append(head,audio);
+  // 只有在线试听片段才提示去 QQ 音乐听整首; 本地已是整首, 不需要
+  if(!t.full){
+    const kw=((t.title||t.query||'')+' '+(t.artist||'')).trim();
+    const full=document.createElement('a');
+    full.href='https://y.qq.com/n/ryqq/search?w='+encodeURIComponent(kw);
+    full.target='_blank'; full.rel='noopener'; full.textContent='🎵 在 QQ 音乐听整首（需会员）';
+    full.style.cssText='display:inline-block;margin-top:8px;color:var(--user);text-decoration:none;font-size:13.5px;font-weight:600;';
+    b.appendChild(full);
+  }
+  m.append(av,b); chat.appendChild(m); scroll();
+  // 播音乐前先停掉 TTS 残留, 避免和确认语重叠太久
+  stopPlayback();
+  musicEl=audio;
+  audio.play().catch(()=>{});   // 用户已与页面交互过, 一般可自动播放; 失败则用户点播放键
+}
+function stopMusic(){ if(musicEl){ try{musicEl.pause()}catch(e){} musicEl=null; } }
+
+/* ---------- 流式回复状态 ---------- */
+let turnActive=false, botText='', botBubble=null;
+function botStart(){ botBubble=addMsg('bot',''); botText=''; }
+function botAppend(delta){ const stick=atBottom(); botText+=delta;
+  botBubble.innerHTML=md(botText)+'<span class="cursor"></span>'; if(stick) scroll(); }
+function botFinish(text){ if(text!=null) botText=text; if(botBubble) botBubble.innerHTML=md(botText);
+  botBubble=null; turnActive=false; bargeBtn.style.display='none'; }
+
+/* ---------- AudioContext ---------- */
+let audioCtx=null;
+async function ensureAudio(){ if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  if(audioCtx.state==='suspended') await audioCtx.resume(); D.sr=audioCtx.sampleRate; paint(); return audioCtx; }
+document.getElementById('enable').onclick=async()=>{ await ensureAudio(); D.last='已开启声音'; paint(); };
+document.getElementById('tone').onclick=async()=>{ await ensureAudio();
+  const o=audioCtx.createOscillator(),g=audioCtx.createGain(); o.frequency.value=440;g.gain.value=.2;
+  o.connect(g);g.connect(audioCtx.destination);o.start();o.stop(audioCtx.currentTime+1); };
+
+/* ---------- WebSocket ---------- */
+function send(o){ if(ws&&ws.readyState===1) ws.send(JSON.stringify(o)); }
+// 访问令牌: 支持用 URL ?token=xxx 首次带入(随后存本地, 可从地址栏删掉)。
+function getToken(){
+  const u=new URLSearchParams(location.search);
+  if(u.get('token')){ localStorage.setItem('vca_token', u.get('token')); }
+  return localStorage.getItem('vca_token') || '';
+}
+function connect(){
+  const proto=location.protocol==='https:'?'wss':'ws';
+  const t=getToken();
+  const q=t?('?token='+encodeURIComponent(t)):'';
+  ws=new WebSocket(`${proto}://${location.host}/ws/voice${q}`); ws.binaryType='arraybuffer';
+  ws.onopen=()=>{ D.ws='已连接'; dot.className='dot on'; paint(); sendModel(); };
+  ws.onclose=(ev)=>{
+    if(ev.code===1008){ // 鉴权失败: 提示输入 token 后立即重连
+      const v=prompt('需要访问令牌 (token):', localStorage.getItem('vca_token')||'');
+      if(v){ localStorage.setItem('vca_token', v); D.ws='重连中'; dot.className='dot off'; paint(); setTimeout(connect,300); return; }
+    }
+    D.ws='断开,3s重连'; dot.className='dot off'; paint(); setTimeout(connect,3000);
+  };
+  ws.onmessage=(ev)=>{
+    if(typeof ev.data==='string'){
+      const m=JSON.parse(ev.data);
+      switch(m.type){
+        case 'asr':        // 语音识别结果: 显示用户这轮说了什么(文本输入不会走这里, 前端已本地回显)
+                           turnActive=true; acceptAudio=true;
+                           addMsg('user',m.text);
+                           bargeBtn.style.display='inline'; D.last='asr'; break;
+        case 'reply_delta': if(!turnActive){ turnActive=true; acceptAudio=true; } if(!botBubble) botStart(); botAppend(m.text); D.last='delta'; break;
+        case 'reply':      if(!botBubble) botStart(); botFinish(m.text); D.last='reply'; break;
+        case 'turn_end':   botFinish(); D.last='turn_end'; break;
+        case 'interrupted':stopPlayback(); stopMusic(); acceptAudio=false; if(botBubble) botFinish();
+                           addSys('— 已打断 —'); D.last='interrupted'; break;
+        case 'error':      stopPlayback(); stopMusic(); acceptAudio=false; botFinish(); addSys('⚠ '+m.message); D.last='error'; break;
+        case 'music':      if(m.action==='play') addMusic(m); else addSys('🎵 没找到《'+(m.query||'')+'》');
+                           D.last='music:'+(m.action||''); break;
+        case 'state':      D.state=m.label||m.value; hint.textContent=m.label||''; D.last='state:'+m.value; break;
+        case 'chunk':      D.last='chunk:'+(m.text||''); break; // 字幕由 reply_delta 负责, 此处仅调试
+      }
+      paint();
+    } else { D.frames++; D.bytes+=ev.data.byteLength; playPCM(ev.data); paint(); }
+  };
+}
+
+/* ---------- 播放队列 (24kHz mono 16bit LE) ---------- */
+let nextTime=0, playing=[], acceptAudio=true;
+function playPCM(buf){
+  if(!acceptAudio) return; if(!audioCtx){ D.last='⚠未开启声音'; return; }
+  if(audioCtx.state==='suspended') audioCtx.resume();
+  const n=Math.floor(buf.byteLength/2); if(n===0) return;
+  const v=new DataView(buf), f=new Float32Array(n);
+  for(let i=0;i<n;i++) f[i]=v.getInt16(i*2,true)/32768;
+  const b=audioCtx.createBuffer(1,n,24000); b.copyToChannel(f,0);
+  const s=audioCtx.createBufferSource(); s.buffer=b; s.connect(audioCtx.destination);
+  const t=Math.max(nextTime,audioCtx.currentTime); s.start(t); nextTime=t+b.duration; D.played++;
+  playing.push(s); s.onended=()=>{ playing=playing.filter(x=>x!==s); };
+}
+function stopPlayback(){ playing.forEach(s=>{try{s.stop()}catch(e){}}); playing=[]; if(audioCtx) nextTime=audioCtx.currentTime; }
+
+/* ---------- 麦克风: 持续上传原始 PCM ---------- */
+let micNode, micReady=false, streaming=false;
+function f2i16(f){ const o=new Int16Array(f.length);
+  for(let i=0;i<f.length;i++){ let s=Math.max(-1,Math.min(1,f[i])); o[i]=s<0?s*0x8000:s*0x7fff; } return o; }
+async function ensureMic(){
+  if(micReady) return; await ensureAudio();
+  const st=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+  const src=audioCtx.createMediaStreamSource(st);
+  micNode=audioCtx.createScriptProcessor(4096,1,1); src.connect(micNode); micNode.connect(audioCtx.destination);
+  micNode.onaudioprocess=(e)=>{ if(!streaming||!ws||ws.readyState!==1) return;
+    ws.send(f2i16(e.inputBuffer.getChannelData(0)).buffer); };
+  micReady=true;
+}
+function announceMic(){ send({type:'mic',sampleRate:audioCtx.sampleRate}); }
+
+/* ---------- 按住说话 (PTT) ---------- */
+let talking=false;
+async function startTalk(){ if(hfBtn.classList.contains('on')) return;
+  try{ await ensureMic(); }catch(e){ addSys('⚠ 麦克风: '+e.message); return; }
+  announceMic(); send({type:'ptt',value:'start'}); talking=true; streaming=true; talkBtn.classList.add('rec'); }
+function endTalk(){ if(!talking) return; talking=false; streaming=false; talkBtn.classList.remove('rec'); send({type:'ptt',value:'stop'}); }
+talkBtn.addEventListener('pointerdown',e=>{e.preventDefault();startTalk();});
+talkBtn.addEventListener('pointerup',endTalk); talkBtn.addEventListener('pointerleave',endTalk);
+talkBtn.addEventListener('pointercancel',endTalk);
+
+/* ---------- 免提 ---------- */
+hfBtn.onclick=async()=>{
+  if(!hfBtn.classList.contains('on')){
+    try{ await ensureMic(); }catch(e){ addSys('⚠ 麦克风: '+e.message); return; }
+    announceMic(); send({type:'mode',value:'handsfree'}); streaming=true;
+    hfBtn.classList.add('on'); talkBtn.disabled=true; addSys('— 免提已开启，直接说话即可 —');
+  } else {
+    streaming=false; send({type:'mode',value:'idle'}); hfBtn.classList.remove('on'); talkBtn.disabled=false;
+    hint.textContent=''; addSys('— 免提已关闭 —');
+  }
+};
+
+/* ---------- 文本 ---------- */
+async function sendText(){ const t=ta.value.trim(); if(!t) return; await ensureAudio();
+  // 文本输入: 本地直接回显, 后端不再 echo; 自行进入"回合中"以便渲染流式回复
+  addMsg('user',t); turnActive=true; acceptAudio=true; bargeBtn.style.display='inline';
+  send({type:'text',text:t}); ta.value=''; ta.style.height='auto'; }
+document.getElementById('send').onclick=sendText;
+ta.addEventListener('input',()=>{ ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,120)+'px'; });
+// 回车发送, 但输入法(IME)拼写组字期间的回车只用于"上屏确认", 不发送 ——
+// e.isComposing / keyCode===229 表示正在输入法组字中, 此时放行让输入法处理, 不拦截。
+ta.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){ e.preventDefault(); sendText(); }
+});
+bargeBtn.onclick=()=>send({type:'barge_in'});
+
+/* ---------- 模型选择(仅影响打字回复; 语音仍走端到端) ---------- */
+const modelSel=document.getElementById('model');
+const savedModel=localStorage.getItem('vca_model'); if(savedModel) modelSel.value=savedModel;
+function sendModel(){ const [vendor,model]=modelSel.value.split('|');
+  localStorage.setItem('vca_model',modelSel.value); send({type:'model',vendor,model}); }
+modelSel.onchange=sendModel;
+
+/* ---------- 设置面板开关 ---------- */
+const settings=document.getElementById('settings');
+function openSettings(){ settings.hidden=false; }
+function closeSettings(){ settings.hidden=true; }
+document.getElementById('settingsBtn').onclick=openSettings;
+document.getElementById('settingsClose').onclick=closeSettings;
+settings.addEventListener('click',e=>{ if(e.target===settings) closeSettings(); }); // 点遮罩空白处关闭
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&!settings.hidden) closeSettings(); });
+
+const main=document.getElementById('main');
+paint(); connect();
+</script>
+</body>
+</html>

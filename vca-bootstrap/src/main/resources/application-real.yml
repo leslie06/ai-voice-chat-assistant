@@ -1,0 +1,30 @@
+# 真实语音 Profile: 用 `--spring.profiles.active=real` 激活。
+# 全链路真实厂商: 阿里云 ASR + Qwen/CosyVoice TTS + DeepSeek LLM。
+# 需设 DEEPSEEK_API_KEY=sk-...(默认已内置一个), 并确保代理可用。
+
+vca:
+  web:
+    llm-vendor: deepseek # 走真实 DeepSeek
+    tts-vendor: aliyun       # 用 CosyVoice
+    tts-voice: longxiaochun  # CosyVoice 音色
+
+  gateway:
+    tts:
+      candidates:
+        - { vendor: aliyun, voice: longanhuan_v3, max-concurrency: 100 }  # 主: CosyVoice
+        - { vendor: qwen,   voice: Cherry,       max-concurrency: 100 }  # 备: Qwen-TTS 兜底
+
+  providers:
+    llm:
+      deepseek:
+        # 本机直连 DeepSeek 的 TLS 握手极不稳定(实测约 6 成超时), 默认走本地代理。
+        # 没开代理/想直连时: 启动设 DEEPSEEK_PROXY= (置空) 覆盖即可。
+        proxy: ${DEEPSEEK_PROXY:http://127.0.0.1:7890}
+    asr:
+      aliyun:
+        enabled: true
+    tts:
+      aliyun:
+        enabled: true     # 兜底 CosyVoice
+      qwen:
+        enabled: true     # 主: Qwen-TTS(Cherry)

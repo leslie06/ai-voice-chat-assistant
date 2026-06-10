@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<groupId>com.vca</groupId>
+	<artifactId>voice-chat-assistant</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<packaging>pom</packaging>
+	<name>voice-chat-assistant</name>
+	<description>实时语音对话助手 - 模块化单体, 多副本部署</description>
+
+	<!--
+		模块化单体(modular monolith): 模块是编译期代码组织单位, 最终只有 vca-bootstrap
+		打成可执行 jar, 部署成多副本扛并发。后续可按需把某模块抽成独立服务。
+		依赖方向单向收敛: 所有模块都依赖 vca-domain(纯契约), 反向不成立。
+	-->
+	<modules>
+		<module>vca-domain</module>
+		<module>vca-gateway</module>
+		<module>vca-orchestrator</module>
+		<module>vca-provider-llm-deepseek</module>
+		<module>vca-provider-llm-qwen</module>
+		<module>vca-provider-asr-aliyun</module>
+		<module>vca-provider-tts-aliyun</module>
+		<module>vca-provider-s2s-qwen</module>
+		<module>vca-web</module>
+		<module>vca-bootstrap</module>
+		<module>vca-provider-llm-kimi</module>
+	</modules>
+
+	<properties>
+		<java.version>17</java.version>
+		<maven.compiler.release>17</maven.compiler.release>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<spring-boot.version>4.0.6</spring-boot.version>
+		<dashscope.version>2.22.18</dashscope.version>
+		<onnxruntime.version>1.20.0</onnxruntime.version>
+	</properties>
+
+	<dependencyManagement>
+		<dependencies>
+			<!-- Spring Boot BOM: 统一管理 spring/reactor/jackson/lettuce 等版本.
+			     以 import scope 引入, 子模块按需取用, 不强制继承 boot parent -->
+			<dependency>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-dependencies</artifactId>
+				<version>${spring-boot.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+
+			<!-- 本项目各模块统一版本管理 -->
+			<dependency>
+				<groupId>com.vca</groupId>
+				<artifactId>vca-domain</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.vca</groupId>
+				<artifactId>vca-gateway</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.vca</groupId>
+				<artifactId>vca-orchestrator</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.vca</groupId>
+				<artifactId>vca-provider-llm-deepseek</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.vca</groupId>
+				<artifactId>vca-provider-llm-qwen</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.vca</groupId>
+				<artifactId>vca-provider-asr-aliyun</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.vca</groupId>
+				<artifactId>vca-provider-tts-aliyun</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.vca</groupId>
+				<artifactId>vca-provider-s2s-qwen</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.vca</groupId>
+				<artifactId>vca-web</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+
+			<!-- 阿里云 DashScope SDK(ASR/TTS 共用) -->
+			<dependency>
+				<groupId>com.alibaba</groupId>
+				<artifactId>dashscope-sdk-java</artifactId>
+				<version>${dashscope.version}</version>
+				<!-- DashScope 传递依赖 slf4j-simple, 会与 Spring Boot 的 Logback 抢 SLF4J 绑定,
+				     导致 "LoggerFactory is not a Logback LoggerContext" 启动失败。排除之。 -->
+				<exclusions>
+					<exclusion>
+						<groupId>org.slf4j</groupId>
+						<artifactId>slf4j-simple</artifactId>
+					</exclusion>
+				</exclusions>
+			</dependency>
+
+			<!-- ONNX Runtime: 跑 Silero VAD 这类轻量语音活动检测模型(替代能量阈值法) -->
+			<dependency>
+				<groupId>com.microsoft.onnxruntime</groupId>
+				<artifactId>onnxruntime</artifactId>
+				<version>${onnxruntime.version}</version>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<build>
+		<pluginManagement>
+			<plugins>
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-compiler-plugin</artifactId>
+					<configuration>
+						<release>${maven.compiler.release}</release>
+						<parameters>true</parameters>
+					</configuration>
+				</plugin>
+			</plugins>
+		</pluginManagement>
+	</build>
+
+</project>

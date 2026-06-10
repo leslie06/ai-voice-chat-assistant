@@ -1,0 +1,12 @@
+# 没域名、先用 IP 访问的临时方案：Caddy 用内部 CA 自签证书提供 HTTPS。
+# 手机访问 https://你的公网IP 时会弹"不安全"警告，点"继续/信任"后即可（见下方说明）。
+# 域名下来后改用 deploy/Caddyfile（自动签正式 Let's Encrypt 证书）。
+#
+# 用法：把下面的 你的公网IP 改成真实公网 IP，然后：
+#   sudo cp deploy/Caddyfile.ip /etc/caddy/Caddyfile && sudo systemctl restart caddy
+
+https://47.95.248.104 {
+    tls internal                 # 用 Caddy 内部 CA 自签（含该 IP 的 SAN）
+    encode zstd gzip
+    reverse_proxy localhost:8080
+}

@@ -1,0 +1,2 @@
+com.vca.provider.tts.aliyun.AliyunTtsAutoConfiguration
+com.vca.provider.tts.qwen.QwenTtsAutoConfiguration

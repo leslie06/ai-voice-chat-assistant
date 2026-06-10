@@ -1,0 +1,36 @@
+# VCA 监控栈: Prometheus(抓指标) + Grafana(看图)。
+# 启动: docker compose -f deploy/observability/docker-compose.yml up -d
+#   - Prometheus: http://localhost:9090
+#   - Grafana:    http://localhost:3000  (默认账号 admin / admin, 首次登录可跳过改密)
+# Grafana 已自动配好 Prometheus 数据源和 "VCA 实时语音" 面板, 进去即看。
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    ports:
+      - "9099:9090"   # 宿主 9099(9090/9091 常被其它服务占用); 容器内仍 9090
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    extra_hosts:
+      # 让容器内能用 host.docker.internal 访问宿主机(Linux 上需要; Mac/Win 自带)
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    depends_on: [prometheus]
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  prometheus_data:
+  grafana_data:

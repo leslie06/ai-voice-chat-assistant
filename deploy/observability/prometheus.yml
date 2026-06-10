@@ -1,0 +1,14 @@
+# Prometheus 抓取配置。每 5s 抓一次 VCA 的 /actuator/prometheus。
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: vca
+    metrics_path: /actuator/prometheus
+    static_configs:
+      # 默认: VCA 跑在宿主机(./run.sh), 监控栈跑在 docker → 用 host.docker.internal 回连宿主。
+      # 若 VCA 也用 deploy/docker-compose.yml 跑在同一 docker 网络, 改成 ["vca:8080"]。
+      - targets: ["host.docker.internal:8080"]
+        labels:
+          instance: vca-local
