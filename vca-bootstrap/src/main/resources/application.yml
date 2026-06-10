@@ -2,6 +2,10 @@ server:
   port: 8080
 
 spring:
+  config:
+    # 直接用 mvn/IDE 启动时也读取项目根目录 .env；run.sh 仍会显式 source .env。
+    # 第二个路径兼容工作目录在 vca-bootstrap 模块内的启动方式。
+    import: optional:file:.env[.properties],optional:file:../.env[.properties]
   application:
     name: voice-chat-assistant
   profiles:
@@ -32,7 +36,8 @@ vca:
     # 切 s2s 需同时开启 vca.providers.s2s.qwen.enabled 并配好 DASHSCOPE_API_KEY。
     mode: ${VCA_MODE:s2s}
     asr-vendor: aliyun
-    llm-vendor: deepseek    # 真实 DeepSeek
+    llm-vendor: ${VCA_LLM_VENDOR:deepseek}    # deepseek / qwen / moonshot
+    llm-model: ${VCA_LLM_MODEL:}
     tts-vendor: aliyun
     tts-voice: longxiaochun
     # 端到端模式(mode=s2s)厂商/模型/音色; model/voice 留空用 provider 默认。
@@ -87,6 +92,7 @@ vca:
       candidates:
         - { vendor: deepseek, model: deepseek-v4-flash, max-concurrency: 50 }  # 真实 DeepSeek
         - { vendor: qwen,     model: qwen3.7-plus,      max-concurrency: 50 }  # 通义千问(文本); 前端可切具体模型
+        - { vendor: moonshot, model: kimi-k2.6,          max-concurrency: 50 }  # Kimi/Moonshot; 走 OpenAI 兼容私有网关
     tts:
       candidates:
         - { vendor: aliyun, voice: longxiaochun, max-concurrency: 100 }
@@ -96,22 +102,47 @@ vca:
 
   providers:
     llm:
-      deepseek:
-        enabled: ${DEEPSEEK_ENABLED:true}
-        base-url: https://api.deepseek.com
-        default-model: deepseek-v4-flash
-        keys: ${DEEPSEEK_API_KEY:}   # 不写默认值: 必须由环境变量提供, 严禁把真实 key 写进仓库
-        # 本机开了代理(如 Clash)时直连会 TLS 握手超时, 让 DeepSeek 走代理(只影响它)。
-        # 优先用 DEEPSEEK_PROXY; 没设则自动沿用系统 https_proxy/HTTPS_PROXY; 都没有=直连。
-        proxy: ${DEEPSEEK_PROXY:${https_proxy:${HTTPS_PROXY:}}}
-      qwen:
-        # 通义千问文本 LLM, 走 DashScope OpenAI 兼容接口(与 ASR/TTS/S2S 共用 DASHSCOPE_API_KEY)。
-        # 前端模型下拉里的 qwen3.7-max / qwen3.7-plus 由此提供; default-model 仅在会话未指定时兜底。
-        # DashScope 在国内, 默认直连不走代理。
-        enabled: ${QWEN_LLM_ENABLED:true}
-        base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
-        default-model: ${QWEN_LLM_MODEL:qwen3.7-plus}
-        keys: ${DASHSCOPE_API_KEY:}
+      openai-compatible:
+        # DeepSeek、Qwen、Kimi 都走同一个 OpenAI 兼容 provider:
+        # POST {base-url}/chat/completions + stream=true + SSE choices[0].delta.content。
+        clients:
+          deepseek:
+            enabled: ${DEEPSEEK_ENABLED:true}
+            vendor: deepseek
+            name: DeepSeek
+            base-url: https://api.deepseek.com
+            default-model: deepseek-v4-flash
+            keys: ${DEEPSEEK_API_KEY:}   # 不写默认值: 必须由环境变量提供, 严禁把真实 key 写进仓库
+            max-tokens-field: max_tokens
+            # 本机开了代理(如 Clash)时直连会 TLS 握手超时, 让 DeepSeek 走代理(只影响它)。
+            # 优先用 DEEPSEEK_PROXY; 没设则自动沿用系统 https_proxy/HTTPS_PROXY; 都没有=直连。
+            proxy: ${DEEPSEEK_PROXY:${https_proxy:${HTTPS_PROXY:}}}
+          qwen:
+            # 通义千问文本 LLM, 走 DashScope OpenAI 兼容接口(与 ASR/TTS/S2S 共用 DASHSCOPE_API_KEY)。
+            # 前端模型下拉里的 qwen3.7-max / qwen3.7-plus 由此提供; default-model 仅在会话未指定时兜底。
+            # DashScope 在国内, 默认直连不走代理。
+            enabled: ${QWEN_LLM_ENABLED:true}
+            vendor: qwen
+            name: Qwen
+            base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+            default-model: ${QWEN_LLM_MODEL:qwen3.7-plus}
+            keys: ${DASHSCOPE_API_KEY:}
+            max-tokens-field: max_tokens
+          kimi:
+            # Kimi/Moonshot 私有网关。启用时设置 KIMI_ENABLED=true 和 KIMI_API_KEY/MOONSHOT_API_KEY。
+            # 示例请求中的真实 key 不写入仓库, 通过环境变量注入。
+            enabled: ${KIMI_ENABLED:false}
+            vendor: moonshot
+            name: Kimi
+            base-url: ${KIMI_BASE_URL:http://192.168.9.215:13000/v1}
+            default-model: ${KIMI_MODEL:kimi-k2.6}
+            keys: ${KIMI_API_KEY:}
+            # 对齐你给的 curl: Kimi 私有网关只发 model/messages/stream/chat_template_kwargs。
+            max-tokens-field:
+            include-temperature: false
+            extra-body:
+              chat_template_kwargs:
+                thinking: true
     asr:
       aliyun:
         # 真实阿里云 ASR: ALIYUN_ASR_ENABLED=true + DASHSCOPE_API_KEY=sk-...

@@ -22,11 +22,7 @@
 		<!-- 真实厂商 provider; 各自配置开关默认关闭, 配 key 后启用 -->
 		<dependency>
 			<groupId>com.vca</groupId>
-			<artifactId>vca-provider-llm-deepseek</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>com.vca</groupId>
-			<artifactId>vca-provider-llm-qwen</artifactId>
+			<artifactId>vca-provider-llm-openai-compatible</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>com.vca</groupId>

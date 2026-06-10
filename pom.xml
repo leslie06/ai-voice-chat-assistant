@@ -19,14 +19,12 @@
 		<module>vca-domain</module>
 		<module>vca-gateway</module>
 		<module>vca-orchestrator</module>
-		<module>vca-provider-llm-deepseek</module>
-		<module>vca-provider-llm-qwen</module>
+		<module>vca-provider-llm-openai-compatible</module>
 		<module>vca-provider-asr-aliyun</module>
 		<module>vca-provider-tts-aliyun</module>
 		<module>vca-provider-s2s-qwen</module>
 		<module>vca-web</module>
 		<module>vca-bootstrap</module>
-		<module>vca-provider-llm-kimi</module>
 	</modules>
 
 	<properties>
@@ -68,12 +66,7 @@
 			</dependency>
 			<dependency>
 				<groupId>com.vca</groupId>
-				<artifactId>vca-provider-llm-deepseek</artifactId>
-				<version>${project.version}</version>
-			</dependency>
-			<dependency>
-				<groupId>com.vca</groupId>
-				<artifactId>vca-provider-llm-qwen</artifactId>
+				<artifactId>vca-provider-llm-openai-compatible</artifactId>
 				<version>${project.version}</version>
 			</dependency>
 			<dependency>

@@ -175,7 +175,7 @@ flowchart LR
 
 - **`vca-provider-asr-aliyun`**：阿里云 DashScope `paraformer-realtime-v2`，RxJava `Flowable` 与 Reactor `Flux` 桥接。
 - **`vca-provider-tts-aliyun`**：阿里云 DashScope `cosyvoice-v1`，流式吐 PCM 24kHz。
-- **`vca-provider-llm-deepseek`**：DeepSeek（OpenAI 兼容 `/chat/completions`，`stream=true` 的 SSE）；含 `ApiKeyPool`（多 key 轮询）与可选代理。
+- **`vca-provider-llm-openai-compatible`**：OpenAI 兼容文本 LLM（DeepSeek/Qwen/Kimi 等），统一走 `/chat/completions` + `stream=true` SSE；含 `ApiKeyPool`（多 key 轮询）、可选代理与厂商级 extra body 配置。
 
 ### 开发桩（零外部依赖，`vca-bootstrap/.../dev/`）
 

@@ -8,6 +8,8 @@
 # .env 示例：
 #   DASHSCOPE_API_KEY=sk-xxx
 #   DEEPSEEK_API_KEY=sk-yyy
+#   KIMI_ENABLED=false
+#   MOONSHOT_API_KEY=sk-zzz
 
 services:
   vca:
@@ -21,6 +23,10 @@ services:
       DEEPSEEK_ENABLED: "true"
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_PROXY: ""
+      KIMI_ENABLED: ${KIMI_ENABLED:-false}
+      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
+      KIMI_API_KEY: ${KIMI_API_KEY:-}
+      KIMI_BASE_URL: ${KIMI_BASE_URL:-http://192.168.9.215:13000/v1}
     expose:
       - "8080"          # 只对内网暴露，由 caddy 转发，不直接对公网开 8080
 

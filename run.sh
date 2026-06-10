@@ -21,6 +21,11 @@ if [[ -z "${DEEPSEEK_API_KEY:-}" || -z "${DASHSCOPE_API_KEY:-}" ]]; then
   exit 1
 fi
 
+if [[ "${KIMI_ENABLED:-false}" == "true" && -z "${KIMI_API_KEY:-${MOONSHOT_API_KEY:-}}" ]]; then
+  echo "✗ 已启用 Kimi, 但 .env 里 KIMI_API_KEY / MOONSHOT_API_KEY 为空" >&2
+  exit 1
+fi
+
 echo "✓ 已加载 .env, 打包中 (首次较慢, 之后增量很快)…"
 ./mvnw -q -pl vca-bootstrap -am package -DskipTests
 

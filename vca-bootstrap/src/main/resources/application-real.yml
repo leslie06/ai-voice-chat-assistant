@@ -4,7 +4,8 @@
 
 vca:
   web:
-    llm-vendor: deepseek # 走真实 DeepSeek
+    llm-vendor: ${VCA_LLM_VENDOR:deepseek} # deepseek / qwen / moonshot
+    llm-model: ${VCA_LLM_MODEL:}
     tts-vendor: aliyun       # 用 CosyVoice
     tts-voice: longxiaochun  # CosyVoice 音色
 
@@ -16,10 +17,12 @@ vca:
 
   providers:
     llm:
-      deepseek:
-        # 本机直连 DeepSeek 的 TLS 握手极不稳定(实测约 6 成超时), 默认走本地代理。
-        # 没开代理/想直连时: 启动设 DEEPSEEK_PROXY= (置空) 覆盖即可。
-        proxy: ${DEEPSEEK_PROXY:http://127.0.0.1:7890}
+      openai-compatible:
+        clients:
+          deepseek:
+            # 本机直连 DeepSeek 的 TLS 握手极不稳定(实测约 6 成超时), 默认走本地代理。
+            # 没开代理/想直连时: 启动设 DEEPSEEK_PROXY= (置空) 覆盖即可。
+            proxy: ${DEEPSEEK_PROXY:http://127.0.0.1:7890}
     asr:
       aliyun:
         enabled: true

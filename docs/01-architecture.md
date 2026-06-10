@@ -13,7 +13,7 @@
 vca-domain                 纯契约: 领域模型(record) + SPI 接口 + 枚举, 无 Spring 依赖
 ├─ vca-gateway             治理层: 选厂商 + 熔断 + 并发配额 + 故障转移
 ├─ vca-orchestrator        编排核心: 会话/状态机/分句/后端 VAD
-├─ vca-provider-llm-deepseek   DeepSeek LLM 实现(OpenAI 兼容 SSE 流)
+├─ vca-provider-llm-openai-compatible  OpenAI 兼容 LLM 实现(DeepSeek/Qwen/Kimi)
 ├─ vca-provider-asr-aliyun     阿里云 ASR 实现(DashScope paraformer)
 ├─ vca-provider-tts-aliyun     阿里云 TTS 实现(DashScope CosyVoice)
 ├─ vca-web                 接入层: WebSocket 处理器 + 会话工厂 + 自动装配
@@ -33,7 +33,7 @@ graph TD
     orchestrator --> domain
     web --> domain
     subgraph providers[厂商实现]
-      llm[deepseek-llm]
+      llm[openai-compatible-llm]
       asr[aliyun-asr]
       tts[aliyun-tts]
     end

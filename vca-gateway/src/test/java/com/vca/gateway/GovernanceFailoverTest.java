@@ -114,6 +114,22 @@ class GovernanceFailoverTest {
     }
 
     @Test
+    void explicitUnregisteredVendorDoesNotSilentlyFallBack() {
+        Wired w = wire(propsWith(50, 5));
+
+        StepVerifier.create(w.gateway().llm().chatStream(
+                        List.of(Message.user("hi")),
+                        LlmConfig.defaults(VendorType.MOONSHOT, "kimi-k2.6")))
+                .expectErrorSatisfies(e -> {
+                    assertThat(e).isInstanceOf(ProviderException.class);
+                    ProviderException pe = (ProviderException) e;
+                    assertThat(pe.vendor()).isEqualTo(VendorType.MOONSHOT);
+                    assertThat(pe.getMessage()).contains("未注册的 LLM 厂商");
+                })
+                .verify();
+    }
+
+    @Test
     void skipsCircuitOpenPrimaryWithoutCallingIt() {
         Wired w = wire(propsWith(50, 1)); // 阈值 1: 一次失败即熔断 DEEPSEEK
         LlmConfig cfg = LlmConfig.defaults(VendorType.DEEPSEEK, "deepseek-chat");
