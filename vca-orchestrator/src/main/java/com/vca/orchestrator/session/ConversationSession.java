@@ -211,14 +211,16 @@ public class ConversationSession {
             stateMachine.tryTransition(SessionState.THINKING);
             // LLM 原始 token 流: 边吐边累计全文, 并把增量实时推给前端做"打字机"流式显示
             // (与 TTS 解耦 —— 真实 TTS 的音频块不带文本, 不能靠它驱动字幕)。
-            Flux<String> tokens = llm.chatStream(historySnapshot(), context.llmConfig())
-                    .doOnNext(tok -> {
-                        if (firstToken.compareAndSet(false, true)) {
-                            metrics.recordLlmFirstToken(elapsed(startNanos));
-                        }
-                        assistant.append(tok);
-                        safeNotify(() -> listener.onAssistantDelta(tok));
-                    });
+	            Flux<String> tokens = llm.chatStream(historySnapshot(), context.llmConfig())
+	                    .doOnNext(tok -> {
+	                        if (firstToken.compareAndSet(false, true)) {
+	                            Duration ttft = elapsed(startNanos);
+	                            metrics.recordLlmFirstToken(ttft);
+	                            logLlmFirstToken("voice", context.llmConfig(), ttft);
+	                        }
+	                        assistant.append(tok);
+	                        safeNotify(() -> listener.onAssistantDelta(tok));
+	                    });
             Flux<String> sentences = splitter.split(tokens);
 
             return tts.synthesize(sentences, context.ttsConfig())
@@ -241,12 +243,19 @@ public class ConversationSession {
         });
     }
 
-    /** 自起点到现在的耗时 */
-    private static Duration elapsed(long startNanos) {
-        return Duration.ofNanos(System.nanoTime() - startNanos);
-    }
+	    /** 自起点到现在的耗时 */
+	    private static Duration elapsed(long startNanos) {
+	        return Duration.ofNanos(System.nanoTime() - startNanos);
+	    }
 
-    /** 把 reactor 结束信号归一成埋点用的 outcome 标签 */
+	    private void logLlmFirstToken(String mode, LlmConfig cfg, Duration ttft) {
+	        String vendor = cfg == null || cfg.vendor() == null ? "-" : cfg.vendor().code();
+	        String model = cfg == null || cfg.model() == null || cfg.model().isBlank() ? "-" : cfg.model();
+	        log.info("LLM 首 token 耗时: {} ms, session={}, mode={}, vendor={}, model={}",
+	                ttft.toMillis(), context.sessionId(), mode, vendor, model);
+	    }
+
+	    /** 把 reactor 结束信号归一成埋点用的 outcome 标签 */
     private static String outcomeOf(reactor.core.publisher.SignalType sig) {
         return switch (sig) {
             case ON_COMPLETE -> "complete";
@@ -277,14 +286,16 @@ public class ConversationSession {
             }
 
             stateMachine.tryTransition(SessionState.THINKING);
-            return llm.chatStream(historySnapshot(), textLlmConfig)
-                    .doOnNext(tok -> {
-                        if (firstToken.compareAndSet(false, true)) {
-                            metrics.recordLlmFirstToken(elapsed(startNanos));
-                        }
-                        assistant.append(tok);
-                        safeNotify(() -> listener.onAssistantDelta(tok));
-                    })
+	            return llm.chatStream(historySnapshot(), textLlmConfig)
+	                    .doOnNext(tok -> {
+	                        if (firstToken.compareAndSet(false, true)) {
+	                            Duration ttft = elapsed(startNanos);
+	                            metrics.recordLlmFirstToken(ttft);
+	                            logLlmFirstToken("text", textLlmConfig, ttft);
+	                        }
+	                        assistant.append(tok);
+	                        safeNotify(() -> listener.onAssistantDelta(tok));
+	                    })
                     .doOnComplete(() -> {
                         if (!assistant.isEmpty()) {
                             appendHistory(Message.assistant(assistant.toString()));

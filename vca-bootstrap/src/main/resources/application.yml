@@ -142,7 +142,7 @@ vca:
             include-temperature: false
             extra-body:
               chat_template_kwargs:
-                thinking: true
+                thinking: false
     asr:
       aliyun:
         # 真实阿里云 ASR: ALIYUN_ASR_ENABLED=true + DASHSCOPE_API_KEY=sk-...
