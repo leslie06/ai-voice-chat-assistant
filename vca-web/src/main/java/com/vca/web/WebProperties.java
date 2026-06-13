@@ -215,7 +215,9 @@ public class WebProperties {
         private int silenceMs = 800;
         private double bargeThreshold = 0.020;
         private int bargeMs = 250;
-        private int prerollMs = 400;
+        // 预滚默认 > barge-ms: 打断确认的实际墙钟时间会超过 barge-ms(音量起伏致累减),
+        // 预滚不留余量就会切掉打断时的头一两个字。详见 application.yml 注释。
+        private int prerollMs = 700;
         private int targetSampleRate = 16000;
         /** 启用 Silero(ONNX)VAD 替代能量阈值法。模型加载失败会自动降级回能量法。 */
         private boolean useSilero = false;
