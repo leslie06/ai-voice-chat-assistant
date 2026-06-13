@@ -6,8 +6,10 @@ vca:
   web:
     llm-vendor: ${VCA_LLM_VENDOR:deepseek} # deepseek / qwen / moonshot
     llm-model: ${VCA_LLM_MODEL:}
-    tts-vendor: aliyun       # 用 CosyVoice
-    tts-voice: longxiaochun  # CosyVoice 音色
+    # 默认 aliyun(CosyVoice, 每句新建连接, 首音~1.8s)。设 VCA_TTS_VENDOR=qwen 切到
+    # Qwen-TTS(realtime, 每轮只连一次、流式首包, 通常更快); 音色由 gateway 候选给(qwen→Cherry)。
+    tts-vendor: ${VCA_TTS_VENDOR:aliyun}
+    tts-voice: longxiaochun  # 仅当 gateway 候选未指定音色时兜底; 实际音色以候选为准
 
   gateway:
     tts:

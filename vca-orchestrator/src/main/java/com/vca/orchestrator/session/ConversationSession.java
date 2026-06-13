@@ -8,6 +8,7 @@ import com.vca.domain.model.AudioFrame;
 import com.vca.domain.model.LlmConfig;
 import com.vca.domain.model.Message;
 import com.vca.domain.model.SessionContext;
+import com.vca.domain.model.TtsConfig;
 import com.vca.domain.spi.AsrProvider;
 import com.vca.domain.spi.LlmProvider;
 import com.vca.domain.spi.S2sProvider;
@@ -27,6 +28,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -198,6 +200,8 @@ public class ConversationSession {
             long startNanos = System.nanoTime();
             AtomicBoolean started = new AtomicBoolean(false);
             AtomicBoolean firstToken = new AtomicBoolean(false);
+            // 第一句交给 TTS 的时刻, 用于算"纯 TTS 延迟"(排除前面 LLM 出首句的时间)
+            AtomicLong firstSentenceNanos = new AtomicLong();
             StringBuilder assistant = new StringBuilder();
 
             appendHistory(Message.user(userText));
@@ -222,12 +226,19 @@ public class ConversationSession {
 	                        assistant.append(tok);
 	                        safeNotify(() -> listener.onAssistantDelta(tok));
 	                    });
-            Flux<String> sentences = splitter.split(tokens);
+            // 记录第一句出现的时刻(分句器切出首句即将送 TTS)
+            Flux<String> sentences = splitter.split(tokens)
+                    .doOnNext(s -> firstSentenceNanos.compareAndSet(0, System.nanoTime()));
 
             return tts.synthesize(sentences, context.ttsConfig())
                     .doOnNext(chunk -> {
                         if (started.compareAndSet(false, true)) {
-                            metrics.recordTtsFirstAudio(elapsed(startNanos));
+                            Duration ttfa = elapsed(startNanos);
+                            metrics.recordTtsFirstAudio(ttfa);
+                            // 纯 TTS 延迟 = 首句送进 TTS → 首块音频返回; 拿不到首句时刻则退回总耗时
+                            long fs = firstSentenceNanos.get();
+                            Duration ttsOnly = fs == 0 ? ttfa : Duration.ofNanos(System.nanoTime() - fs);
+                            logTtsFirstAudio(context.ttsConfig(), ttfa, ttsOnly);
                             stateMachine.tryTransition(SessionState.SPEAKING);
                         }
                     })
@@ -254,6 +265,17 @@ public class ConversationSession {
 	        String model = cfg == null || cfg.model() == null || cfg.model().isBlank() ? "-" : cfg.model();
 	        log.info("LLM 首 token 耗时: {} ms, session={}, mode={}, vendor={}, model={}",
 	                ttft.toMillis(), context.sessionId(), mode, vendor, model);
+	    }
+
+	    /**
+	     * 打印 TTS 首块音频耗时。{@code total} = 本轮开始(ASR final 后)到首块音频, 含 LLM 出首句的时间;
+	     * {@code ttsOnly} = 首句送进 TTS 到首块音频返回, 即纯 TTS 合成延迟 —— 排查"TTS 慢"看这个。
+	     */
+	    private void logTtsFirstAudio(TtsConfig cfg, Duration total, Duration ttsOnly) {
+	        String vendor = cfg == null || cfg.vendor() == null ? "-" : cfg.vendor().code();
+	        String voice = cfg == null || cfg.voice() == null || cfg.voice().isBlank() ? "-" : cfg.voice();
+	        log.info("TTS 首音频耗时: 纯TTS={} ms, 含LLM出句={} ms, session={}, vendor={}, voice={}",
+	                ttsOnly.toMillis(), total.toMillis(), context.sessionId(), vendor, voice);
 	    }
 
 	    /** 把 reactor 结束信号归一成埋点用的 outcome 标签 */
