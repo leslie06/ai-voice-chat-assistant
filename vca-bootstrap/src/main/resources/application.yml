@@ -132,6 +132,11 @@ vca:
             default-model: ${QWEN_LLM_MODEL:qwen3.7-plus}
             keys: ${DASHSCOPE_API_KEY:}
             max-tokens-field: max_tokens
+            # 关闭思考模式: Qwen3 默认先生成一大段 reasoning 再吐正式回答, 导致"正式内容首 token"
+            # 要等思考完(实测 6s+)。语音场景要的是秒回, 故关掉思考。DashScope 兼容接口的开关是
+            # 顶层参数 enable_thinking=false, 经 provider 的 extra-body 原样并入请求体。
+            extra-body:
+              enable_thinking: false
           kimi:
             # Kimi/Moonshot 私有网关。启用时设置 KIMI_ENABLED=true 和 KIMI_API_KEY/MOONSHOT_API_KEY。
             # 示例请求中的真实 key 不写入仓库, 通过环境变量注入。

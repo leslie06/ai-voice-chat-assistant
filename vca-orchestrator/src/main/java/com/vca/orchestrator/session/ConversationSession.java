@@ -67,10 +67,11 @@ public class ConversationSession {
     /** 回合事件回调(字幕透传), 默认空实现 */
     private volatile TurnListener listener = TurnListener.NOOP;
     /**
-     * 打字回合使用的 LLM 配置; 默认取自上下文。前端可经 {@link #selectLlm} 在线切换模型/厂商,
-     * 仅影响"打字进、文字出"链路, 不影响语音回合(语音仍用 {@code context.llmConfig()} 或走 s2s)。
+     * 当前生效的 LLM 配置, <b>语音三段式回合与打字回合共用</b>; 默认取自上下文。
+     * 前端经 {@link #selectLlm} 在线切换模型/厂商时更新它, 语音与打字同时改用新模型。
+     * (s2s 模式下语音走端到端 Omni 模型、不读它; 那时它仅供打字回合使用。)
      */
-    private volatile LlmConfig textLlmConfig;
+    private volatile LlmConfig activeLlmConfig;
     /** 延迟埋点; 测试/未注入时为 noop */
     private final TurnMetrics metrics;
 
@@ -97,7 +98,7 @@ public class ConversationSession {
         this.splitter = splitter;
         this.maxHistoryMessages = maxHistoryMessages > 0 ? maxHistoryMessages : DEFAULT_MAX_HISTORY_MESSAGES;
         this.metrics = metrics == null ? TurnMetrics.noop() : metrics;
-        this.textLlmConfig = context.llmConfig();
+        this.activeLlmConfig = context.llmConfig();
         seedSystemPrompt();
     }
 
@@ -107,20 +108,20 @@ public class ConversationSession {
     }
 
     /**
-     * 在线切换"打字回合"使用的 LLM 厂商/模型(前端下拉选模型时调用)。仅影响打字进/文字出链路;
-     * 语音回合不受影响。沿用原有的 systemPrompt/temperature/maxTokens, 只换 vendor/model。
+     * 在线切换对话使用的 LLM 厂商/模型(前端下拉选模型时调用)。<b>语音三段式回合与打字回合同时改用</b>
+     * 新模型。沿用原有的 systemPrompt/temperature/maxTokens, 只换 vendor/model。
      *
      * <p>若会话本就没有 LLM 配置(如 s2s 且未注入), 则据传入的 vendor/model 现造一份,
      * 让 s2s 模式下打字也能选模型并出文字回复。
      */
     public void selectLlm(VendorType vendor, String model) {
-        LlmConfig base = textLlmConfig;
+        LlmConfig base = activeLlmConfig;
         if (base == null) {
-            this.textLlmConfig = LlmConfig.defaults(
+            this.activeLlmConfig = LlmConfig.defaults(
                     vendor, model == null || model.isBlank() ? null : model);
             return;
         }
-        this.textLlmConfig = new LlmConfig(
+        this.activeLlmConfig = new LlmConfig(
                 vendor != null ? vendor : base.vendor(),
                 model != null && !model.isBlank() ? model : base.model(),
                 base.systemPrompt(), base.temperature(), base.maxTokens());
@@ -151,7 +152,7 @@ public class ConversationSession {
         Sinks.One<Void> interrupt = beginTurn();
         // 打字一律走"文字进、文字出"的 LLM 链路, 与对话模式无关 —— 端到端(s2s)模型不吃文本,
         // 此时靠会话里另注入的 LLM 出文字回复(不合成语音)。无 LLM 配置则不支持打字。
-        Flux<AudioChunk> turn = (textLlmConfig == null || text == null || text.isBlank())
+        Flux<AudioChunk> turn = (activeLlmConfig == null || text == null || text.isBlank())
                 ? Flux.empty()
                 : respondTextOnly(text.trim());
         return finishTurn(turn, interrupt);
@@ -211,12 +212,12 @@ public class ConversationSession {
             stateMachine.tryTransition(SessionState.THINKING);
             // LLM 原始 token 流: 边吐边累计全文, 并把增量实时推给前端做"打字机"流式显示
             // (与 TTS 解耦 —— 真实 TTS 的音频块不带文本, 不能靠它驱动字幕)。
-	            Flux<String> tokens = llm.chatStream(historySnapshot(), context.llmConfig())
+	            Flux<String> tokens = llm.chatStream(historySnapshot(), activeLlmConfig)
 	                    .doOnNext(tok -> {
 	                        if (firstToken.compareAndSet(false, true)) {
 	                            Duration ttft = elapsed(startNanos);
 	                            metrics.recordLlmFirstToken(ttft);
-	                            logLlmFirstToken("voice", context.llmConfig(), ttft);
+	                            logLlmFirstToken("voice", activeLlmConfig, ttft);
 	                        }
 	                        assistant.append(tok);
 	                        safeNotify(() -> listener.onAssistantDelta(tok));
@@ -286,12 +287,12 @@ public class ConversationSession {
             }
 
             stateMachine.tryTransition(SessionState.THINKING);
-	            return llm.chatStream(historySnapshot(), textLlmConfig)
+	            return llm.chatStream(historySnapshot(), activeLlmConfig)
 	                    .doOnNext(tok -> {
 	                        if (firstToken.compareAndSet(false, true)) {
 	                            Duration ttft = elapsed(startNanos);
 	                            metrics.recordLlmFirstToken(ttft);
-	                            logLlmFirstToken("text", textLlmConfig, ttft);
+	                            logLlmFirstToken("text", activeLlmConfig, ttft);
 	                        }
 	                        assistant.append(tok);
 	                        safeNotify(() -> listener.onAssistantDelta(tok));

@@ -113,15 +113,15 @@
         <button class="iconbtn" id="settingsClose" title="关闭">✕</button>
       </div>
       <div class="field">
-        <label for="model">对话模型（打字）</label>
+        <label for="model">对话模型（语音 + 打字）</label>
         <select class="modelsel" id="model">
-          <option value="deepseek|deepseek-v4-flash">DeepSeek-V4-Flash</option>
-          <option value="deepseek|deepseek-v4-pro">DeepSeek-V4-Pro</option>
-          <option value="qwen|qwen3.7-plus">Qwen3.7-Plus</option>
+          <option value="qwen|qwen3.7-plus" selected>Qwen3.7-Plus（最快·推荐）</option>
           <option value="qwen|qwen3.7-max">Qwen3.7-Max</option>
           <option value="moonshot|kimi-k2.6">Kimi K2.6</option>
+          <option value="deepseek|deepseek-v4-flash">DeepSeek-V4-Flash</option>
+          <option value="deepseek|deepseek-v4-pro">DeepSeek-V4-Pro</option>
         </select>
-        <div class="field-hint">仅作用于打字回复；语音仍走端到端模型。</div>
+        <div class="field-hint">语音和打字都用此模型。Qwen 已关思考模式、首字最快；DeepSeek 选项可能较慢。</div>
       </div>
       <details class="dbg">
         <summary>调试信息</summary>
@@ -342,9 +342,10 @@ bargeBtn.onclick=()=>send({type:'barge_in'});
 
 /* ---------- 模型选择(仅影响打字回复; 语音仍走端到端) ---------- */
 const modelSel=document.getElementById('model');
-const savedModel=localStorage.getItem('vca_model'); if(savedModel) modelSel.value=savedModel;
+// 键名带 v2: 作废旧版只控制打字时存下的选择(可能是慢模型), 新逻辑下默认回到 Qwen。
+const savedModel=localStorage.getItem('vca_model_v2'); if(savedModel) modelSel.value=savedModel;
 function sendModel(){ const [vendor,model]=modelSel.value.split('|');
-  localStorage.setItem('vca_model',modelSel.value); send({type:'model',vendor,model}); }
+  localStorage.setItem('vca_model_v2',modelSel.value); send({type:'model',vendor,model}); }
 modelSel.onchange=sendModel;
 
 /* ---------- 设置面板开关 ---------- */
