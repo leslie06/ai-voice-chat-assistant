@@ -85,11 +85,14 @@ public class SentenceSplitter {
         return hasSpeakableChar(rest) ? Flux.just(rest) : Flux.empty();
     }
 
-    /** 是否包含至少一个非空白、非分隔符的"可读"字符 */
+    /**
+     * 是否含至少一个"可朗读"字符 —— 必须是字母/数字/汉字(letterOrDigit 覆盖 CJK 及各语种字母)。
+     * 仅有标点 / markdown 符号(* # ` ~ — … 等) / emoji 的片段一律视为不可读: 这类片段送到云端 TTS
+     * 会被判 "InvalidParameter: Please ensure input text is valid" 而整轮失败, 故在此提前丢弃。
+     */
     private boolean hasSpeakableChar(String s) {
         for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (!Character.isWhitespace(c) && !config.isHard(c) && !config.isSoft(c)) {
+            if (Character.isLetterOrDigit(s.charAt(i))) {
                 return true;
             }
         }
