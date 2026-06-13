@@ -79,6 +79,11 @@ public class ConversationSession {
      * 切换<b>仅对下一回合生效</b>, 进行中的回合按原模式跑完; 对话历史保留, 两种模式延续同一段上下文。
      */
     private volatile SessionContext.Mode mode;
+    /**
+     * 当前生效的 TTS 配置(三段式语音用); 前端经 {@link #selectVoice} 在线切换音色时更新, 默认取自上下文。
+     * 仅作用于三段式; s2s 端到端语音的音色由 s2sConfig 决定, 不读它。
+     */
+    private volatile TtsConfig activeTtsConfig;
     /** 延迟埋点; 测试/未注入时为 noop */
     private final TurnMetrics metrics;
 
@@ -107,6 +112,7 @@ public class ConversationSession {
         this.metrics = metrics == null ? TurnMetrics.noop() : metrics;
         this.activeLlmConfig = context.llmConfig();
         this.mode = context.mode();
+        this.activeTtsConfig = context.ttsConfig();
         seedSystemPrompt();
     }
 
@@ -155,6 +161,24 @@ public class ConversationSession {
         }
         this.mode = target;
         log.info("对话模式切换为 {}, session={}", target, context.sessionId());
+    }
+
+    /**
+     * 在线切换三段式 TTS 厂商+音色(前端选音色时调用)。沿用原格式/采样率/语速, 换 vendor/voice。
+     * 音色是厂商相关的(CosyVoice 与 Qwen-TTS 各一套), 故选音色时一并把厂商切到对应方,
+     * 治理层据 {@code vendor} 路由到该厂商候选。{@code vendor} 为空则沿用原厂商。
+     *
+     * <p><b>仅影响三段式语音回合</b>; s2s 端到端语音的音色由 s2sConfig 决定, 不受此影响。
+     * 会话无 TTS 配置(未注入)或音色为空时忽略。
+     */
+    public void selectVoice(VendorType vendor, String voice) {
+        TtsConfig base = activeTtsConfig;
+        if (base == null || voice == null || voice.isBlank()) {
+            return;
+        }
+        VendorType v = vendor != null ? vendor : base.vendor();
+        this.activeTtsConfig = new TtsConfig(v, voice, base.format(), base.sampleRate(), base.speed());
+        log.debug("切换 TTS 厂商/音色: vendor={}, voice={}", v, voice);
     }
 
     /**
@@ -258,7 +282,7 @@ public class ConversationSession {
             Flux<String> sentences = splitter.split(tokens)
                     .doOnNext(s -> firstSentenceNanos.compareAndSet(0, System.nanoTime()));
 
-            return tts.synthesize(sentences, context.ttsConfig())
+            return tts.synthesize(sentences, activeTtsConfig)
                     .doOnNext(chunk -> {
                         if (started.compareAndSet(false, true)) {
                             Duration ttfa = elapsed(startNanos);
@@ -266,7 +290,7 @@ public class ConversationSession {
                             // 纯 TTS 延迟 = 首句送进 TTS → 首块音频返回; 拿不到首句时刻则退回总耗时
                             long fs = firstSentenceNanos.get();
                             Duration ttsOnly = fs == 0 ? ttfa : Duration.ofNanos(System.nanoTime() - fs);
-                            logTtsFirstAudio(context.ttsConfig(), ttfa, ttsOnly);
+                            logTtsFirstAudio(activeTtsConfig, ttfa, ttsOnly);
                             stateMachine.tryTransition(SessionState.SPEAKING);
                         }
                     })
@@ -378,7 +402,7 @@ public class ConversationSession {
             return Flux.empty();
         }
         stateMachine.tryTransition(SessionState.THINKING);
-        return tts.synthesize(Flux.just(reply), context.ttsConfig())
+        return tts.synthesize(Flux.just(reply), activeTtsConfig)
                 .doOnNext(chunk -> stateMachine.tryTransition(SessionState.SPEAKING));
     }
 

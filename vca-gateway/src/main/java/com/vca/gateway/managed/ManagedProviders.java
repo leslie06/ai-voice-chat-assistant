@@ -117,7 +117,12 @@ public final class ManagedProviders {
             return executor.execute(Capability.TTS, cfg.vendor(), cand -> {
                 TtsProvider p = registry.tts(cand.vendor()).orElseThrow(
                         () -> ProviderException.fatal(cand.vendor(), Capability.TTS, "未注册的 TTS 厂商", null));
-                String voice = cand.voice() != null ? cand.voice() : cfg.voice();
+                // 同厂商: 尊重会话(前端)选的音色 —— 音色是厂商相关的, 只在本厂商内有效。
+                // 跨厂商故障转移: 会话音色对新厂商无效, 改用候选自带音色(缺省再退回会话音色)。
+                boolean sameVendor = cand.vendor() == cfg.vendor();
+                String voice = (sameVendor && cfg.voice() != null && !cfg.voice().isBlank())
+                        ? cfg.voice()
+                        : (cand.voice() != null ? cand.voice() : cfg.voice());
                 TtsConfig vc = new TtsConfig(cand.vendor(), voice, cfg.format(),
                         cfg.sampleRate(), cfg.speed());
                 return p.synthesize(textSegments, vc);

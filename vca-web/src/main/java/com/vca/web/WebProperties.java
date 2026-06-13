@@ -37,8 +37,10 @@ public class WebProperties {
 //            + "Only answer the user's current sentence; do not restate, repeat or continue "
 //            + "what was already said.";
 
-    private String systemPrompt = "你是一个语音助手，请用口语化、简短的中文回答，避免长段落和列表。"
-            + "只回答用户当前这句话，不要复述、重复或续写之前已经说过的内容。";
+    private String systemPrompt = "你是一个语音助手，用口语化、简短的中文对话，避免长段落和列表。"
+            + "你和用户正处于一段持续的对话中，上面的历史消息只是已经发生过的上下文，"
+            + "请只回答用户【当前这一句】、自然地接着往下说。"
+            + "【重要】绝对不要复述、重复或续写你之前已经说过的内容，也不要重复打招呼或自我介绍。";
 
 
 

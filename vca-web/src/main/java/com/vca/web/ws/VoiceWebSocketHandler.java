@@ -53,6 +53,7 @@ import java.util.function.Supplier;
  *         {@code {"type":"ptt","value":"start"|"stop"}} 按住说话起止;
  *         {@code {"type":"text","text":...}} 文本输入;
  *         {@code {"type":"model","vendor":...,"model":...}} 切换打字所用大模型;
+ *         {@code {"type":"voice","vendor":"aliyun"|"qwen","value":"龙安欢/Cherry…"}} 切换三段式 TTS 厂商+音色;
  *         {@code {"type":"engine","value":"pipeline"|"s2s"}} 切换对话模式(三段式/端到端);
  *         {@code {"type":"barge_in"}} 手动打断。</li>
  *     </ul></li>
@@ -293,6 +294,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                 case "ptt" -> onPtt(str(msg.get("value")));
                 case "text" -> onText(str(msg.get("text")));
                 case "model" -> onModel(str(msg.get("vendor")), str(msg.get("model")));
+                case "voice" -> conversation.selectVoice(parseVendor(str(msg.get("vendor"))), str(msg.get("value")));
                 case "engine" -> onEngine(str(msg.get("value")));
                 case "barge_in" -> manualBarge();
                 default -> log.debug("未知控制消息: {}", json);

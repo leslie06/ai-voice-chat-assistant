@@ -131,6 +131,85 @@
         </select>
         <div class="field-hint">三段式下语音和打字都用此模型；端到端模式语音走融合大模型、此项仅作用于打字。Qwen 已关思考模式、首字最快；DeepSeek 选项可能较慢。</div>
       </div>
+      <div class="field">
+        <label for="voice">语音音色（三段式 TTS）</label>
+        <select class="modelsel" id="voice">
+          <optgroup label="CosyVoice·普通话（阿里云）">
+            <option value="aliyun|longanyang">龙安洋（阳光大男孩）</option>
+            <option value="aliyun|longanhuan_v3" selected>龙安欢 V3（欢脱元气女·默认）</option>
+            <option value="aliyun|longanhuan">龙安欢（欢脱元气女）</option>
+            <option value="aliyun|longhuhu_v3">龙呼呼（天真烂漫女童）</option>
+            <option value="aliyun|longjielidou_v3">龙杰力豆（阳光顽皮男）</option>
+            <option value="aliyun|longhua_v3">龙华（元气甜美女）</option>
+            <option value="aliyun|longze_v3">龙泽（温暖元气男）</option>
+            <option value="aliyun|longzhe_v3">龙哲（呆板大暖男）</option>
+            <option value="aliyun|longxing_v3">龙星（温婉邻家女）</option>
+            <option value="aliyun|longhan_v3">龙寒（温暖痴情男）</option>
+            <option value="aliyun|longhouge_v3">龙猴哥（经典猴哥）</option>
+            <option value="aliyun|longdaiyu_v3">龙黛玉（娇率才女音）</option>
+          </optgroup>
+          <optgroup label="CosyVoice·方言">
+            <option value="aliyun|longjiaxin_v3">龙嘉欣（优雅粤语女）</option>
+            <option value="aliyun|longjiayi_v3">龙嘉怡（知性粤语女）</option>
+            <option value="aliyun|longanyue_v3">龙安粤（欢脱粤语男）</option>
+            <option value="aliyun|longlaotie_v3">龙老铁（东北直率男）</option>
+            <option value="aliyun|longshange_v3">龙陕哥（原味陕北男）</option>
+            <option value="aliyun|longanmin_v3">龙安闽（清纯萝莉女·闽南）</option>
+            <option value="aliyun|longantai_v3">龙安台（嗲甜台湾女）</option>
+          </optgroup>
+          <optgroup label="CosyVoice·外语">
+            <option value="aliyun|loongkyong_v3">loongkyong（韩语女）</option>
+            <option value="aliyun|loongriko_v3">Riko（二次元霓虹女）</option>
+            <option value="aliyun|loongabby_v3">loongabby（美式英文女）</option>
+            <option value="aliyun|loongandy_v3">loongandy（美式英文男）</option>
+            <option value="aliyun|loongava_v3">loongava（美式英文女）</option>
+            <option value="aliyun|loongtomoya_v3">loongtomoya（日语男）</option>
+            <option value="aliyun|loongyuuna_v3">Yuuna（日语女）</option>
+          </optgroup>
+          <optgroup label="Qwen-TTS·通用（更快）">
+            <option value="qwen|Cherry">芊悦 Cherry（阳光亲切女）</option>
+            <option value="qwen|Serena">苏瑶 Serena（温柔女）</option>
+            <option value="qwen|Ethan">晨煦 Ethan（阳光温暖男）</option>
+            <option value="qwen|Chelsie">千雪 Chelsie（二次元女）</option>
+            <option value="qwen|Momo">茉兔 Momo（撒娇搞怪女）</option>
+            <option value="qwen|Vivian">十三 Vivian（可爱小暴躁女）</option>
+            <option value="qwen|Moon">月白 Moon（率性帅气男）</option>
+            <option value="qwen|Maia">四月 Maia（知性温柔女）</option>
+            <option value="qwen|Kai">凯 Kai（治愈男）</option>
+            <option value="qwen|Nofish">不吃鱼 Nofish（设计师男）</option>
+            <option value="qwen|Bella">萌宝 Bella（小萝莉女）</option>
+            <option value="qwen|Ryan">甜茶 Ryan（戏感炸裂男）</option>
+            <option value="qwen|Katerina">卡捷琳娜 Katerina（御姐女）</option>
+            <option value="qwen|Mochi">沙小弥 Mochi（聪明小大人男）</option>
+            <option value="qwen|Vincent">田叔 Vincent（沙哑烟嗓男）</option>
+            <option value="qwen|Bunny">萌小姬 Bunny（萌萝莉女）</option>
+            <option value="qwen|Neil">阿闻 Neil（新闻主持男）</option>
+            <option value="qwen|Arthur">徐大爷 Arthur（质朴男）</option>
+            <option value="qwen|Nini">邻家妹妹 Nini（软糯女）</option>
+            <option value="qwen|Seren">小婉 Seren（助眠女）</option>
+            <option value="qwen|Pip">顽屁小孩 Pip（调皮童真男）</option>
+            <option value="qwen|Stella">少女阿月 Stella（迷糊少女女）</option>
+          </optgroup>
+          <optgroup label="Qwen-TTS·方言">
+            <option value="qwen|Jada">上海·阿珍 Jada（沪语女）</option>
+            <option value="qwen|Dylan">北京·晓东 Dylan（京腔男）</option>
+            <option value="qwen|Li">南京·老李 Li（南京男）</option>
+            <option value="qwen|Marcus">陕西·秦川 Marcus（陕西男）</option>
+            <option value="qwen|Roy">闽南·阿杰 Roy（台湾男）</option>
+            <option value="qwen|Peter">天津·李彼得 Peter（天津相声男）</option>
+            <option value="qwen|Sunny">四川·晴儿 Sunny（川妹子女）</option>
+            <option value="qwen|Eric">四川·程川 Eric（成都男）</option>
+            <option value="qwen|Rocky">粤语·阿强 Rocky（粤语男）</option>
+            <option value="qwen|Kiki">粤语·阿清 Kiki（港妹女）</option>
+          </optgroup>
+          <optgroup label="Qwen-TTS·外语">
+            <option value="qwen|Jennifer">詹妮弗 Jennifer（美语女）</option>
+            <option value="qwen|Sohee">素熙 Sohee（韩语女）</option>
+            <option value="qwen|Ono Anna">小野杏 Ono Anna（日语女）</option>
+          </optgroup>
+        </select>
+        <div class="field-hint">仅三段式生效，切换即时生效（作用于下一句）。CosyVoice（阿里云）与 Qwen-TTS 两套音色任选——选哪个会自动把 TTS 引擎切到对应厂商。Qwen-TTS 首音更快；CosyVoice 音色更多。</div>
+      </div>
       <details class="dbg">
         <summary>调试信息</summary>
         <div style="margin:6px 0">
@@ -250,7 +329,7 @@ function connect(){
   const t=getToken();
   const q=t?('?token='+encodeURIComponent(t)):'';
   ws=new WebSocket(`${proto}://${location.host}/ws/voice${q}`); ws.binaryType='arraybuffer';
-  ws.onopen=()=>{ D.ws='已连接'; dot.className='dot on'; paint(); sendModel(); sendEngine(); };
+  ws.onopen=()=>{ D.ws='已连接'; dot.className='dot on'; paint(); sendModel(); sendVoice(); sendEngine(); };
   ws.onclose=(ev)=>{
     if(ev.code===1008){ // 鉴权失败: 提示输入 token 后立即重连
       const v=prompt('需要访问令牌 (token):', localStorage.getItem('vca_token')||'');
@@ -355,6 +434,15 @@ const savedModel=localStorage.getItem('vca_model_v2'); if(savedModel) modelSel.v
 function sendModel(){ const [vendor,model]=modelSel.value.split('|');
   localStorage.setItem('vca_model_v2',modelSel.value); send({type:'model',vendor,model}); }
 modelSel.onchange=sendModel;
+
+/* ---------- 音色选择(仅三段式 TTS), 前端为准, 连接时下发 ---------- */
+const voiceSel=document.getElementById('voice');
+// 恢复上次选择; 若存的音色已不在下拉里(如旧的 v2 longxiaochun), 丢弃并回落到默认项。
+const savedVoice=localStorage.getItem('vca_voice');
+if(savedVoice){ voiceSel.value=savedVoice; if(voiceSel.value!==savedVoice) localStorage.removeItem('vca_voice'); }
+function sendVoice(){ const [vendor,voice]=voiceSel.value.split('|');
+  localStorage.setItem('vca_voice',voiceSel.value); send({type:'voice',vendor,value:voice}); }
+voiceSel.onchange=()=>{ sendVoice(); addSys('— 已切换音色：'+voiceSel.options[voiceSel.selectedIndex].text+'，下一句生效 —'); };
 
 /* ---------- 对话模式选择(三段式 / 端到端), 前端为准, 连接时下发 ---------- */
 const engineSel=document.getElementById('engine');
