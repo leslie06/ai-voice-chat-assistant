@@ -34,7 +34,7 @@ vca:
     path: /ws/voice
     # 对话模式: pipeline=三段式(ASR→LLM→TTS); s2s=原生端到端语音大模型(更低延迟、保留语气)。
     # 切 s2s 需同时开启 vca.providers.s2s.qwen.enabled 并配好 DASHSCOPE_API_KEY。
-    mode: ${VCA_MODE:s2s}
+    mode: ${VCA_MODE:pipeline}
     asr-vendor: aliyun
     llm-vendor: ${VCA_LLM_VENDOR:deepseek}    # deepseek / qwen / moonshot
     llm-model: ${VCA_LLM_MODEL:}

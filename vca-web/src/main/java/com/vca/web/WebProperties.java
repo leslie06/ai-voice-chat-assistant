@@ -227,11 +227,12 @@ public class WebProperties {
         private boolean halfDuplex = true;
 
         public VadConfig toConfig() {
-            // 开了 Silero 却没改阈值(还是能量法的 0.015/0.020)时, 自动换成人声概率尺度的合理默认,
-            // 让"只翻一个开关"就能用; 显式改过阈值则尊重用户取值。
+            // 阈值有两套尺度: 能量法是 RMS(≈0.01~0.1), Silero 是人声概率(0~1)。
+            // 开了 Silero 但阈值仍停留在能量尺度(≤0.1)时, 自动换成概率尺度的合理默认(0.5/0.6),
+            // 让"只翻一个开关"就能用; 显式配了概率尺度阈值(>0.1)则尊重用户取值。
             double speech = speechThreshold;
             double barge = bargeThreshold;
-            if (useSilero && speech == 0.015 && barge == 0.020) {
+            if (useSilero && speech <= 0.1 && barge <= 0.1) {
                 speech = 0.5;
                 barge = 0.6;
             }

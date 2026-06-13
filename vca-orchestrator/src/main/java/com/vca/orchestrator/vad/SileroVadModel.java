@@ -41,7 +41,13 @@ public final class SileroVadModel implements AutoCloseable {
     public static SileroVadModel load(String modelPath) throws Exception {
         OrtEnvironment env = OrtEnvironment.getEnvironment();
         byte[] model = readModel(modelPath);
-        OrtSession session = env.createSession(model, new OrtSession.SessionOptions());
+        // 与官方示例一致: 单线程 inter/intra-op + CPU。模型极小, 多线程反而增开销/抖动,
+        // 单线程在这种逐窗小推理上延迟更稳。
+        OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
+        opts.setInterOpNumThreads(1);
+        opts.setIntraOpNumThreads(1);
+        opts.addCPU(true);
+        OrtSession session = env.createSession(model, opts);
         log.info("Silero VAD 模型已加载: {} ({} bytes)",
                 (modelPath == null || modelPath.isBlank()) ? "classpath:" + CLASSPATH_MODEL : modelPath, model.length);
         return new SileroVadModel(env, session);

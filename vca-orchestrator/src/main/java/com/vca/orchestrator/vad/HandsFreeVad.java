@@ -25,6 +25,13 @@ import java.util.Deque;
  */
 public class HandsFreeVad {
 
+    /**
+     * 句尾判停的"释放阈值"比例: 释放阈值 = 开口阈值 × 此比例, 形成滞回(hysteresis)。
+     * 取 0.7 与官方 silero 示例一致(start=0.5 / end=0.35=0.5×0.7); 能量法下同比例缩放亦合理。
+     * 作用: 高阈值才算"明确说话"重置静音, 跌破低阈值才累计静音, 避免概率在阈值附近抖动→断句忽早忽晚。
+     */
+    private static final double RELEASE_RATIO = 0.7;
+
     /** VAD 决策回调。由接入层把这些语义事件接到"开启回合/喂帧/提交/打断"。 */
     public interface Listener {
         /** 检测到开口(或打断后开启新一轮): 应开启本轮 ASR */
@@ -117,7 +124,7 @@ public class HandsFreeVad {
                 }
             }
             case AWAIT -> {
-                if (level > cfg.speechThreshold()) {
+                if (level >= cfg.speechThreshold()) {
                     speechMs += frameMs;
                     if (speechMs >= cfg.onsetMs()) {
                         begin();
@@ -128,9 +135,11 @@ public class HandsFreeVad {
             }
             case SPEAK -> {
                 listener.onAudio(PcmAudio.encodeLe(frame));
-                if (level > cfg.speechThreshold()) {
+                // 滞回判停: 达到(高)开口阈值才算"明确说话"→ 清零静音计时;
+                // 跌破(低)释放阈值才算"明确静音"→ 累计; 两阈值之间维持现状, 防抖动误断句。
+                if (level >= cfg.speechThreshold()) {
                     silenceMs = 0;
-                } else {
+                } else if (level < cfg.speechThreshold() * RELEASE_RATIO) {
                     silenceMs += frameMs;
                     if (silenceMs >= cfg.silenceMs()) {
                         end();

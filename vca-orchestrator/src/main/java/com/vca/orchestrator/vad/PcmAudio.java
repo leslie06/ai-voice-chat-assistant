@@ -49,7 +49,13 @@ public final class PcmAudio {
     }
 
     /**
-     * 重采样到目标采样率。采用与原前端一致的最近邻抽取(nearest-sample), 简单且足够 VAD/桩用。
+     * 重采样到目标采样率。
+     *
+     * <p><b>降采样</b>(如 48k→16k)对每个输出点覆盖的源采样区间取<b>均值</b>: 这步均值兼当一个粗糙的
+     * 抗混叠低通。早先用最近邻抽取(每 N 个取 1 个)会把 &gt;奈奎斯特(8kHz)的高频<b>混叠</b>进语音带,
+     * 能量(RMS)看着照常、但波形结构被毁 —— Silero 这类依赖波形的 VAD 会把正常说话误判成静音。
+     *
+     * <p><b>升采样</b>仍用最近邻(VAD/ASR 够用)。
      */
     public static short[] resample(short[] in, int inRate, int outRate) {
         if (inRate <= 0 || inRate == outRate || in.length == 0) {
@@ -58,12 +64,32 @@ public final class PcmAudio {
         double ratio = (double) inRate / outRate;
         int outLen = (int) Math.floor(in.length / ratio);
         short[] out = new short[Math.max(outLen, 0)];
-        for (int i = 0; i < outLen; i++) {
-            int srcIdx = (int) Math.floor(i * ratio);
-            if (srcIdx >= in.length) {
-                srcIdx = in.length - 1;
+        if (ratio > 1) {
+            // 降采样: 区间均值(抗混叠)
+            for (int i = 0; i < outLen; i++) {
+                int start = (int) Math.floor(i * ratio);
+                int end = (int) Math.floor((i + 1) * ratio);
+                if (end <= start) {
+                    end = start + 1;
+                }
+                if (end > in.length) {
+                    end = in.length;
+                }
+                long sum = 0;
+                for (int j = start; j < end; j++) {
+                    sum += in[j];
+                }
+                out[i] = (short) (sum / (end - start));
             }
-            out[i] = in[srcIdx];
+        } else {
+            // 升采样: 最近邻
+            for (int i = 0; i < outLen; i++) {
+                int srcIdx = (int) Math.floor(i * ratio);
+                if (srcIdx >= in.length) {
+                    srcIdx = in.length - 1;
+                }
+                out[i] = in[srcIdx];
+            }
         }
         return out;
     }

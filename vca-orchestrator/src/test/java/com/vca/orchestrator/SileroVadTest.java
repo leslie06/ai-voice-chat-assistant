@@ -36,16 +36,34 @@ class SileroVadTest {
         assertThat(last).isLessThan(0.5);
     }
 
-    /** 1 秒 440Hz 正弦 → 比静音明显更高(模型对周期性浊音有响应) */
+    /**
+     * 1 秒 150Hz 正弦(近似浊音基频) → 概率应<b>明显</b>高于静音。
+     * 用"明显高于"(而非仅 &gt;)是要拦住"模型装死"的回归: 若漏喂 64 采样上文前缀,
+     * 模型对一切输入都恒输出≈0.0006, 旧的"tone &gt; silence"断言会被 0.0006 vs 0.0006 误放过。
+     */
     @Test
-    void toneScoresHigherThanSilence() {
-        double silence = feed(model.newDetector(), new short[16000]);
+    void toneScoresClearlyHigherThanSilence() {
+        double silence = peak(model.newDetector(), new short[16000]);
         short[] tone = new short[16000];
         for (int i = 0; i < tone.length; i++) {
-            tone[i] = (short) (Math.sin(2 * Math.PI * 440 * i / 16000.0) * 12000);
+            tone[i] = (short) (Math.sin(2 * Math.PI * 150 * i / 16000.0) * 12000);
         }
-        double toneScore = feed(model.newDetector(), tone);
-        assertThat(toneScore).isGreaterThan(silence);
+        // VAD 状态机按"任一窗超阈值"判定, 故比较峰值更贴合真实用法
+        double tonePeak = peak(model.newDetector(), tone);
+        assertThat(tonePeak).isGreaterThan(0.05);
+        assertThat(tonePeak).isGreaterThan(silence * 5);
+    }
+
+    /** 把整段喂进去, 返回所有窗里的峰值概率 */
+    private double peak(SileroVad vad, short[] samples) {
+        double p = 0;
+        for (int off = 0; off < samples.length; off += 320) {
+            int len = Math.min(320, samples.length - off);
+            short[] frame = new short[len];
+            System.arraycopy(samples, off, frame, 0, len);
+            p = Math.max(p, vad.speechProbability(frame));
+        }
+        return p;
     }
 
     /** 把整段喂进去, 返回最后一窗的概率 */
