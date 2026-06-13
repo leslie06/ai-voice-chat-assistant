@@ -5,6 +5,7 @@ import com.vca.domain.enums.VendorType;
 import com.vca.domain.model.AudioChunk;
 import com.vca.domain.model.AudioFrame;
 import com.vca.domain.model.MusicTrack;
+import com.vca.domain.model.SessionContext;
 import com.vca.domain.spi.MusicProvider;
 import com.vca.orchestrator.session.ConversationSession;
 import com.vca.orchestrator.session.TurnListener;
@@ -51,6 +52,8 @@ import java.util.function.Supplier;
  *         {@code {"type":"mode","value":"handsfree"|"idle"}} 开/关免提;
  *         {@code {"type":"ptt","value":"start"|"stop"}} 按住说话起止;
  *         {@code {"type":"text","text":...}} 文本输入;
+ *         {@code {"type":"model","vendor":...,"model":...}} 切换打字所用大模型;
+ *         {@code {"type":"engine","value":"pipeline"|"s2s"}} 切换对话模式(三段式/端到端);
  *         {@code {"type":"barge_in"}} 手动打断。</li>
  *     </ul></li>
  *   <li>服务端 → 客户端
@@ -290,6 +293,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                 case "ptt" -> onPtt(str(msg.get("value")));
                 case "text" -> onText(str(msg.get("text")));
                 case "model" -> onModel(str(msg.get("vendor")), str(msg.get("model")));
+                case "engine" -> onEngine(str(msg.get("value")));
                 case "barge_in" -> manualBarge();
                 default -> log.debug("未知控制消息: {}", json);
             }
@@ -348,6 +352,20 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             }
             conversation.selectLlm(v, model == null || model.isBlank() ? null : model);
             log.debug("切换打字模型: vendor={}, model={}", v, model);
+        }
+
+        /** 前端切换对话模式: {@code pipeline}(三段式) 或 {@code s2s}(端到端语音大模型)。下一回合生效。 */
+        private void onEngine(String value) {
+            SessionContext.Mode target;
+            if ("s2s".equalsIgnoreCase(value)) {
+                target = SessionContext.Mode.SPEECH_TO_SPEECH;
+            } else if ("pipeline".equalsIgnoreCase(value)) {
+                target = SessionContext.Mode.PIPELINE;
+            } else {
+                log.debug("忽略未知对话模式: {}", value);
+                return;
+            }
+            conversation.switchMode(target);
         }
 
         private VendorType parseVendor(String code) {

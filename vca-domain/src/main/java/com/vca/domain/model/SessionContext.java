@@ -49,6 +49,16 @@ public record SessionContext(
         return new SessionContext(sessionId, userId, Mode.SPEECH_TO_SPEECH, null, llm, null, s2s);
     }
 
+    /**
+     * 构造"双模式就绪"会话: 同时备齐三段式(asr/llm/tts)与端到端(s2s)两套配置,
+     * 运行时可由编排层在两种模式间<b>热切换</b>(对话历史不丢)。{@code initialMode} 指定首个回合所用模式。
+     * 前端可见的"切换三段式/端到端"即基于此。
+     */
+    public static SessionContext combined(String sessionId, String userId, Mode initialMode,
+                                          AsrConfig asr, LlmConfig llm, TtsConfig tts, S2sConfig s2s) {
+        return new SessionContext(sessionId, userId, initialMode, asr, llm, tts, s2s);
+    }
+
     public boolean isPipeline() {
         return mode == Mode.PIPELINE;
     }

@@ -74,6 +74,11 @@ public class ConversationSession {
      * (s2s 模式下语音走端到端 Omni 模型、不读它; 那时它仅供打字回合使用。)
      */
     private volatile LlmConfig activeLlmConfig;
+    /**
+     * 当前生效的对话模式(可热切)。初值取自上下文; 前端经 {@link #switchMode} 在线切换"三段式/端到端"时更新。
+     * 切换<b>仅对下一回合生效</b>, 进行中的回合按原模式跑完; 对话历史保留, 两种模式延续同一段上下文。
+     */
+    private volatile SessionContext.Mode mode;
     /** 延迟埋点; 测试/未注入时为 noop */
     private final TurnMetrics metrics;
 
@@ -101,6 +106,7 @@ public class ConversationSession {
         this.maxHistoryMessages = maxHistoryMessages > 0 ? maxHistoryMessages : DEFAULT_MAX_HISTORY_MESSAGES;
         this.metrics = metrics == null ? TurnMetrics.noop() : metrics;
         this.activeLlmConfig = context.llmConfig();
+        this.mode = context.mode();
         seedSystemPrompt();
     }
 
@@ -130,11 +136,33 @@ public class ConversationSession {
     }
 
     /**
+     * 在线切换对话模式: 三段式(ASR→LLM→TTS) ↔ 端到端语音大模型(s2s)。前端切换时调用。
+     * <b>仅对下一回合生效</b>, 进行中的回合按原模式跑完; 对话历史保留, 两种模式延续同一段上下文。
+     *
+     * <p>只在会话备齐目标模式所需配置时才切换(三段式需 asr+tts, 端到端需 s2s); 缺失则忽略,
+     * 避免切到一个跑不起来的模式。{@code null} 或与当前相同则无操作。
+     */
+    public void switchMode(SessionContext.Mode target) {
+        if (target == null || target == mode) {
+            return;
+        }
+        boolean ready = target == SessionContext.Mode.PIPELINE
+                ? context.asrConfig() != null && context.ttsConfig() != null
+                : context.s2sConfig() != null;
+        if (!ready) {
+            log.warn("切换对话模式被忽略: 目标 {} 所需配置缺失, session={}", target, context.sessionId());
+            return;
+        }
+        this.mode = target;
+        log.info("对话模式切换为 {}, session={}", target, context.sessionId());
+    }
+
+    /**
      * 处理用户的一轮说话: 输入上行音频流, 返回可直接回传前端播放的下行音频块流。
      */
     public Flux<AudioChunk> handleUserTurn(Flux<AudioFrame> userAudio) {
         Sinks.One<Void> interrupt = beginTurn();
-        Flux<AudioChunk> turn = context.isPipeline()
+        Flux<AudioChunk> turn = mode == SessionContext.Mode.PIPELINE
                 ? pipelineTurn(userAudio)
                 : speechToSpeechTurn(userAudio);
         return finishTurn(turn, interrupt);

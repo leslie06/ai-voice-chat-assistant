@@ -113,6 +113,14 @@
         <button class="iconbtn" id="settingsClose" title="关闭">✕</button>
       </div>
       <div class="field">
+        <label for="engine">对话模式</label>
+        <select class="modelsel" id="engine">
+          <option value="pipeline" selected>三段式（可换模型/音色）</option>
+          <option value="s2s">端到端语音大模型（延迟最低）</option>
+        </select>
+        <div class="field-hint">三段式 ASR→大模型→TTS，语音和打字都用下面选的模型、音色可配；端到端把三者融合成一个语音大模型，延迟最低，但模型与音色固定。切换即时生效（作用于下一句）。</div>
+      </div>
+      <div class="field">
         <label for="model">对话模型（语音 + 打字）</label>
         <select class="modelsel" id="model">
           <option value="qwen|qwen3.7-plus" selected>Qwen3.7-Plus（最快·推荐）</option>
@@ -121,7 +129,7 @@
           <option value="deepseek|deepseek-v4-flash">DeepSeek-V4-Flash</option>
           <option value="deepseek|deepseek-v4-pro">DeepSeek-V4-Pro</option>
         </select>
-        <div class="field-hint">语音和打字都用此模型。Qwen 已关思考模式、首字最快；DeepSeek 选项可能较慢。</div>
+        <div class="field-hint">三段式下语音和打字都用此模型；端到端模式语音走融合大模型、此项仅作用于打字。Qwen 已关思考模式、首字最快；DeepSeek 选项可能较慢。</div>
       </div>
       <details class="dbg">
         <summary>调试信息</summary>
@@ -242,7 +250,7 @@ function connect(){
   const t=getToken();
   const q=t?('?token='+encodeURIComponent(t)):'';
   ws=new WebSocket(`${proto}://${location.host}/ws/voice${q}`); ws.binaryType='arraybuffer';
-  ws.onopen=()=>{ D.ws='已连接'; dot.className='dot on'; paint(); sendModel(); };
+  ws.onopen=()=>{ D.ws='已连接'; dot.className='dot on'; paint(); sendModel(); sendEngine(); };
   ws.onclose=(ev)=>{
     if(ev.code===1008){ // 鉴权失败: 提示输入 token 后立即重连
       const v=prompt('需要访问令牌 (token):', localStorage.getItem('vca_token')||'');
@@ -340,13 +348,19 @@ ta.addEventListener('keydown',e=>{
 });
 bargeBtn.onclick=()=>send({type:'barge_in'});
 
-/* ---------- 模型选择(仅影响打字回复; 语音仍走端到端) ---------- */
+/* ---------- 模型选择(三段式下语音+打字都用; 端到端下仅作用于打字) ---------- */
 const modelSel=document.getElementById('model');
 // 键名带 v2: 作废旧版只控制打字时存下的选择(可能是慢模型), 新逻辑下默认回到 Qwen。
 const savedModel=localStorage.getItem('vca_model_v2'); if(savedModel) modelSel.value=savedModel;
 function sendModel(){ const [vendor,model]=modelSel.value.split('|');
   localStorage.setItem('vca_model_v2',modelSel.value); send({type:'model',vendor,model}); }
 modelSel.onchange=sendModel;
+
+/* ---------- 对话模式选择(三段式 / 端到端), 前端为准, 连接时下发 ---------- */
+const engineSel=document.getElementById('engine');
+const savedEngine=localStorage.getItem('vca_engine'); if(savedEngine) engineSel.value=savedEngine;
+function sendEngine(){ localStorage.setItem('vca_engine',engineSel.value); send({type:'engine',value:engineSel.value}); }
+engineSel.onchange=()=>{ sendEngine(); addSys('— 已切换为'+(engineSel.value==='s2s'?'端到端语音大模型':'三段式')+'，下一句生效 —'); };
 
 /* ---------- 设置面板开关 ---------- */
 const settings=document.getElementById('settings');
