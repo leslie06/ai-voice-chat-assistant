@@ -32,6 +32,13 @@ public class WebProperties {
     /** 端到端音色; 留空用 provider 默认 */
     private String s2sVoice = "";
 
+    /**
+     * 持久 S2S(P2): 端到端模式下免提是否用<b>一条长连 + 服务端 VAD</b>(真全双工/原生打断), 取代每轮一连接、
+     * 应用侧 VAD 判停的伪级联用法。仅在 {@code mode=s2s} + 免提下生效; PTT/三段式不受影响。
+     * 灰度开关 —— 真机若发现服务端 VAD 在当前网络/回声条件下不稳, 关掉即回退每轮 S2S。
+     */
+    private boolean s2sPersistent = false;
+
 //    private String systemPrompt = "You are a voice assistant. Always reply in English, "
 //            + "in a short, conversational, spoken style. Avoid long paragraphs and lists. "
 //            + "Only answer the user's current sentence; do not restate, repeat or continue "
@@ -151,6 +158,14 @@ public class WebProperties {
         this.s2sVoice = s2sVoice;
     }
 
+    public boolean isS2sPersistent() {
+        return s2sPersistent;
+    }
+
+    public void setS2sPersistent(boolean s2sPersistent) {
+        this.s2sPersistent = s2sPersistent;
+    }
+
     public String getSystemPrompt() {
         return systemPrompt;
     }
@@ -236,9 +251,17 @@ public class WebProperties {
             // 让"只翻一个开关"就能用; 显式配了概率尺度阈值(>0.1)则尊重用户取值。
             double speech = speechThreshold;
             double barge = bargeThreshold;
-            if (useSilero && speech <= 0.1 && barge <= 0.1) {
-                speech = 0.5;
-                barge = 0.6;
+            // 逐项改写(不再整体): 开了 Silero 但某个阈值仍是能量尺度(≤0.1)时, 单独换成概率尺度默认,
+            // 这样单独调开口阈值(如 0.3)不会把打断阈值连带留在能量尺度。显式配概率尺度(>0.1)则尊重取值。
+            if (useSilero) {
+                if (speech <= 0.1) {
+                    speech = 0.5;
+                }
+                if (barge <= 0.1) {
+                    // 0.45 而非 0.6: 实测 Silero 对正常说话的人声概率常在 0.6~0.8 抖动, 阈值贴到 0.6 会让
+                    // bargeMs 涨跌相抵、凑不满判定时长; 0.45 留足余量(静音≈0, 不会误触发), 打断才积累得起来。
+                    barge = 0.45;
+                }
             }
             return new VadConfig(speech, onsetMs, silenceMs, barge, bargeMs, prerollMs, targetSampleRate,
                     useSilero, sileroModelPath, bargeGraceMs, halfDuplex);

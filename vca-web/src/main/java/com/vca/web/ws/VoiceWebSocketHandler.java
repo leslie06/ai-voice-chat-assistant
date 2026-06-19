@@ -8,6 +8,7 @@ import com.vca.domain.model.MusicTrack;
 import com.vca.domain.model.SessionContext;
 import com.vca.domain.spi.MusicProvider;
 import com.vca.orchestrator.session.ConversationSession;
+import com.vca.orchestrator.session.S2sLiveSession;
 import com.vca.orchestrator.session.TurnListener;
 import com.vca.orchestrator.vad.HandsFreeVad;
 import com.vca.orchestrator.vad.PcmAudio;
@@ -24,12 +25,14 @@ import org.springframework.web.reactive.socket.WebSocketSession;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -85,12 +88,14 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
     private final int maxSessionSeconds;
     /** 同时在线连接上限; <=0=不限。 */
     private final int maxConnections;
+    /** 持久 S2S(P2): 端到端免提是否用长连+服务端 VAD 真全双工; 关则免提走原每轮 S2S。 */
+    private final boolean s2sPersistent;
     /** 当前在线连接数。handler 是单例 Bean, 此计数全局生效。 */
     private final AtomicInteger activeConnections = new AtomicInteger();
 
     public VoiceWebSocketHandler(ConversationSessionFactory sessionFactory, ObjectMapper mapper, VadConfig vadConfig,
                                  Supplier<VoiceActivityDetector> vadDetectorFactory, MusicProvider musicProvider,
-                                 String authToken, int maxSessionSeconds, int maxConnections) {
+                                 String authToken, int maxSessionSeconds, int maxConnections, boolean s2sPersistent) {
         this.sessionFactory = sessionFactory;
         this.mapper = mapper;
         this.vadConfig = vadConfig;
@@ -99,6 +104,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         this.authToken = authToken == null ? "" : authToken;
         this.maxSessionSeconds = maxSessionSeconds;
         this.maxConnections = maxConnections;
+        this.s2sPersistent = s2sPersistent;
     }
 
     @Override
@@ -141,6 +147,12 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                         .defaultIfEmpty(Map.of("type", "music", "action", "notfound", "query", query))
                         .onErrorReturn(Map.of("type", "music", "action", "notfound", "query", query))
                         .subscribe(msg -> pushJson(session, outbound, msg));
+            }
+
+            @Override
+            public void onUserSpeechStarted() {
+                // 持久 S2S 全双工打断: 服务端 VAD 判定用户开口 → 让前端立即冲掉播放缓冲、止住机器人当前回复
+                pushJson(session, outbound, Map.of("type", "flush_playback"));
             }
         };
         ConversationSession conversation = sessionFactory.create(session.getId(), listener);
@@ -221,11 +233,20 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
 
         private volatile Mode mode = Mode.IDLE;
         private volatile int inputSampleRate = 48000;
-        /** 后端当前是否正在向用户播放音频(供打断判定) */
-        private volatile boolean botSpeaking = false;
+        /**
+         * 前端预计播放到此墙钟时刻(ms)为止 —— 即"机器人还在出声"的判据。<b>不能用"后端是否还在发音频"</b>:
+         * TTS 合成/下发远快于实时播放, 后端早发完、前端还在播好几秒, 那段窗口才是用户最想插嘴打断的时候。
+         * 每发一块音频按其时长(24k 单声道 16bit: bytes/48 ms)把该时刻往后推, 打断/新回合时清零。
+         */
+        private volatile long playbackEndsAtMs = 0;
 
         private Sinks.Many<AudioFrame> turnSink;
         private Disposable turnSubscription;
+        /** 持久 S2S 长连(P2): 非空表示当前免提走"长连+服务端 VAD"真全双工, 麦克风音频直推、不经本地 VAD/分轮。 */
+        private S2sLiveSession live;
+        private Disposable liveSubscription;
+        /** 回合结束后"等前端播完再回到聆听"的延时任务; 打断/新回合时作废, 以便整段播放期间 VAD 留在 WAIT 可被语音打断。 */
+        private Disposable resumeTask;
         private final AtomicLong seq = new AtomicLong();
         /** 回合代号: 每开启一轮 +1, 打断时也 +1。只转发"当前代号"的音频块, 旧轮残留一律丢弃。 */
         private volatile long epoch = 0;
@@ -260,6 +281,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
 
                 @Override
                 public void onBargeIn() {
+                    log.info("打断[语音VAD]触发: botPlaying={}", botPlaying());
                     bargeIn();
                 }
             }, vadDetectorFactory.get());
@@ -273,10 +295,17 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             }
         }
 
-        /** 上行音频: 免提交给 VAD 决策; 按住说话直接降采样后喂本轮; 空闲丢弃。 */
+        /** 上行音频: 免提持久 S2S 直推长连; 否则免提交给本地 VAD; 按住说话直接降采样后喂本轮; 空闲丢弃。 */
         private synchronized void onAudio(byte[] data) {
             switch (mode) {
-                case HANDSFREE -> vad.accept(data, botSpeaking);
+                case HANDSFREE -> {
+                    if (live != null) {
+                        // 持久 S2S: 降采样到 16k 后整条流连续直推, 由服务端 VAD 判停/判打断, 不本地分轮
+                        live.pushAudio(AudioFrame.of(toTargetRate(data), seq.getAndIncrement(), System.currentTimeMillis()));
+                    } else {
+                        vad.accept(data, botPlaying());
+                    }
+                }
                 case PTT -> {
                     ensureTurnStarted();
                     emitFrame(toTargetRate(data));
@@ -302,24 +331,80 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         }
 
         private void onMode(String value) {
+            cancelResume();   // 模式切换作废上一轮"等播完再聆听"的延时
             if ("handsfree".equals(value)) {
                 mode = Mode.HANDSFREE;
-                if (botSpeaking) {
-                    bargeIn();
+                if (persistentS2s()) {
+                    // 持久 S2S: 开长连, 麦克风音频整条流直推, 服务端 VAD 接管 —— 不启本地 VAD
+                    startLive();
+                } else {
+                    if (botPlaying()) {
+                        bargeIn();
+                    }
+                    // 一锤定音: 打印实际生效的打断相关参数。halfDuplex=true 时机器人说话期间根本不判语音打断。
+                    log.info("免提开启(本地VAD): halfDuplex={}, useSilero={}, bargeThreshold={}, bargeMs={}, bargeGraceMs={}",
+                            vadConfig.halfDuplex(), vadConfig.useSilero(), vadConfig.bargeThreshold(),
+                            vadConfig.bargeMs(), vadConfig.bargeGraceMs());
+                    vad.start(inputSampleRate);
                 }
-                vad.start(inputSampleRate);
                 pushState("await");
             } else { // idle / 其它一律视为退出免提
                 mode = Mode.IDLE;
+                stopLive();
                 vad.stop();
                 pushState("idle");
             }
         }
 
+        /** 当前是否应走持久 S2S 路径: 全局开关开 + 会话当前为端到端模式。 */
+        private boolean persistentS2s() {
+            return s2sPersistent && conversation.currentMode() == SessionContext.Mode.SPEECH_TO_SPEECH;
+        }
+
+        /** 开持久 S2S 长连, 把下行音频/字幕块持续回传前端(连续流, 无回合, 故不翻代号)。 */
+        private void startLive() {
+            if (live != null) {
+                return;
+            }
+            seq.set(0);
+            final long myEpoch = ++epoch;
+            live = conversation.openS2sLive();
+            liveSubscription = live.audioOut().subscribe(
+                    chunk -> sendChunk(chunk, myEpoch),
+                    err -> {
+                        log.warn("持久 S2S 出错: {}", err.toString());
+                        emitJson(Map.of("type", "error", "message", String.valueOf(err.getMessage())));
+                        stopLive();
+                    },
+                    this::stopLive);
+        }
+
+        /**
+         * 关持久 S2S 长连。幂等。<b>只在确有 live 长连时才复位播放计时</b> ——
+         * 否则会误清三段式/每轮 S2S 路径的播放状态(例如 PTT 按下时, 会跳过"按 PTT 打断当前回复")。
+         */
+        private void stopLive() {
+            if (liveSubscription != null) {
+                liveSubscription.dispose();
+                liveSubscription = null;
+            }
+            if (live != null) {
+                live.close();
+                live = null;
+                playbackEndsAtMs = 0;
+            }
+        }
+
+        /** 机器人是否仍在出声: 以"前端预计播完时刻"为准, 覆盖后端发完、前端仍在播的那段窗口。 */
+        private boolean botPlaying() {
+            return System.currentTimeMillis() < playbackEndsAtMs;
+        }
+
         private void onPtt(String value) {
             if ("start".equals(value)) {
                 mode = Mode.PTT;
-                if (botSpeaking) {
+                stopLive();   // 按住说话回到每轮路径, 关掉可能在跑的持久长连
+                if (botPlaying()) {
                     bargeIn();
                 }
                 ensureTurnStarted();
@@ -368,6 +453,27 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                 return;
             }
             conversation.switchMode(target);
+            reconcileHandsfreePath();
+        }
+
+        /**
+         * 免提进行中热切对话模式后, 对齐音频采集路径: 切到持久 S2S 则停本地 VAD、开长连; 切回三段式/每轮 S2S
+         * 则关长连、起本地 VAD。非免提(空闲/PTT)时不动 —— 下次进免提由 {@link #onMode} 决定路径。
+         */
+        private void reconcileHandsfreePath() {
+            if (mode != Mode.HANDSFREE) {
+                return;
+            }
+            boolean wantLive = persistentS2s();
+            if (wantLive && live == null) {
+                vad.stop();
+                startLive();
+                pushState("await");
+            } else if (!wantLive && live != null) {
+                stopLive();
+                vad.start(inputSampleRate);
+                pushState("await");
+            }
         }
 
         private VendorType parseVendor(String code) {
@@ -383,6 +489,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
 
         /** 开启一轮文本回合 */
         private void startTextTurn(String text) {
+            cancelResume();
             seq.set(0);
             final long myEpoch = ++epoch;
             turnSubscription = conversation.handleTextTurn(text)
@@ -391,8 +498,14 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                             () -> onTurnFinished(myEpoch, null));
         }
 
-        /** 手动打断按钮: 打断当前回合; 若在免提中则回到"等你开口"。 */
+        /** 手动打断按钮: 持久 S2S 走服务端截断 + 冲前端缓冲; 否则打断当前回合, 免提则回到"等你开口"。 */
         private void manualBarge() {
+            log.info("打断[手动按钮]触发: live={}", live != null);
+            if (live != null) {
+                live.cancelResponse();
+                emitJson(Map.of("type", "flush_playback"));
+                return;
+            }
             bargeIn();
             if (vad.isActive()) {
                 vad.resumeListening();
@@ -405,6 +518,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             if (turnSubscription != null) {
                 return;
             }
+            cancelResume();   // 开新一轮, 作废上一轮"等播完再聆听"的延时
             seq.set(0);
             final long myEpoch = ++epoch;
             turnSink = Sinks.many().unicast().onBackpressureBuffer();
@@ -430,10 +544,13 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         }
 
         private synchronized void bargeIn() {
+            log.info("执行打断: state={}, 有进行中回合={}, botPlaying={}",
+                    conversation.state(), turnSubscription != null, botPlaying());
             // 先翻代号: 既让旧轮残留块在 sendChunk 被丢弃(即便上游 TTS 取消有延迟),
             // 也让 conversation.bargeIn() 同步触发的旧轮收尾被 onTurnFinished 的代号守卫挡掉,
             // 避免误发 turn_end / 在语音打断时误清预滚。
             epoch++;
+            cancelResume();
             conversation.bargeIn();
             if (turnSubscription != null) {
                 turnSubscription.dispose();
@@ -454,23 +571,65 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             } else {
                 emitJson(Map.of("type", "turn_end"));
             }
-            resetTurn();
-            // 优先处理排队中的文本(按序), 没有再回到"等你开口"
+            // 清回合订阅, 但<b>不清 playbackEndsAtMs</b> —— 前端可能还在播, 打断窗口要留到播完
+            turnSink = null;
+            turnSubscription = null;
+            // 优先处理排队中的文本(按序), 没有再(等播完后)回到"等你开口"
             String next = pendingText.pollFirst();
             if (next != null) {
+                cancelResume();
+                playbackEndsAtMs = 0;
                 startTextTurn(next);
                 return;
             }
+            if (vad.isActive()) {
+                scheduleResumeAfterPlayback();
+            } else {
+                playbackEndsAtMs = 0;
+            }
+        }
+
+        /**
+         * 回合结束后别立刻 resumeListening: 三段式下后端发完音频远早于前端播完, 立即回到聆听会把 VAD 从
+         * WAIT(可语音打断)翻到 AWAIT(把插话当新一轮), 打断窗口当场关闭 —— 这正是"说话打不断"的根因。
+         * 改为等前端把已下发音频<b>播完</b>再 resume, 这段时间 VAD 留在 WAIT 真正能被语音打断。
+         * 被打断/开新回合时本次定时经代号守卫作废。
+         */
+        private void scheduleResumeAfterPlayback() {
+            cancelResume();
+            final long myEpoch = epoch;
+            long remainMs = playbackEndsAtMs - System.currentTimeMillis();
+            if (remainMs <= 0) {
+                finishResume(myEpoch);   // 无音频/已播完: 立即回到聆听
+                return;
+            }
+            log.info("回合发完, 前端预计还要播 {} ms, 这段时间 VAD 留在 WAIT 可被语音打断", remainMs);
+            resumeTask = Schedulers.parallel().schedule(() -> finishResume(myEpoch), remainMs, TimeUnit.MILLISECONDS);
+        }
+
+        private synchronized void finishResume(long myEpoch) {
+            if (myEpoch != epoch) {
+                return;   // 期间已打断/开新回合, 作废
+            }
+            resumeTask = null;
+            playbackEndsAtMs = 0;
             if (vad.isActive()) {
                 vad.resumeListening();
                 pushState("await");
             }
         }
 
+        private void cancelResume() {
+            if (resumeTask != null) {
+                resumeTask.dispose();
+                resumeTask = null;
+            }
+        }
+
         private synchronized void resetTurn() {
             turnSink = null;
             turnSubscription = null;
-            botSpeaking = false;
+            playbackEndsAtMs = 0;
         }
 
         private void sendChunk(AudioChunk chunk, long chunkEpoch) {
@@ -479,7 +638,10 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             }
             // 二进制: 音频块; 文本: 字幕(便于浏览器 demo 直接看到)
             if (chunk.size() > 0) {
-                botSpeaking = true;
+                // 按音频时长把"预计播完时刻"往后推(24k 单声道 16bit: bytes/2/24000 秒 = bytes/48 ms),
+                // 从首块的 max(now, 上次预计) 累加, 使打断窗口覆盖整段前端播放, 而非只覆盖后端下发那一小段。
+                long now = System.currentTimeMillis();
+                playbackEndsAtMs = Math.max(now, playbackEndsAtMs) + chunk.size() / 48L;
                 outbound.tryEmitNext(session.binaryMessage(factory -> factory.wrap(chunk.data())));
             }
             if (chunk.text() != null) {
@@ -513,9 +675,11 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         }
 
         synchronized void shutdown() {
+            cancelResume();
             if (turnSubscription != null) {
                 turnSubscription.dispose();
             }
+            stopLive();
             vad.stop();
             conversation.close();
             outbound.tryEmitComplete();

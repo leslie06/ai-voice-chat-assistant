@@ -157,5 +157,17 @@ public final class ManagedProviders {
                 return p.converse(audio, history, vc);
             });
         }
+
+        /**
+         * 持久 S2S 会话: 直接按会话配置的厂商解析并委派, <b>不套熔断/故障转移</b> ——
+         * 长连一旦建立, 中途切厂商等于重开会话, 不适合用 {@code converse} 那套每调一次的治理执行器。
+         * 持久 S2S 当前单厂商(QWEN), 治理价值有限; 如需高可用, 由上层在 open 失败时重试。
+         */
+        @Override
+        public com.vca.domain.spi.S2sSession open(List<Message> history, S2sConfig cfg) {
+            S2sProvider p = registry.s2s(cfg.vendor()).orElseThrow(
+                    () -> ProviderException.fatal(cfg.vendor(), Capability.S2S, "未注册的 S2S 厂商", null));
+            return p.open(history, cfg);
+        }
     }
 }

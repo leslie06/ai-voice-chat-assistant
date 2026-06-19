@@ -33,4 +33,17 @@ public interface S2sProvider {
      * @return 下行音频块流
      */
     Flux<AudioChunk> converse(Flux<AudioFrame> audio, List<Message> history, S2sConfig cfg);
+
+    /**
+     * 开一条<b>持久全双工会话</b>(跨多轮复用一条连接, 服务端 VAD 接管回合与打断), 取代 {@link #converse}
+     * "每轮一连接 + 应用侧判停"的伪级联用法。这是把端到端模型用出原生能力(全双工/原生打断/低延迟地板)的入口。
+     *
+     * <p>默认不支持(抛异常), 仅具备持久会话能力的厂商覆盖实现; 上层据此可在"持久 S2S / 每轮 S2S / 三段式"间灰度。
+     *
+     * @param history 会话开始前的历史(system + 多轮 user/assistant), 实现负责回灌到长连(如 conversation items)
+     * @param cfg     端到端参数(模型/音色/人设)
+     */
+    default S2sSession open(List<Message> history, S2sConfig cfg) {
+        throw new UnsupportedOperationException("持久 S2S 会话未实现: " + vendor());
+    }
 }

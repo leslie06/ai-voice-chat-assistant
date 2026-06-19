@@ -29,4 +29,11 @@ public interface TurnListener {
      */
     default void onMusicRequest(String action, String query) {
     }
+
+    /**
+     * 服务端 VAD 判定用户开口(持久 S2S 全双工打断)。接入层据此立即让前端冲掉播放缓冲、止住机器人当前回复。
+     * 仅持久 S2S 模式产生; 三段式/每轮 S2S 的打断仍走原有 {@code interrupted} 通道。
+     */
+    default void onUserSpeechStarted() {
+    }
 }

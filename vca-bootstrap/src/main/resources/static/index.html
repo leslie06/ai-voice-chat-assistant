@@ -350,6 +350,8 @@ function connect(){
         case 'turn_end':   botFinish(); D.last='turn_end'; break;
         case 'interrupted':stopPlayback(); stopMusic(); acceptAudio=false; if(botBubble) botFinish();
                            addSys('— 已打断 —'); D.last='interrupted'; break;
+        case 'flush_playback': // 持久 S2S 全双工打断: 冲掉已缓冲/在播的音频止声, 但继续接收随后的新回复
+                           stopPlayback(); acceptAudio=true; if(botBubble) botFinish(); D.last='flush'; break;
         case 'error':      stopPlayback(); stopMusic(); acceptAudio=false; botFinish(); addSys('⚠ '+m.message); D.last='error'; break;
         case 'music':      if(m.action==='play') addMusic(m); else addSys('🎵 没找到《'+(m.query||'')+'》');
                            D.last='music:'+(m.action||''); break;
@@ -376,19 +378,59 @@ function playPCM(buf){
 }
 function stopPlayback(){ playing.forEach(s=>{try{s.stop()}catch(e){}}); playing=[]; if(audioCtx) nextTime=audioCtx.currentTime; }
 
-/* ---------- 麦克风: 持续上传原始 PCM ---------- */
-let micNode, micReady=false, streaming=false;
+/* ---------- 麦克风: 持续上传原始 PCM (带掉线自愈) ----------
+   长会话里浏览器/系统可能把音轨悄悄静音或断开(切后台/设备切换/省电/音频栈打嗝),
+   ScriptProcessor 仍在跑、仍发帧, 但内容变成数字静音 → 后端 rawRMS=0、识别不了说话。
+   对策: 监听音轨 mute/ended 事件 + 轮询音轨状态 + 静音看门狗, 掉线就重新 getUserMedia 接回。 */
+let micNode, micStream, micSrc, micReady=false, streaming=false;
+let lastMicAudioTs=0, micReacquiring=false;
 function f2i16(f){ const o=new Int16Array(f.length);
   for(let i=0;i<f.length;i++){ let s=Math.max(-1,Math.min(1,f[i])); o[i]=s<0?s*0x8000:s*0x7fff; } return o; }
+async function openMicStream(){
+  const st=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+  const tr=st.getAudioTracks()[0];
+  if(tr){ tr.onmute=()=>{ D.last='麦克风被静音,重连'; paint(); reacquireMic(); };
+          tr.onended=()=>{ D.last='麦克风断开,重连'; paint(); reacquireMic(); }; }
+  return st;
+}
 async function ensureMic(){
   if(micReady) return; await ensureAudio();
-  const st=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
-  const src=audioCtx.createMediaStreamSource(st);
-  micNode=audioCtx.createScriptProcessor(4096,1,1); src.connect(micNode); micNode.connect(audioCtx.destination);
+  micStream=await openMicStream();
+  micSrc=audioCtx.createMediaStreamSource(micStream);
+  micNode=audioCtx.createScriptProcessor(4096,1,1); micSrc.connect(micNode); micNode.connect(audioCtx.destination);
   micNode.onaudioprocess=(e)=>{ if(!streaming||!ws||ws.readyState!==1) return;
-    ws.send(f2i16(e.inputBuffer.getChannelData(0)).buffer); };
-  micReady=true;
+    const ch=e.inputBuffer.getChannelData(0);
+    // 看门狗: 只要有一个非零采样就算"麦还活着"(底噪也非零); 全零=数字静音=哑了
+    for(let i=0;i<ch.length;i++){ if(ch[i]!==0){ lastMicAudioTs=Date.now(); break; } }
+    ws.send(f2i16(ch).buffer); };
+  micReady=true; lastMicAudioTs=Date.now();
 }
+// 重新获取麦克风: 拆掉旧音频源, 拿新的 getUserMedia 接回同一个 micNode(已授权, 不会再弹权限)
+async function reacquireMic(){
+  if(micReacquiring||!micReady) return; micReacquiring=true;
+  try{
+    if(audioCtx&&audioCtx.state==='suspended'){ try{ await audioCtx.resume(); }catch(e){} }
+    try{ micSrc&&micSrc.disconnect(); }catch(e){}
+    try{ micStream&&micStream.getTracks().forEach(t=>t.stop()); }catch(e){}
+    micStream=await openMicStream();
+    micSrc=audioCtx.createMediaStreamSource(micStream);
+    micSrc.connect(micNode);
+    lastMicAudioTs=Date.now();
+    if(streaming) announceMic();
+    D.last='麦克风已重连'; paint();
+  }catch(e){ D.last='麦克风重连失败:'+(e&&e.message||e); paint(); }
+  finally{ micReacquiring=false; }
+}
+// 每秒巡检: 上传中若音轨已结束/被静音, 或连续数秒全是数字静音 → 自动重连
+setInterval(()=>{
+  if(!streaming||!micReady||micReacquiring) return;
+  const tr=micStream&&micStream.getAudioTracks&&micStream.getAudioTracks()[0];
+  if(!tr||tr.readyState==='ended'||tr.muted){ D.last='麦克风掉线,自动重连'; paint(); reacquireMic(); return; }
+  if(Date.now()-lastMicAudioTs>4000){ D.last='麦克风无声,自动重连'; paint(); reacquireMic(); }
+}, 1000);
+// 切回前台时恢复 AudioContext(后台常被挂起导致采集停摆)
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden&&audioCtx){ if(audioCtx.resume)audioCtx.resume();
+  if(streaming) lastMicAudioTs=Date.now(); } });
 function announceMic(){ send({type:'mic',sampleRate:audioCtx.sampleRate}); }
 
 /* ---------- 按住说话 (PTT) ---------- */

@@ -28,6 +28,16 @@ public class QwenOmniProperties {
     /** 默认回复音色; 可被会话配置/治理候选覆盖 */
     private String voice = "Chelsie";
 
+    /**
+     * 持久会话({@code open})用<b>服务端 VAD</b>接管回合切分与打断, 以下为其调参(每轮 {@code converse} 不用):
+     * 阈值越高越不易被噪声/回声误触发开口; 静音时长决定多久算"说完"; prefix-padding 是开口前回补的音频。
+     */
+    private float turnDetectionThreshold = 0.5f;
+    /** 服务端 VAD 判停所需的尾部静音时长(ms): 越大越不容易抢话、但回复起步越慢 */
+    private int turnDetectionSilenceMs = 800;
+    /** 服务端 VAD 在开口点前回补的音频(ms), 避免切掉第一个字 */
+    private int turnDetectionPrefixPaddingMs = 300;
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -58,5 +68,29 @@ public class QwenOmniProperties {
 
     public void setVoice(String voice) {
         this.voice = voice;
+    }
+
+    public float getTurnDetectionThreshold() {
+        return turnDetectionThreshold;
+    }
+
+    public void setTurnDetectionThreshold(float turnDetectionThreshold) {
+        this.turnDetectionThreshold = turnDetectionThreshold;
+    }
+
+    public int getTurnDetectionSilenceMs() {
+        return turnDetectionSilenceMs;
+    }
+
+    public void setTurnDetectionSilenceMs(int turnDetectionSilenceMs) {
+        this.turnDetectionSilenceMs = turnDetectionSilenceMs;
+    }
+
+    public int getTurnDetectionPrefixPaddingMs() {
+        return turnDetectionPrefixPaddingMs;
+    }
+
+    public void setTurnDetectionPrefixPaddingMs(int turnDetectionPrefixPaddingMs) {
+        this.turnDetectionPrefixPaddingMs = turnDetectionPrefixPaddingMs;
     }
 }

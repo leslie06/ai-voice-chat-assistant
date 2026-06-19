@@ -114,7 +114,8 @@ public class WebAutoConfiguration {
                                                 WebProperties props, MusicProvider musicProvider,
                                                 java.util.function.Supplier<VoiceActivityDetector> vadDetectorFactory) {
         return new VoiceWebSocketHandler(factory, objectMapper, props.getVad().toConfig(), vadDetectorFactory,
-                musicProvider, props.getAuthToken(), props.getMaxSessionSeconds(), props.getMaxConnections());
+                musicProvider, props.getAuthToken(), props.getMaxSessionSeconds(), props.getMaxConnections(),
+                props.isS2sPersistent());
     }
 
     /** 把 WS 端点路径映射到 handler。order 取较高优先级, 先于注解控制器匹配。 */

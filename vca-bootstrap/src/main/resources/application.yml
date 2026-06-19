@@ -44,6 +44,9 @@ vca:
     s2s-vendor: qwen
     s2s-model: ${VCA_S2S_MODEL:}
     s2s-voice: ${VCA_S2S_VOICE:}
+    # 持久 S2S(P2): 端到端免提用"一条长连+服务端 VAD"真全双工(原生打断/低延迟), 取代每轮一连接。
+    # 仅 mode=s2s + 免提下生效; PTT/三段式不受影响。真机不稳可设 false 回退每轮 S2S。
+    s2s-persistent: ${VCA_S2S_PERSISTENT:false}
     # 提示词(人设/语气/约束)。pipeline 与 s2s 共用; s2s 下每回合作为 Qwen-Omni 的
     # response.create.instructions 下发。长提示词写在文件末尾的 prompts: 段(块标量 | , 免转义),
     # 这里只引用它; 换人设=改那段, 或把引用指向别的 key。也可用 VCA_SYSTEM_PROMPT 整段覆盖。
@@ -80,10 +83,13 @@ vca:
       silence-ms: ${VCA_VAD_SILENCE_MS:1200}
       # 开口判定: 人声需持续这么久(ms)才算开口, 顺带过滤短促杂音/咳嗽误触发新一轮。
       onset-ms: ${VCA_VAD_ONSET_MS:200}
+      # 开口阈值: 超过即算"有人声"。与检测器同尺度 —— 能量法约 0.015; Silero 是人声概率(0~1),
+      # 留空(0.015)时开了 Silero 会自动取 0.5。说话识别不到就调低(Silero 试 0.3, 能量法试 0.01)。
+      speech-threshold: ${VCA_VAD_SPEECH_THRESHOLD:0.015}
       # --- 半双工(默认开): 机器人说话期间不收麦、不语音打断 ---
       # 外放无回声消除时, 这是断掉"自己声音→麦克风→不停重复"死循环的根治开关。
       # 代价: 不能用语音随时插嘴(想打断点屏幕 ⏹ 按钮)。戴耳机/有 AEC 时设 false 可恢复全双工语音打断。
-      half-duplex: ${VCA_VAD_HALF_DUPLEX:true}
+      half-duplex: ${VCA_VAD_HALF_DUPLEX:false}
 
   gateway:
     circuit:

@@ -1,5 +1,8 @@
 package com.vca.orchestrator.vad;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayDeque;
 import java.util.Deque;
 
@@ -24,6 +27,8 @@ import java.util.Deque;
  * <p>本类<b>非线程安全</b>: 调用方需串行调用(WebSocket 接入层在连接锁内调用)。
  */
 public class HandsFreeVad {
+
+    private static final Logger log = LoggerFactory.getLogger(HandsFreeVad.class);
 
     /**
      * 句尾判停的"释放阈值"比例: 释放阈值 = 开口阈值 × 此比例, 形成滞回(hysteresis)。
@@ -62,6 +67,16 @@ public class HandsFreeVad {
     private double bargeMs;
     /** 机器人本次连续说话已持续的时长(ms), 用于起播保护期判定 */
     private double botSpeakingMs;
+    /** 诊断: 本次机器人说话窗口内检测到的最高人声电平, 窗口结束时打印(判断"是否过阈值") */
+    private double bargeWindowPeak;
+    /** 诊断: 过了起播保护期之后的峰值人声(保护期内的高电平不算) + 打断累计达到过的峰值 */
+    private double bargePostGracePeak;
+    private double bargeMsMax;
+    /** 诊断: AWAIT 期间检测到的峰值人声 + 累计时长, 每攒够 ~2s 打印一次(判断开口为何没触发) */
+    private double awaitPeak;
+    private double awaitLogMs;
+    /** 诊断: AWAIT 期间<b>绕过检测器、直接算原始音频能量(RMS)</b>的峰值; 用来区分"麦克风没采到声音"(≈0)与"Silero 失效"(RMS 不低但人声概率≈0) */
+    private double awaitRawPeak;
 
     private final Deque<short[]> preroll = new ArrayDeque<>();
     private double prerollMs;
@@ -124,6 +139,21 @@ public class HandsFreeVad {
                 }
             }
             case AWAIT -> {
+                // 诊断: 每 ~2s 打印 AWAIT 期间峰值人声 + 当前真正在用的检测器(Silero 还是降级回的能量法)
+                // —— 一眼看出"识别不了说话"是模型没加载(检测器=EnergyVad 却用概率阈值)还是你说话概率没过阈值。
+                awaitPeak = Math.max(awaitPeak, level);
+                awaitRawPeak = Math.max(awaitRawPeak, rawRms(frame));
+                awaitLogMs += frameMs;
+                if (awaitLogMs >= 2000) {
+                    // 原始能量(rawRMS)绕过 Silero: ≈0 = 麦克风根本没采到声(麦/浏览器问题);
+                    // rawRMS 明显>0 但人声概率≈0 = Silero 失效(可设 VCA_VAD_SILERO=false 降级回能量法验证)。
+                    log.info("开口诊断(AWAIT): 近2s峰值人声={}, 原始能量rawRMS={}, 开口阈值={}, 检测器={}, 帧长={}",
+                            String.format("%.3f", awaitPeak), String.format("%.4f", awaitRawPeak),
+                            cfg.speechThreshold(), detector.getClass().getSimpleName(), frame.length);
+                    awaitLogMs = 0;
+                    awaitPeak = 0;
+                    awaitRawPeak = 0;
+                }
                 if (level >= cfg.speechThreshold()) {
                     speechMs += frameMs;
                     if (speechMs >= cfg.onsetMs()) {
@@ -185,21 +215,36 @@ public class HandsFreeVad {
     /** 打断判定: 机器人在说话且人声持续够久 → 打断, 并把这次插话当作新一轮开始(含预滚, 不丢开头) */
     private void bargeDetect(double level, double frameMs, boolean botSpeaking) {
         if (!botSpeaking) {
+            // 一段机器人说话窗口结束: 分别报告"全程峰值"和"过保护期后峰值", 以及打断累计达到过的峰值。
+            // 若"过保护期后峰值"<阈值, 说明你的插话高电平都落在保护期内被忽略了 → 调小 bargeGraceMs;
+            // 若过阈值但"累计峰值"没到需求, 说明持续时长不够 → 调小 bargeMs。
+            if (botSpeakingMs > 0) {
+                log.info("打断诊断: 窗口={}ms, 保护期={}ms; 全程峰值人声={}, 过保护期后峰值={}(阈值={}); 打断累计峰值={}ms(需≥{}ms)",
+                        (long) botSpeakingMs, cfg.bargeGraceMs(), String.format("%.3f", bargeWindowPeak),
+                        String.format("%.3f", bargePostGracePeak), cfg.bargeThreshold(),
+                        (long) bargeMsMax, cfg.bargeMs());
+            }
             bargeMs = 0;
             botSpeakingMs = 0;
+            bargeWindowPeak = 0;
+            bargePostGracePeak = 0;
+            bargeMsMax = 0;
             return;
         }
         botSpeakingMs += frameMs;
+        bargeWindowPeak = Math.max(bargeWindowPeak, level);
         // 起播保护期: 机器人刚开口的头 bargeGraceMs 内不判打断, 避免被自己头几个字的回声掐断
         if (botSpeakingMs < cfg.bargeGraceMs()) {
             bargeMs = 0;
             return;
         }
+        bargePostGracePeak = Math.max(bargePostGracePeak, level);
         if (level > cfg.bargeThreshold()) {
             bargeMs += frameMs;
         } else {
             bargeMs = Math.max(0, bargeMs - frameMs);
         }
+        bargeMsMax = Math.max(bargeMsMax, bargeMs);
         if (bargeMs >= cfg.bargeMs()) {
             listener.onBargeIn();
             begin();
@@ -232,5 +277,18 @@ public class HandsFreeVad {
         silenceMs = 0;
         bargeMs = 0;
         botSpeakingMs = 0;
+    }
+
+    /** 原始音频均方根能量(0~1), 与任何检测器无关 —— 诊断"麦克风到底有没有信号"用。 */
+    private static double rawRms(short[] frame) {
+        if (frame == null || frame.length == 0) {
+            return 0;
+        }
+        double sum = 0;
+        for (short s : frame) {
+            double v = s / 32768.0;
+            sum += v * v;
+        }
+        return Math.sqrt(sum / frame.length);
     }
 }

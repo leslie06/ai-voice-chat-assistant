@@ -65,6 +65,11 @@ public class QwenOmniS2sProvider implements S2sProvider {
     }
 
     @Override
+    public com.vca.domain.spi.S2sSession open(List<Message> history, S2sConfig cfg) {
+        return new QwenOmniSession(props, cfg, history);
+    }
+
+    @Override
     public Flux<AudioChunk> converse(Flux<AudioFrame> audio, List<Message> history, S2sConfig cfg) {
         return Flux.<AudioChunk>create(sink -> startConversation(sink, audio, history, cfg),
                         FluxSink.OverflowStrategy.BUFFER)
@@ -91,6 +96,8 @@ public class QwenOmniS2sProvider implements S2sProvider {
 
                     @Override
                     public void onClose(int code, String reason) {
+                        // 服务端关连接的 code/reason 是排查"几轮后不说话"的关键: 限流/配额/鉴权超限常在此暴露
+                        log.info("Qwen-Omni 每轮连接关闭: code={}, reason={}", code, reason);
                         sink.complete();   // 连接关闭即视为本轮结束(重复 complete 无副作用)
                     }
                 });
@@ -99,12 +106,13 @@ public class QwenOmniS2sProvider implements S2sProvider {
             conv.connect();
             conv.updateSession(sessionConfig(cfg));
         } catch (Exception e) {
+            log.warn("Qwen-Omni 每轮连接建连失败: {}", e.toString());
             sink.error(ProviderException.fatal(VendorType.QWEN, Capability.S2S,
                     "Qwen-Omni 连接失败: " + e.getMessage(), e));
             safeClose(conv);
             return;
         }
-        log.debug("Qwen-Omni 会话开启, model={}, voice={}, 历史={} 条",
+        log.info("Qwen-Omni 每轮连接开启, model={}, voice={}, 历史={} 条",
                 param.getModel(), value(cfg.voice(), props.getVoice()), history == null ? 0 : history.size());
 
         // 上行: 逐帧 base64 送入; 上行流结束(VAD 判停)→ 提交并请求一次回复。
@@ -168,11 +176,13 @@ public class QwenOmniS2sProvider implements S2sProvider {
             }
             case OmniRealtimeConstants.PROTOCOL_RESPONSE_TYPE_RESPONSE_DONE,
                  OmniRealtimeConstants.PROTOCOL_RESPONSE_TYPE_SESSION_FINISHED -> {
+                log.info("Qwen-Omni 每轮回复结束: {}", type);
                 responded.set(true);
                 sink.complete();
             }
             case "error" -> {
                 String msg = event.has("error") ? event.get("error").toString() : event.toString();
+                log.warn("Qwen-Omni 每轮服务端错误: {}", msg);   // 限流/无效请求等在此暴露
                 sink.error(ProviderException.retryable(VendorType.QWEN, Capability.S2S,
                         "Qwen-Omni 服务端错误: " + msg, null));
             }
@@ -216,8 +226,11 @@ public class QwenOmniS2sProvider implements S2sProvider {
         if (convo.isEmpty()) {
             return base;   // 首轮无历史: 按人设(可含开场白)正常开场
         }
-        return base + "\n\n【你和用户已经在通话/对话中，以下是目前为止的记录。请基于它自然地接着说，"
-                + "不要重复开场白或自我介绍，不要重复你已经说过的话】\n" + convo;
+        // 关键: 历史是文字、当前提问是音频。措辞必须把历史定位成"背景参考", 并明确"回答最新这条语音提问",
+        // 否则"请接着说"会让模型继续上一个话题、忽略新音频(表现为"两个问题都答第一个")。
+        return base + "\n\n【以下是你和用户之前的对话记录，仅作背景参考，帮助你理解上下文：】\n" + convo
+                + "\n【现在用户用语音问了一个新问题。请只针对这条最新的语音提问作答，"
+                + "不要去重复回答上面记录里的旧问题，也不要重复你已经说过的话或开场白。】";
     }
 
     /** 取字符串字段, 缺失/为 null 返回 null。包级可见以便单测。 */

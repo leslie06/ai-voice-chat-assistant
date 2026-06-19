@@ -9,9 +9,11 @@ import com.vca.domain.model.LlmConfig;
 import com.vca.domain.model.Message;
 import com.vca.domain.model.SessionContext;
 import com.vca.domain.model.TtsConfig;
+import com.vca.domain.model.S2sEvent;
 import com.vca.domain.spi.AsrProvider;
 import com.vca.domain.spi.LlmProvider;
 import com.vca.domain.spi.S2sProvider;
+import com.vca.domain.spi.S2sSession;
 import com.vca.domain.spi.TtsProvider;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.pipeline.SentenceSplitter;
@@ -451,6 +453,87 @@ public class ConversationSession {
     }
 
     /**
+     * 持久 S2S 全双工会话(P2): 开一条长连贯穿多轮, <b>服务端 VAD 接管回合切分与打断</b>, 取代
+     * {@link #speechToSpeechTurn} 每轮一连接、应用侧判停的伪级联用法 —— 这是把 Omni 用出原生全双工/
+     * 原生打断能力的形态。返回句柄供接入层持续喂音频({@link S2sLiveSession#pushAudio})、订阅下行音频;
+     * 双方字幕与打断信号经 {@link #listener} 旁路透传(与三段式同款通道), 接入层无需区分模式。
+     *
+     * <p>状态机在全双工下尽力而为驱动(仅供观测), 每次回复内 THINKING/SPEAKING 各迁移一次以避免噪声日志。
+     * 对话历史与三段式/每轮 S2S 共享同一段上下文, 切回其它模式时延续。
+     */
+    public S2sLiveSession openS2sLive() {
+        S2sSession session = s2s.open(historySnapshot(), context.s2sConfig());
+        stateMachine.tryTransition(SessionState.LISTENING);
+        LiveResponse resp = new LiveResponse();
+        Flux<AudioChunk> audioOut = session.events()
+                .<AudioChunk>handle((ev, sink) -> onS2sLiveEvent(ev, resp, sink))
+                .doFinally(sig -> {
+                    if (!stateMachine.is(SessionState.CLOSED)) {
+                        stateMachine.tryTransition(SessionState.IDLE);
+                    }
+                    log.debug("持久 S2S 会话结束, signal={}", sig);
+                });
+        return new S2sLiveSession(session, audioOut);
+    }
+
+    /** 持久 S2S 下行事件 → 音频块 + 字幕(listener) + 历史 + 状态机。运行在单一订阅线程上, 串行。 */
+    private void onS2sLiveEvent(S2sEvent ev, LiveResponse resp,
+                               reactor.core.publisher.SynchronousSink<AudioChunk> sink) {
+        if (ev instanceof S2sEvent.UserTranscript u) {
+            appendHistory(Message.user(u.text()));
+            safeNotify(() -> listener.onAsrFinal(u.text()));
+        } else if (ev instanceof S2sEvent.AssistantText t) {
+            markThinking(resp);
+            resp.assistant.append(t.delta());
+            safeNotify(() -> listener.onAssistantDelta(t.delta()));
+        } else if (ev instanceof S2sEvent.AudioDelta a) {
+            markThinking(resp);
+            if (!resp.speaking) {
+                resp.speaking = true;
+                stateMachine.tryTransition(SessionState.SPEAKING);
+            }
+            sink.next(AudioChunk.of(a.pcm(), com.vca.domain.enums.AudioFormat.PCM, a.sequence()));
+        } else if (ev instanceof S2sEvent.UserSpeechStarted) {
+            // 全双工打断: 落已说出的部分、回到聆听, 并通知接入层冲掉前端播放缓冲(止住已下发的音频)
+            flushAssistant(resp);
+            stateMachine.tryTransition(SessionState.INTERRUPTED);
+            stateMachine.tryTransition(SessionState.LISTENING);
+            safeNotify(listener::onUserSpeechStarted);
+        } else if (ev instanceof S2sEvent.ResponseDone) {
+            // 本次回复正常结束(会话不关): 落历史, 回到聆听等下一轮
+            flushAssistant(resp);
+            stateMachine.tryTransition(SessionState.LISTENING);
+        }
+    }
+
+    /** 本次回复首次出现内容时迁入 THINKING(每次回复仅一次, 避免噪声日志)。 */
+    private void markThinking(LiveResponse resp) {
+        if (!resp.thinking) {
+            resp.thinking = true;
+            stateMachine.tryTransition(SessionState.THINKING);
+        }
+    }
+
+    /** 把当前累计的机器人回复落历史并通知 listener, 然后复位本次回复态; 空则只复位。 */
+    private void flushAssistant(LiveResponse resp) {
+        if (!resp.assistant.isEmpty()) {
+            String full = resp.assistant.toString();
+            appendHistory(Message.assistant(full));
+            safeNotify(() -> listener.onAssistantText(full));
+        }
+        resp.assistant.setLength(0);
+        resp.thinking = false;
+        resp.speaking = false;
+    }
+
+    /** 持久 S2S 单次回复的累计态: 在 handle 闭包内跨事件维护(单订阅线程, 无需同步)。 */
+    private static final class LiveResponse {
+        final StringBuilder assistant = new StringBuilder();
+        boolean thinking;
+        boolean speaking;
+    }
+
+    /**
      * 用户打断: 取消当前回合, 状态走 INTERRUPTED → (回合 doFinally 落到) IDLE。
      * 由上层在 SPEAKING/THINKING 状态下检测到用户开口(VAD)时调用。
      */
@@ -474,6 +557,11 @@ public class ConversationSession {
 
     public SessionState state() {
         return stateMachine.current();
+    }
+
+    /** 当前生效的对话模式(可热切)。接入层据此决定是否走持久 S2S 路径。 */
+    public SessionContext.Mode currentMode() {
+        return mode;
     }
 
     public String sessionId() {
