@@ -54,7 +54,7 @@ vca:
     # 共享访问令牌: 留空=不校验(本地开发)。公网部署务必用环境变量 VCA_AUTH_TOKEN 设一个。
     auth-token: ${VCA_AUTH_TOKEN:}
     # 单会话最长存活秒数(防连着不挂烧账单); 同时在线连接上限。0=不限。
-    max-session-seconds: ${VCA_MAX_SESSION_SECONDS:600}
+    max-session-seconds: ${VCA_MAX_SESSION_SECONDS:3600}
     max-connections: ${VCA_MAX_CONNECTIONS:8}
     vad:
       # 免提开口/断句检测。use-silero=true 用 Silero(ONNX)语义级 VAD, 抗噪更好;
