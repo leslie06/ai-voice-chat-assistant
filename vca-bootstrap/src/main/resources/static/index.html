@@ -115,8 +115,8 @@
       <div class="field">
         <label for="engine">对话模式</label>
         <select class="modelsel" id="engine">
-          <option value="pipeline" selected>三段式（可换模型/音色）</option>
-          <option value="s2s">端到端语音大模型（延迟最低）</option>
+          <option value="s2s" selected>端到端语音大模型（延迟最低·推荐）</option>
+          <option value="pipeline">三段式（可换模型/音色）</option>
         </select>
         <div class="field-hint">三段式 ASR→大模型→TTS，语音和打字都用下面选的模型、音色可配；端到端把三者融合成一个语音大模型，延迟最低，但模型与音色固定。切换即时生效（作用于下一句）。</div>
       </div>
@@ -488,8 +488,9 @@ voiceSel.onchange=()=>{ sendVoice(); addSys('— 已切换音色：'+voiceSel.op
 
 /* ---------- 对话模式选择(三段式 / 端到端), 前端为准, 连接时下发 ---------- */
 const engineSel=document.getElementById('engine');
-const savedEngine=localStorage.getItem('vca_engine'); if(savedEngine) engineSel.value=savedEngine;
-function sendEngine(){ localStorage.setItem('vca_engine',engineSel.value); send({type:'engine',value:engineSel.value}); }
+/* v2: 默认切到端到端持久 S2S; bump key 让旧的 'pipeline' 偏好失效, 想用三段式可在设置里再选 */
+const savedEngine=localStorage.getItem('vca_engine_v2'); if(savedEngine) engineSel.value=savedEngine;
+function sendEngine(){ localStorage.setItem('vca_engine_v2',engineSel.value); send({type:'engine',value:engineSel.value}); }
 engineSel.onchange=()=>{ sendEngine(); addSys('— 已切换为'+(engineSel.value==='s2s'?'端到端语音大模型':'三段式')+'，下一句生效 —'); };
 
 /* ---------- 设置面板开关 ---------- */

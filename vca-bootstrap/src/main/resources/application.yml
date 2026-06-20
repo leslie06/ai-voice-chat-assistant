@@ -46,7 +46,7 @@ vca:
     s2s-voice: ${VCA_S2S_VOICE:}
     # 持久 S2S(P2): 端到端免提用"一条长连+服务端 VAD"真全双工(原生打断/低延迟), 取代每轮一连接。
     # 仅 mode=s2s + 免提下生效; PTT/三段式不受影响。真机不稳可设 false 回退每轮 S2S。
-    s2s-persistent: ${VCA_S2S_PERSISTENT:false}
+    s2s-persistent: ${VCA_S2S_PERSISTENT:true}
     # 提示词(人设/语气/约束)。pipeline 与 s2s 共用; s2s 下每回合作为 Qwen-Omni 的
     # response.create.instructions 下发。长提示词写在文件末尾的 prompts: 段(块标量 | , 免转义),
     # 这里只引用它; 换人设=改那段, 或把引用指向别的 key。也可用 VCA_SYSTEM_PROMPT 整段覆盖。
