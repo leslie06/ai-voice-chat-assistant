@@ -9,15 +9,20 @@ import com.vca.domain.model.AudioFrame;
 import com.vca.domain.model.LlmConfig;
 import com.vca.domain.model.LlmEvent;
 import com.vca.domain.model.Message;
+import com.vca.domain.model.S2sConfig;
+import com.vca.domain.model.S2sEvent;
 import com.vca.domain.model.SessionContext;
 import com.vca.domain.model.ToolCall;
 import com.vca.domain.model.ToolSpec;
 import com.vca.domain.spi.AsrProvider;
 import com.vca.domain.spi.LlmProvider;
+import com.vca.domain.spi.S2sProvider;
+import com.vca.domain.spi.S2sSession;
 import com.vca.domain.spi.TtsProvider;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.pipeline.SentenceSplitter;
 import com.vca.orchestrator.session.ConversationSession;
+import com.vca.orchestrator.session.S2sLiveSession;
 import com.vca.orchestrator.session.TurnListener;
 import com.vca.orchestrator.skill.PlayMusicSkill;
 import com.vca.orchestrator.skill.Skill;
@@ -253,6 +258,76 @@ class FunctionCallingTest {
         assertThat(round2History).anyMatch(m -> m.role() == Message.Role.USER && m.content().equals("再来首安静点的"));
         // 会话长期历史也干净(动作不是对话内容)
         assertThat(s.historyView()).noneMatch(m -> m.role() == Message.Role.USER || m.role() == Message.Role.ASSISTANT);
+    }
+
+    /** 捕获 submitToolResult + 下发的工具, 并按脚本回放事件的假持久 S2S 会话。 */
+    private static final class CapturingS2sSession implements S2sSession {
+        final List<String> toolResults = new ArrayList<>();
+        final Flux<S2sEvent> script;
+
+        CapturingS2sSession(Flux<S2sEvent> script) {
+            this.script = script;
+        }
+
+        @Override public void pushAudio(com.vca.domain.model.AudioFrame frame) {
+        }
+
+        @Override public Flux<S2sEvent> events() {
+            return script;
+        }
+
+        @Override public void cancelResponse() {
+        }
+
+        @Override public void close() {
+        }
+
+        @Override public void submitToolResult(String callId, String output) {
+            toolResults.add(callId + "|" + output);
+        }
+    }
+
+    @Test
+    void s2sFunctionCallExecutesSkillAndFeedsResultBack() {
+        // 持久 S2S 里模型发起 play_music 调用: 应执行技能(下发音乐动作)+ 把确认回灌给会话
+        Flux<S2sEvent> script = Flux.just(
+                new S2sEvent.UserTranscript("放首晴天"),
+                new S2sEvent.FunctionCall("call1", PlayMusicSkill.NAME, "{\"query\":\"晴天\"}"),
+                new S2sEvent.ResponseDone());
+        CapturingS2sSession s2sSession = new CapturingS2sSession(script);
+        List<ToolSpec> toolsSeen = new ArrayList<>();
+        S2sProvider s2s = new S2sProvider() {
+            @Override public VendorType vendor() {
+                return VendorType.QWEN;
+            }
+
+            @Override public Flux<AudioChunk> converse(Flux<com.vca.domain.model.AudioFrame> audio,
+                                                       List<Message> history, S2sConfig cfg) {
+                return Flux.empty();
+            }
+
+            @Override public S2sSession open(List<Message> history, List<ToolSpec> tools, S2sConfig cfg) {
+                toolsSeen.addAll(tools);
+                return s2sSession;
+            }
+        };
+        SessionContext ctx = SessionContext.speechToSpeech(
+                "s-s2s", "u-1", S2sConfig.defaults(VendorType.QWEN, "qwen-omni", "Chelsie"));
+        ConversationSession session = new ConversationSession(
+                ctx, null, null, null, s2s, new SentenceSplitter(), 16, TurnMetrics.noop(),
+                new SkillRegistry(List.of(new PlayMusicSkill())));
+        Captor cap = new Captor();
+        session.setTurnListener(cap);
+
+        StepVerifier.create(session.openS2sLive().audioOut()).verifyComplete();
+
+        // 工具确实下发给了会话
+        assertThat(toolsSeen).anyMatch(t -> t.name().equals(PlayMusicSkill.NAME));
+        // 动作型: 触发前端点歌
+        assertThat(cap.music).containsExactly("play:晴天");
+        // 结果回灌(call_id 配对 + 确认语)
+        assertThat(s2sSession.toolResults).hasSize(1);
+        assertThat(s2sSession.toolResults.get(0)).startsWith("call1|").contains("好的，为您播放音乐晴天");
     }
 
     @Test

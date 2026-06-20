@@ -10,6 +10,7 @@ import com.vca.domain.model.AudioFrame;
 import com.vca.domain.model.LlmConfig;
 import com.vca.domain.model.LlmEvent;
 import com.vca.domain.model.Message;
+import com.vca.domain.model.S2sConfig;
 import com.vca.domain.model.SessionContext;
 import com.vca.domain.model.ToolCall;
 import com.vca.domain.model.TtsConfig;
@@ -620,11 +621,12 @@ public class ConversationSession {
      * 对话历史与三段式/每轮 S2S 共享同一段上下文, 切回其它模式时延续。
      */
     public S2sLiveSession openS2sLive() {
-        S2sSession session = s2s.open(historySnapshot(), context.s2sConfig());
+        // 把当前时间注入人设(端到端模型无 get_current_time 工具, 靠上下文答对时间), 并下发 function-calling 工具
+        S2sSession session = s2s.open(historySnapshot(), skills.toolSpecs(), s2sConfigWithTime());
         stateMachine.tryTransition(SessionState.LISTENING);
         LiveResponse resp = new LiveResponse();
         Flux<AudioChunk> audioOut = session.events()
-                .<AudioChunk>handle((ev, sink) -> onS2sLiveEvent(ev, resp, sink))
+                .<AudioChunk>handle((ev, sink) -> onS2sLiveEvent(ev, resp, session, sink))
                 .doFinally(sig -> {
                     if (!stateMachine.is(SessionState.CLOSED)) {
                         stateMachine.tryTransition(SessionState.IDLE);
@@ -634,8 +636,18 @@ public class ConversationSession {
         return new S2sLiveSession(session, audioOut);
     }
 
+    /** 端到端会话配置: 在人设后追加当前时间上下文(与三段式一致, 让时间问题答对)。 */
+    private S2sConfig s2sConfigWithTime() {
+        S2sConfig base = context.s2sConfig();
+        if (base == null) {
+            return null;
+        }
+        String persona = (base.systemPrompt() == null ? "" : base.systemPrompt()) + "\n\n" + currentTimeContext();
+        return new S2sConfig(base.vendor(), base.model(), base.voice(), persona, base.outputFormat());
+    }
+
     /** 持久 S2S 下行事件 → 音频块 + 字幕(listener) + 历史 + 状态机。运行在单一订阅线程上, 串行。 */
-    private void onS2sLiveEvent(S2sEvent ev, LiveResponse resp,
+    private void onS2sLiveEvent(S2sEvent ev, LiveResponse resp, S2sSession session,
                                reactor.core.publisher.SynchronousSink<AudioChunk> sink) {
         if (ev instanceof S2sEvent.UserTranscript u) {
             appendHistory(Message.user(u.text()));
@@ -651,6 +663,8 @@ public class ConversationSession {
                 stateMachine.tryTransition(SessionState.SPEAKING);
             }
             sink.next(AudioChunk.of(a.pcm(), com.vca.domain.enums.AudioFormat.PCM, a.sequence()));
+        } else if (ev instanceof S2sEvent.FunctionCall fc) {
+            handleS2sFunctionCall(fc, session);
         } else if (ev instanceof S2sEvent.UserSpeechStarted) {
             // 全双工打断: 落已说出的部分、回到聆听, 并通知接入层冲掉前端播放缓冲(止住已下发的音频)
             flushAssistant(resp);
@@ -662,6 +676,26 @@ public class ConversationSession {
             flushAssistant(resp);
             stateMachine.tryTransition(SessionState.LISTENING);
         }
+    }
+
+    /**
+     * 持久 S2S 工具调用: 复用三段式同一套技能执行(runSkill)+ 动作下发(dispatchAction), 再把结果经
+     * {@link S2sSession#submitToolResult} 回灌, 模型据此继续语音作答。动作型(点歌)同时触发前端动作。
+     * 技能多为同步 Mono, 直接订阅(fire-and-forget); 失败也回灌一条提示, 不卡住会话。
+     */
+    private void handleS2sFunctionCall(S2sEvent.FunctionCall fc, S2sSession session) {
+        runSkill(new ToolCall(fc.callId(), fc.name(), fc.arguments()))
+                .subscribe(result -> {
+                    if (result.actionType() != null) {
+                        dispatchAction(result.actionType(), result.actionPayload());
+                    }
+                    String output = result.content() == null || result.content().isBlank()
+                            ? "已完成" : result.content();
+                    session.submitToolResult(fc.callId(), output);
+                }, err -> {
+                    log.warn("持久 S2S 工具执行异常, call_id={}: {}", fc.callId(), err.toString());
+                    session.submitToolResult(fc.callId(), "工具执行失败");
+                });
     }
 
     /** 本次回复首次出现内容时迁入 THINKING(每次回复仅一次, 避免噪声日志)。 */

@@ -66,7 +66,13 @@ public class QwenOmniS2sProvider implements S2sProvider {
 
     @Override
     public com.vca.domain.spi.S2sSession open(List<Message> history, S2sConfig cfg) {
-        return new QwenOmniSession(props, cfg, history);
+        return new QwenOmniSession(props, cfg, history, List.of());
+    }
+
+    @Override
+    public com.vca.domain.spi.S2sSession open(List<Message> history,
+                                              List<com.vca.domain.model.ToolSpec> tools, S2sConfig cfg) {
+        return new QwenOmniSession(props, cfg, history, tools);
     }
 
     @Override

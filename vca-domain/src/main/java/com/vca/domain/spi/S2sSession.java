@@ -35,6 +35,17 @@ public interface S2sSession {
      */
     void cancelResponse();
 
+    /**
+     * 回灌一次工具调用的结果(function-calling)。在收到 {@link S2sEvent.FunctionCall} 并执行完技能后调用:
+     * 实现把结果作为 {@code function_call_output} 项写回会话, 并触发模型据此生成语音回复。
+     * 默认空实现(不支持工具的厂商)。
+     *
+     * @param callId 对应 {@link S2sEvent.FunctionCall#callId()}
+     * @param output 工具结果文本(数据型: 给模型作答的依据; 动作型: 简短执行确认)
+     */
+    default void submitToolResult(String callId, String output) {
+    }
+
     /** 关闭会话并释放底层连接。幂等。 */
     void close();
 }

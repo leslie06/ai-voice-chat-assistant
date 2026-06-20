@@ -7,6 +7,7 @@ import com.alibaba.dashscope.audio.omni.OmniRealtimeConstants;
 import com.alibaba.dashscope.audio.omni.OmniRealtimeConversation;
 import com.alibaba.dashscope.audio.omni.OmniRealtimeModality;
 import com.alibaba.dashscope.audio.omni.OmniRealtimeParam;
+import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.vca.domain.enums.Capability;
@@ -16,6 +17,7 @@ import com.vca.domain.model.AudioFrame;
 import com.vca.domain.model.Message;
 import com.vca.domain.model.S2sConfig;
 import com.vca.domain.model.S2sEvent;
+import com.vca.domain.model.ToolSpec;
 import com.vca.domain.spi.S2sSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,9 +59,13 @@ public class QwenOmniSession implements S2sSession {
     /** 建连前最多缓冲多少帧上行音频(约几百 ms), 超出丢最旧 —— 防止建连慢时无限堆积 */
     private static final int MAX_PENDING_FRAMES = 256;
 
+    private static final Gson GSON = new Gson();
+
     private final QwenOmniProperties props;
     private final S2sConfig cfg;
     private final List<Message> history;
+    /** function-calling 工具声明; 空表示不启用 */
+    private final List<ToolSpec> tools;
 
     /** 下行事件汇; 订阅 events() 时赋值 */
     private final AtomicReference<FluxSink<S2sEvent>> sinkRef = new AtomicReference<>();
@@ -78,10 +84,11 @@ public class QwenOmniSession implements S2sSession {
     /** 诊断: 已记过日志的服务端事件类型(每类只记首次), 用于定位"说话没反应"卡在哪一步 */
     private final java.util.Set<String> loggedTypes = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
-    public QwenOmniSession(QwenOmniProperties props, S2sConfig cfg, List<Message> history) {
+    public QwenOmniSession(QwenOmniProperties props, S2sConfig cfg, List<Message> history, List<ToolSpec> tools) {
         this.props = props;
         this.cfg = cfg;
         this.history = history;
+        this.tools = tools == null ? List.of() : tools;
     }
 
     @Override
@@ -124,6 +131,7 @@ public class QwenOmniSession implements S2sSession {
         try {
             c.connect();
             c.updateSession(sessionConfig());
+            sendToolsConfig(c);   // 工具走原始 session.update(merge 语义), 不覆盖上面的 voice/VAD 配置
             seedHistory(c, history);
             this.conv = c;
             this.ready = true;
@@ -218,6 +226,55 @@ public class QwenOmniSession implements S2sSession {
     }
 
     @Override
+    public void submitToolResult(String callId, String output) {
+        OmniRealtimeConversation c = conv;
+        if (c == null || callId == null || callId.isBlank()) {
+            return;
+        }
+        // 写回工具结果项 → 触发模型据此继续语音回复(Realtime: function_call_output + response.create)
+        JsonObject item = new JsonObject();
+        item.addProperty("type", "function_call_output");
+        item.addProperty("call_id", callId);
+        item.addProperty("output", output == null ? "" : output);
+        try {
+            c.createItem(item);
+            c.createResponse(null, List.of(OmniRealtimeModality.TEXT, OmniRealtimeModality.AUDIO));
+            log.info("Qwen-Omni 持久会话: 已回灌工具结果并请求回复, call_id={}", callId);
+        } catch (Exception e) {
+            log.warn("回灌工具结果失败, call_id={}: {}", callId, e.toString());
+        }
+    }
+
+    /** 工具声明经原始 session.update 下发(Realtime 扁平格式: type/name/description/parameters)。 */
+    private void sendToolsConfig(OmniRealtimeConversation c) {
+        if (tools.isEmpty()) {
+            return;
+        }
+        JsonArray arr = new JsonArray();
+        for (ToolSpec t : tools) {
+            JsonObject tool = new JsonObject();
+            tool.addProperty("type", "function");
+            tool.addProperty("name", t.name());
+            tool.addProperty("description", t.description());
+            tool.add("parameters", t.parameters() == null
+                    ? new JsonObject() : GSON.toJsonTree(t.parameters()));
+            arr.add(tool);
+        }
+        JsonObject session = new JsonObject();
+        session.add("tools", arr);
+        session.addProperty("tool_choice", "auto");
+        JsonObject msg = new JsonObject();
+        msg.addProperty("type", "session.update");
+        msg.add("session", session);
+        try {
+            c.sendRaw(GSON.toJson(msg));
+            log.info("Qwen-Omni 持久会话: 已下发 {} 个工具", tools.size());
+        } catch (Exception e) {
+            log.warn("下发工具配置失败: {}", e.toString());
+        }
+    }
+
+    @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) {
             return;
@@ -257,10 +314,35 @@ public class QwenOmniSession implements S2sSession {
             case OmniRealtimeConstants.PROTOCOL_RESPONSE_TYPE_RESPONSE_DONE -> {
                 return new S2sEvent.ResponseDone();   // 本次回复结束, 会话继续
             }
+            // 模型发起工具调用: output_item.done 携带完整的 function_call 项(name/call_id/arguments 齐全)
+            case "response.output_item.done" -> {
+                return functionCallOf(event);
+            }
             default -> {
                 return null;   // session.created / response.created 等握手事件无需处理
             }
         }
+    }
+
+    /**
+     * 从 {@code response.output_item.done} 抽取工具调用: 仅当 item.type=function_call 且 name/call_id 齐全时
+     * 返回 {@link S2sEvent.FunctionCall}, 否则 null(普通文本/音频输出项不在此处理)。包级可见以便单测。
+     */
+    static S2sEvent functionCallOf(JsonObject event) {
+        if (!event.has("item") || !event.get("item").isJsonObject()) {
+            return null;
+        }
+        JsonObject item = event.getAsJsonObject("item");
+        if (!"function_call".equals(QwenOmniS2sProvider.optString(item, "type"))) {
+            return null;
+        }
+        String callId = QwenOmniS2sProvider.optString(item, "call_id");
+        String name = QwenOmniS2sProvider.optString(item, "name");
+        if (callId == null || name == null) {
+            return null;
+        }
+        String args = QwenOmniS2sProvider.optString(item, "arguments");
+        return new S2sEvent.FunctionCall(callId, name, args == null ? "{}" : args);
     }
 
     /** 会话配置: 纯语音, <b>开启服务端 turn detection</b>(server VAD)+ 输入转写。 */

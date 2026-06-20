@@ -71,6 +71,38 @@ class QwenOmniSessionTest {
     }
 
     @Test
+    void functionCallParsedFromOutputItemDone() {
+        // response.output_item.done 携带 function_call 项 → 解析成 FunctionCall(name/call_id/arguments)
+        JsonObject item = new JsonObject();
+        item.addProperty("type", "function_call");
+        item.addProperty("name", "play_music");
+        item.addProperty("call_id", "call_123");
+        item.addProperty("arguments", "{\"query\":\"晴天\"}");
+        JsonObject e = event("response.output_item.done");
+        e.add("item", item);
+
+        S2sEvent ev = QwenOmniSession.mapEvent(e, "response.output_item.done", seq);
+        assertThat(ev).isInstanceOf(S2sEvent.FunctionCall.class);
+        S2sEvent.FunctionCall fc = (S2sEvent.FunctionCall) ev;
+        assertThat(fc.callId()).isEqualTo("call_123");
+        assertThat(fc.name()).isEqualTo("play_music");
+        assertThat(fc.arguments()).isEqualTo("{\"query\":\"晴天\"}");
+    }
+
+    @Test
+    void nonFunctionOutputItemIgnored() {
+        // 普通文本输出项不当作工具调用
+        JsonObject item = new JsonObject();
+        item.addProperty("type", "message");
+        JsonObject e = event("response.output_item.done");
+        e.add("item", item);
+        assertThat(QwenOmniSession.mapEvent(e, "response.output_item.done", seq)).isNull();
+        // 缺 item 也安全返回 null
+        assertThat(QwenOmniSession.mapEvent(event("response.output_item.done"), "response.output_item.done", seq))
+                .isNull();
+    }
+
+    @Test
     void historyItemShapesByRole() {
         JsonObject user = QwenOmniSession.historyItem(Message.user("在吗"));
         assertThat(user.get("type").getAsString()).isEqualTo("message");

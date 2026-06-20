@@ -184,9 +184,14 @@ public final class ManagedProviders {
          */
         @Override
         public com.vca.domain.spi.S2sSession open(List<Message> history, S2sConfig cfg) {
+            return open(history, List.of(), cfg);
+        }
+
+        @Override
+        public com.vca.domain.spi.S2sSession open(List<Message> history, List<ToolSpec> tools, S2sConfig cfg) {
             S2sProvider p = registry.s2s(cfg.vendor()).orElseThrow(
                     () -> ProviderException.fatal(cfg.vendor(), Capability.S2S, "未注册的 S2S 厂商", null));
-            return p.open(history, cfg);
+            return p.open(history, tools, cfg);
         }
     }
 }

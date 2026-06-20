@@ -6,6 +6,7 @@ import com.vca.domain.model.AudioChunk;
 import com.vca.domain.model.AudioFrame;
 import com.vca.domain.model.Message;
 import com.vca.domain.model.S2sConfig;
+import com.vca.domain.model.ToolSpec;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
@@ -45,5 +46,16 @@ public interface S2sProvider {
      */
     default S2sSession open(List<Message> history, S2sConfig cfg) {
         throw new UnsupportedOperationException("持久 S2S 会话未实现: " + vendor());
+    }
+
+    /**
+     * 开持久会话并启用 function-calling: 把 {@code tools} 作为会话工具下发给端到端模型,
+     * 模型可在对话中发起 {@link S2sEvent.FunctionCall}, 由编排层执行后经
+     * {@link S2sSession#submitToolResult} 回灌。{@code tools} 为空等价于 {@link #open(List, S2sConfig)}。
+     *
+     * <p>默认忽略工具、退回无工具的 {@link #open(List, S2sConfig)}, 让未适配的厂商零改动可用。
+     */
+    default S2sSession open(List<Message> history, List<ToolSpec> tools, S2sConfig cfg) {
+        return open(history, cfg);
     }
 }
