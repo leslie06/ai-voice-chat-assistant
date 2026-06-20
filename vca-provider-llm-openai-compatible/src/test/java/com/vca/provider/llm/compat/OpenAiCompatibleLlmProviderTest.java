@@ -4,7 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vca.domain.enums.VendorType;
 import com.vca.domain.exception.ProviderException;
 import com.vca.domain.model.LlmConfig;
+import com.vca.domain.model.LlmEvent;
 import com.vca.domain.model.Message;
+import com.vca.domain.model.ToolCall;
+import com.vca.domain.model.ToolSpec;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -114,6 +117,52 @@ class OpenAiCompatibleLlmProviderTest {
                     assertThat(pe.vendor()).isEqualTo(VendorType.DEEPSEEK);
                 })
                 .verify();
+    }
+
+    @Test
+    void assemblesStreamedToolCallsAndSendsToolsInBody() throws Exception {
+        OpenAiCompatibleLlmProperties.Client props = client(VendorType.DEEPSEEK, "DeepSeek");
+        OpenAiCompatibleLlmProvider provider = provider("deepseek", props);
+
+        // tool_calls 分片: 首块带 id+name, 后续块流式拼 arguments; content 为 JSON null
+        String sse = """
+                data: {"choices":[{"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"get_weather","arguments":""}}]}}]}
+
+                data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"city\\":"}}]}}]}
+
+                data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"杭州\\"}"}}]}}]}
+
+                data: {"choices":[{"finish_reason":"tool_calls","delta":{}}]}
+
+                data: [DONE]
+
+                """;
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream;charset=UTF-8")
+                .setBody(sse));
+
+        ToolSpec weather = new ToolSpec("get_weather", "查天气",
+                Map.of("type", "object", "properties",
+                        Map.of("city", Map.of("type", "string"))));
+
+        StepVerifier.create(provider.chat(
+                        List.of(Message.user("杭州天气")),
+                        LlmConfig.defaults(VendorType.DEEPSEEK, "deepseek-chat"),
+                        List.of(weather)))
+                .assertNext(ev -> {
+                    assertThat(ev).isInstanceOf(LlmEvent.ToolCalls.class);
+                    List<ToolCall> calls = ((LlmEvent.ToolCalls) ev).calls();
+                    assertThat(calls).hasSize(1);
+                    assertThat(calls.get(0).id()).isEqualTo("call_abc");
+                    assertThat(calls.get(0).name()).isEqualTo("get_weather");
+                    assertThat(calls.get(0).arguments()).isEqualTo("{\"city\":\"杭州\"}");
+                })
+                .verifyComplete();
+
+        String body = server.takeRequest().getBody().readUtf8();
+        assertThat(body).contains("\"tools\":");
+        assertThat(body).contains("\"name\":\"get_weather\"");
+        assertThat(body).contains("\"tool_choice\":\"auto\"");
     }
 
     private OpenAiCompatibleLlmProvider provider(String clientId, OpenAiCompatibleLlmProperties.Client props) {

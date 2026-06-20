@@ -310,6 +310,8 @@ public class QwenOmniSession implements S2sSession {
             case USER -> "user";
             case ASSISTANT -> "assistant";
             case SYSTEM -> "system";
+            // 工具调用/结果消息仅活在三段式单回合内, 不进 s2s 历史; 仅为 switch 穷尽性兜底
+            case TOOL -> "user";
         };
         String contentType = m.role() == Message.Role.ASSISTANT ? "text" : "input_text";
         JsonObject content = new JsonObject();

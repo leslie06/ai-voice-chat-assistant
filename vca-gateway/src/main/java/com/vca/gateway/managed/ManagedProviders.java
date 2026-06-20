@@ -8,8 +8,10 @@ import com.vca.domain.model.AsrEvent;
 import com.vca.domain.model.AudioChunk;
 import com.vca.domain.model.AudioFrame;
 import com.vca.domain.model.LlmConfig;
+import com.vca.domain.model.LlmEvent;
 import com.vca.domain.model.Message;
 import com.vca.domain.model.S2sConfig;
+import com.vca.domain.model.ToolSpec;
 import com.vca.domain.model.TtsConfig;
 import com.vca.domain.spi.AsrProvider;
 import com.vca.domain.spi.LlmProvider;
@@ -82,18 +84,35 @@ public final class ManagedProviders {
         @Override
         public Flux<String> chatStream(List<Message> history, LlmConfig cfg) {
             return executor.execute(Capability.LLM, cfg.vendor(), cand -> {
-                LlmProvider p = registry.llm(cand.vendor()).orElseThrow(
-                        () -> ProviderException.fatal(cand.vendor(), Capability.LLM, "未注册的 LLM 厂商", null));
-                // 模型选择: 候选就是会话请求的主厂商时, 优先用会话显式指定的 model(支持前端切模型);
-                // 故障转移到别的厂商时, model 是厂商相关的, 必须用候选自带的(不能把主厂商的模型名塞给它)。
-                boolean isPrimary = cand.vendor() == cfg.vendor();
-                String model = (isPrimary && cfg.model() != null && !cfg.model().isBlank())
-                        ? cfg.model()
-                        : cand.model();
-                LlmConfig vc = new LlmConfig(cand.vendor(), model, cfg.systemPrompt(),
-                        cfg.temperature(), cfg.maxTokens());
-                return p.chatStream(history, vc);
+                LlmProvider p = pick(cand);
+                return p.chatStream(history, configFor(cand, cfg));
             });
+        }
+
+        @Override
+        public Flux<LlmEvent> chat(List<Message> history, LlmConfig cfg, List<ToolSpec> tools) {
+            return executor.execute(Capability.LLM, cfg.vendor(), cand -> {
+                LlmProvider p = pick(cand);
+                return p.chat(history, configFor(cand, cfg), tools);
+            });
+        }
+
+        private LlmProvider pick(com.vca.gateway.Candidate cand) {
+            return registry.llm(cand.vendor()).orElseThrow(
+                    () -> ProviderException.fatal(cand.vendor(), Capability.LLM, "未注册的 LLM 厂商", null));
+        }
+
+        /**
+         * 为候选厂商重建调用配置。模型选择: 候选就是会话请求的主厂商时, 优先用会话显式指定的 model
+         * (支持前端切模型); 故障转移到别的厂商时, model 是厂商相关的, 必须用候选自带的。
+         */
+        private static LlmConfig configFor(com.vca.gateway.Candidate cand, LlmConfig cfg) {
+            boolean isPrimary = cand.vendor() == cfg.vendor();
+            String model = (isPrimary && cfg.model() != null && !cfg.model().isBlank())
+                    ? cfg.model()
+                    : cand.model();
+            return new LlmConfig(cand.vendor(), model, cfg.systemPrompt(),
+                    cfg.temperature(), cfg.maxTokens());
         }
     }
 

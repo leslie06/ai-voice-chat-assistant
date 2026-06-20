@@ -39,6 +39,13 @@ public class WebProperties {
      */
     private boolean s2sPersistent = false;
 
+    /**
+     * function-calling(技能/工具)总开关。开则三段式语音与打字回合给模型下发已注册工具
+     * (点歌、查时间……), 模型可按需调用; 关则退回纯文本对话(正则点歌快路径不受影响)。
+     * 仅作用于走 LLM 的回合; 端到端 s2s 语音不读它。
+     */
+    private boolean toolsEnabled = true;
+
 //    private String systemPrompt = "You are a voice assistant. Always reply in English, "
 //            + "in a short, conversational, spoken style. Avoid long paragraphs and lists. "
 //            + "Only answer the user's current sentence; do not restate, repeat or continue "
@@ -56,7 +63,7 @@ public class WebProperties {
     private String authToken = "";
 
     /** 单条 WebSocket 会话最长存活秒数, 到点强制关闭(防"连着不挂"持续烧 API 账单)。0=不限。 */
-    private int maxSessionSeconds = 600;
+    private int maxSessionSeconds = 6000;
 
     /** 同时在线 WebSocket 连接数上限, 超出直接拒绝新连接。0=不限。 */
     private int maxConnections = 8;
@@ -164,6 +171,14 @@ public class WebProperties {
 
     public void setS2sPersistent(boolean s2sPersistent) {
         this.s2sPersistent = s2sPersistent;
+    }
+
+    public boolean isToolsEnabled() {
+        return toolsEnabled;
+    }
+
+    public void setToolsEnabled(boolean toolsEnabled) {
+        this.toolsEnabled = toolsEnabled;
     }
 
     public String getSystemPrompt() {

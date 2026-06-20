@@ -1,13 +1,17 @@
 package com.vca.orchestrator.session;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vca.domain.enums.SessionState;
 import com.vca.domain.enums.VendorType;
 import com.vca.domain.model.AsrEvent;
 import com.vca.domain.model.AudioChunk;
 import com.vca.domain.model.AudioFrame;
 import com.vca.domain.model.LlmConfig;
+import com.vca.domain.model.LlmEvent;
 import com.vca.domain.model.Message;
 import com.vca.domain.model.SessionContext;
+import com.vca.domain.model.ToolCall;
 import com.vca.domain.model.TtsConfig;
 import com.vca.domain.model.S2sEvent;
 import com.vca.domain.spi.AsrProvider;
@@ -18,19 +22,25 @@ import com.vca.domain.spi.TtsProvider;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.pipeline.SentenceSplitter;
 import com.vca.orchestrator.skill.MusicIntent;
+import com.vca.orchestrator.skill.PlayMusicSkill;
+import com.vca.orchestrator.skill.Skill;
+import com.vca.orchestrator.skill.SkillRegistry;
+import com.vca.orchestrator.skill.SkillResult;
 import com.vca.orchestrator.statemachine.ConversationStateMachine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -54,6 +64,13 @@ public class ConversationSession {
     /** 默认保留的最大非 system 历史消息数(≈8 轮 user/assistant)。语音对话无需长记忆。 */
     private static final int DEFAULT_MAX_HISTORY_MESSAGES = 16;
 
+    /** 单回合内 LLM↔工具的最大往返轮数, 防止模型反复调工具不收口导致死循环。 */
+    private static final int MAX_TOOL_ROUNDS = 4;
+
+    private static final TypeReference<Map<String, Object>> ARGS_TYPE = new TypeReference<>() {
+    };
+    private static final ObjectMapper JSON = new ObjectMapper();
+
     private final SessionContext context;
     private final AsrProvider asr;
     private final LlmProvider llm;
@@ -61,6 +78,8 @@ public class ConversationSession {
     private final S2sProvider s2s;
     private final SentenceSplitter splitter;
     private final MusicIntent musicIntent = new MusicIntent();
+    /** function-calling 技能目录; 空时退回普通文本对话(不下发 tools)。 */
+    private final SkillRegistry skills;
 
     private final ConversationStateMachine stateMachine = new ConversationStateMachine();
     private final List<Message> history = new ArrayList<>();
@@ -104,12 +123,20 @@ public class ConversationSession {
     public ConversationSession(SessionContext context,
                                AsrProvider asr, LlmProvider llm, TtsProvider tts, S2sProvider s2s,
                                SentenceSplitter splitter, int maxHistoryMessages, TurnMetrics metrics) {
+        this(context, asr, llm, tts, s2s, splitter, maxHistoryMessages, metrics, SkillRegistry.empty());
+    }
+
+    public ConversationSession(SessionContext context,
+                               AsrProvider asr, LlmProvider llm, TtsProvider tts, S2sProvider s2s,
+                               SentenceSplitter splitter, int maxHistoryMessages, TurnMetrics metrics,
+                               SkillRegistry skills) {
         this.context = context;
         this.asr = asr;
         this.llm = llm;
         this.tts = tts;
         this.s2s = s2s;
         this.splitter = splitter;
+        this.skills = skills == null ? SkillRegistry.empty() : skills;
         this.maxHistoryMessages = maxHistoryMessages > 0 ? maxHistoryMessages : DEFAULT_MAX_HISTORY_MESSAGES;
         this.metrics = metrics == null ? TurnMetrics.noop() : metrics;
         this.activeLlmConfig = context.llmConfig();
@@ -210,7 +237,7 @@ public class ConversationSession {
         // 此时靠会话里另注入的 LLM 出文字回复(不合成语音)。无 LLM 配置则不支持打字。
         Flux<AudioChunk> turn = (activeLlmConfig == null || text == null || text.isBlank())
                 ? Flux.empty()
-                : respondTextOnly(text.trim());
+                : respond(text.trim(), false, false);
         return finishTurn(turn, interrupt);
     }
 
@@ -244,69 +271,228 @@ public class ConversationSession {
                 .filter(ev -> !ev.isBlank())
                 .flatMapMany(ev -> {
                     log.debug("ASR final: {}", ev.text());
-                    return respond(ev.text());
+                    return respond(ev.text(), true, true);
                 });
     }
 
-    /** 拿到"本轮用户说了什么"之后的公共回复链路: 写历史 → LLM → 分句 → TTS */
-    private Flux<AudioChunk> respond(String userText) {
+    /**
+     * 拿到"本轮用户说了什么"之后的<b>统一</b>回复链路: 写历史 → (正则点歌快路径) → function-calling
+     * 工具回合循环 → 分句 → TTS。语音与打字共用同一条逻辑, 仅出口不同:
+     * <ul>
+     *   <li>{@code speak=true}(语音): 文本经分句送 TTS, 返回可播放的音频块;</li>
+     *   <li>{@code speak=false}(打字): 只把文本流式回传(经 listener), 不合成语音, 音频流恒空。</li>
+     * </ul>
+     *
+     * @param notifyAsr 是否把 {@code userText} 当作识别结果回传前端(语音用; 打字前端已本地回显故关)
+     */
+    private Flux<AudioChunk> respond(String userText, boolean speak, boolean notifyAsr) {
         return Flux.defer(() -> {
             long startNanos = System.nanoTime();
-            AtomicBoolean started = new AtomicBoolean(false);
             AtomicBoolean firstToken = new AtomicBoolean(false);
-            // 第一句交给 TTS 的时刻, 用于算"纯 TTS 延迟"(排除前面 LLM 出首句的时间)
-            AtomicLong firstSentenceNanos = new AtomicLong();
-            StringBuilder assistant = new StringBuilder();
+            AtomicBoolean firstAudio = new AtomicBoolean(false);
+            // 终结回合时要落历史/念出的最终答复(普通文本答复); 动作型(点歌)不留历史, 不用它
+            AtomicReference<String> reply = new AtomicReference<>(null);
+            // 本回合是否触发了"动作型"工具(点歌等)。动作是副作用而非对话内容: 触发后本轮用户/助手都不进历史,
+            // 否则模型会从历史里 few-shot 出"音乐请求→直接出确认文字"而跳过工具调用(已实测复现)。
+            AtomicBoolean actionTurn = new AtomicBoolean(false);
 
-            appendHistory(Message.user(userText));
-            safeNotify(() -> listener.onAsrFinal(userText));
-
-            // 点歌意图: 短路普通对话, 改去 QQ 音乐; 语音回合用 TTS 念一句确认
-            Optional<String> song = musicIntent.parsePlay(userText);
-            if (song.isPresent()) {
-                return musicTurn(song.get(), true);
+            Message userMsg = Message.user(userText);
+            appendHistory(userMsg);
+            if (notifyAsr) {
+                safeNotify(() -> listener.onAsrFinal(userText));
             }
 
-            stateMachine.tryTransition(SessionState.THINKING);
-            // LLM 原始 token 流: 边吐边累计全文, 并把增量实时推给前端做"打字机"流式显示
-            // (与 TTS 解耦 —— 真实 TTS 的音频块不带文本, 不能靠它驱动字幕)。
-	            Flux<String> tokens = llm.chatStream(historySnapshot(), activeLlmConfig)
-	                    .doOnNext(tok -> {
-	                        if (firstToken.compareAndSet(false, true)) {
-	                            Duration ttft = elapsed(startNanos);
-	                            metrics.recordLlmFirstToken(ttft);
-	                            logLlmFirstToken("voice", activeLlmConfig, ttft);
-	                        }
-	                        assistant.append(tok);
-	                        safeNotify(() -> listener.onAssistantDelta(tok));
-	                    });
-            // 记录第一句出现的时刻(分句器切出首句即将送 TTS)
-            Flux<String> sentences = splitter.split(tokens)
-                    .doOnNext(s -> firstSentenceNanos.compareAndSet(0, System.nanoTime()));
+            Flux<AudioChunk> body;
+            // 正则点歌快路径: 明确点歌零延迟直达, 不经 LLM/工具往返(模糊表达才由模型调 play_music 技能)
+            Optional<String> song = musicIntent.parsePlay(userText);
+            if (song.isPresent()) {
+                body = musicTurn(song.get(), speak, actionTurn);
+            } else {
+                stateMachine.tryTransition(SessionState.THINKING);
+                // 工作消息列表 = 历史快照 + 本回合内临时追加的工具调用/结果(不进长期历史)
+                List<Message> working = new ArrayList<>(historySnapshot());
+                body = runLlmRound(working, 0, speak, reply, actionTurn, firstToken, firstAudio, startNanos);
+            }
 
-            return tts.synthesize(sentences, activeTtsConfig)
-                    .doOnNext(chunk -> {
-                        if (started.compareAndSet(false, true)) {
-                            Duration ttfa = elapsed(startNanos);
-                            metrics.recordTtsFirstAudio(ttfa);
-                            // 纯 TTS 延迟 = 首句送进 TTS → 首块音频返回; 拿不到首句时刻则退回总耗时
-                            long fs = firstSentenceNanos.get();
-                            Duration ttsOnly = fs == 0 ? ttfa : Duration.ofNanos(System.nanoTime() - fs);
-                            logTtsFirstAudio(activeTtsConfig, ttfa, ttsOnly);
-                            stateMachine.tryTransition(SessionState.SPEAKING);
-                        }
-                    })
+            return body
                     .doOnComplete(() -> {
-                        if (!assistant.isEmpty()) {
-                            appendHistory(Message.assistant(assistant.toString()));
-                            safeNotify(() -> listener.onAssistantText(assistant.toString()));
+                        String r = reply.get();
+                        if (r != null && !r.isBlank()) {
+                            appendHistory(Message.assistant(r));
+                            safeNotify(() -> listener.onAssistantText(r));
                         }
                     })
                     .doFinally(sig -> {
+                        // 动作型回合不留对话痕迹: 撤掉本轮先行写入的用户消息(助手侧本就没写)
+                        if (actionTurn.get()) {
+                            removeFromHistory(userMsg);
+                        }
                         metrics.recordTurnTotal(elapsed(startNanos));
-                        metrics.countTurn("voice", outcomeOf(sig));
+                        metrics.countTurn(speak ? "voice" : "text", outcomeOf(sig));
                     });
         });
+    }
+
+    /**
+     * function-calling 工具回合循环的一轮。订阅一次 LLM: 文本增量实时回传/送 TTS(打字机/句子级流水线),
+     * 同时收集本轮的工具调用。该轮流结束时:
+     * <ul>
+     *   <li>无工具调用 → 本轮文本即最终答复, 记入 {@code reply}, 结束;</li>
+     *   <li>有工具调用 → 执行技能, 据结果决定终结(动作型)或回灌后再起下一轮(数据型)。</li>
+     * </ul>
+     * 工具回合(round 1)通常无文本, 故乐观地把本轮文本接进 TTS 不会误播; 真正的口语答复出现在
+     * 工具执行后的下一轮。{@code depth} 超过 {@link #MAX_TOOL_ROUNDS} 即兜底终止。
+     */
+    private Flux<AudioChunk> runLlmRound(List<Message> working, int depth, boolean speak,
+                                         AtomicReference<String> reply, AtomicBoolean actionTurn,
+                                         AtomicBoolean firstToken, AtomicBoolean firstAudio, long startNanos) {
+        if (depth >= MAX_TOOL_ROUNDS) {
+            log.warn("工具回合超过上限 {}, 终止本轮, session={}", MAX_TOOL_ROUNDS, context.sessionId());
+            return Flux.empty();
+        }
+        List<ToolCall> calls = Collections.synchronizedList(new ArrayList<>());
+        StringBuilder roundText = new StringBuilder();
+
+        if (depth == 0 && !skills.isEmpty()) {
+            log.info("本回合下发工具 {} 个给模型, session={}", skills.toolSpecs().size(), context.sessionId());
+        }
+        // LLM 事件流: 文本增量累计成本轮文本并实时回传字幕; 工具调用收集起来留到流末处理。
+        Flux<String> tokens = llm.chat(working, activeLlmConfig, skills.toolSpecs())
+                .concatMap(ev -> {
+                    if (ev instanceof LlmEvent.TextDelta td && !td.text().isEmpty()) {
+                        if (firstToken.compareAndSet(false, true)) {
+                            Duration ttft = elapsed(startNanos);
+                            metrics.recordLlmFirstToken(ttft);
+                            logLlmFirstToken(speak ? "voice" : "text", activeLlmConfig, ttft);
+                        }
+                        roundText.append(td.text());
+                        safeNotify(() -> listener.onAssistantDelta(td.text()));
+                        return Flux.just(td.text());
+                    }
+                    if (ev instanceof LlmEvent.ToolCalls tc) {
+                        calls.addAll(tc.calls());
+                    }
+                    return Flux.empty();
+                });
+
+        Flux<AudioChunk> speech = speak
+                ? tts.synthesize(splitter.split(tokens), activeTtsConfig)
+                        .doOnNext(chunk -> {
+                            if (firstAudio.compareAndSet(false, true)) {
+                                Duration ttfa = elapsed(startNanos);
+                                metrics.recordTtsFirstAudio(ttfa);
+                                log.info("TTS 首音频耗时: {} ms, session={}", ttfa.toMillis(), context.sessionId());
+                                stateMachine.tryTransition(SessionState.SPEAKING);
+                            }
+                        })
+                : tokens.then(Mono.<AudioChunk>empty()).flux();   // 打字: 仅消费 token 做字幕, 不出音频
+
+        return speech.concatWith(Flux.defer(() -> {
+            if (calls.isEmpty()) {
+                if (roundText.length() > 0) {
+                    reply.set(roundText.toString());   // 本轮无工具 → 这轮文本即最终答复
+                }
+                return Flux.empty();
+            }
+            return executeToolsAndContinue(working, List.copyOf(calls), depth, speak,
+                    reply, actionTurn, firstToken, firstAudio, startNanos);
+        }));
+    }
+
+    /**
+     * 执行本轮模型发起的工具调用并决定走向。先把"模型发起调用"的 assistant 消息追加到工作列表(协议要求),
+     * 再逐个执行技能:
+     * <ul>
+     *   <li>命中<b>动作型</b>(终结)结果: 下发客户端动作 + 念确认语, 结束本回合(不再问模型);</li>
+     *   <li>全是<b>数据型</b>结果: 把各结果作为 tool 消息回灌, 起下一轮 LLM 让它据此作答。</li>
+     * </ul>
+     */
+    private Flux<AudioChunk> executeToolsAndContinue(List<Message> working, List<ToolCall> calls, int depth,
+                                                     boolean speak, AtomicReference<String> reply,
+                                                     AtomicBoolean actionTurn, AtomicBoolean firstToken,
+                                                     AtomicBoolean firstAudio, long startNanos) {
+        working.add(Message.assistantToolCalls(calls));
+        return Flux.fromIterable(calls)
+                .concatMap(call -> runSkill(call).map(res -> new ToolOutcome(call, res)))
+                .collectList()
+                .flatMapMany(outcomes -> {
+                    for (ToolOutcome o : outcomes) {
+                        SkillResult r = o.result();
+                        if (r.terminal()) {
+                            if (r.actionType() != null) {
+                                // 动作型: 下发动作并念确认语(经 listener 显示字幕)。标记本轮为动作回合 →
+                                // 用户/助手都不进历史(reply 不设), 杜绝模型从历史仿写确认语而跳过工具。
+                                actionTurn.set(true);
+                                dispatchAction(r.actionType(), r.actionPayload());
+                                if (r.content() != null && !r.content().isBlank()) {
+                                    safeNotify(() -> listener.onAssistantText(r.content()));
+                                }
+                            } else {
+                                // 纯答复型: 正常进历史(经 reply, 由 doOnComplete 落历史 + 字幕)
+                                reply.set(r.content());
+                            }
+                            if (speak && r.content() != null && !r.content().isBlank()) {
+                                stateMachine.tryTransition(SessionState.THINKING);
+                                return tts.synthesize(Flux.just(r.content()), activeTtsConfig)
+                                        .doOnNext(chunk -> {
+                                            if (firstAudio.compareAndSet(false, true)) {
+                                                stateMachine.tryTransition(SessionState.SPEAKING);
+                                            }
+                                        });
+                            }
+                            return Flux.<AudioChunk>empty();
+                        }
+                    }
+                    for (ToolOutcome o : outcomes) {
+                        working.add(Message.tool(o.call().id(), o.result().content()));
+                    }
+                    return runLlmRound(working, depth + 1, speak, reply, actionTurn,
+                            firstToken, firstAudio, startNanos);
+                });
+    }
+
+    /** 执行一次工具调用: 找技能 → 解析参数 → 执行; 未知工具/执行异常都兜成一条回灌结果, 不打断回合。 */
+    private Mono<SkillResult> runSkill(ToolCall call) {
+        log.info("工具调用: name={}, args={}, session={}", call.name(), call.arguments(), context.sessionId());
+        Skill skill = skills.find(call.name()).orElse(null);
+        if (skill == null) {
+            return Mono.just(SkillResult.feedback("未知工具: " + call.name()));
+        }
+        Map<String, Object> args = parseArgs(call.arguments());
+        return Mono.defer(() -> skill.execute(args))
+                .onErrorResume(e -> {
+                    log.warn("工具 {} 执行失败: {}", call.name(), e.toString());
+                    return Mono.just(SkillResult.feedback("工具执行失败: " + e.getMessage()));
+                });
+    }
+
+    /** 下发动作型技能产生的客户端动作。目前已知类型: 点歌(走与正则快路径相同的 onMusicRequest 通道)。 */
+    private void dispatchAction(String type, Map<String, Object> payload) {
+        Map<String, Object> p = payload == null ? Map.of() : payload;
+        if (PlayMusicSkill.ACTION_TYPE.equals(type)) {
+            String action = String.valueOf(p.getOrDefault("action", "play"));
+            Object q = p.get("query");
+            safeNotify(() -> listener.onMusicRequest(action, q == null ? "" : q.toString()));
+        } else {
+            log.warn("未知客户端动作类型: {}, session={}", type, context.sessionId());
+        }
+    }
+
+    private Map<String, Object> parseArgs(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of();
+        }
+        try {
+            Map<String, Object> m = JSON.readValue(json, ARGS_TYPE);
+            return m == null ? Map.of() : m;
+        } catch (Exception e) {
+            log.debug("工具参数解析失败, 当作空参: {}", json);
+            return Map.of();
+        }
+    }
+
+    /** 一次工具调用与其执行结果的配对(回合循环内部用)。 */
+    private record ToolOutcome(ToolCall call, SkillResult result) {
     }
 
 	    /** 自起点到现在的耗时 */
@@ -321,17 +507,6 @@ public class ConversationSession {
 	                ttft.toMillis(), context.sessionId(), mode, vendor, model);
 	    }
 
-	    /**
-	     * 打印 TTS 首块音频耗时。{@code total} = 本轮开始(ASR final 后)到首块音频, 含 LLM 出首句的时间;
-	     * {@code ttsOnly} = 首句送进 TTS 到首块音频返回, 即纯 TTS 合成延迟 —— 排查"TTS 慢"看这个。
-	     */
-	    private void logTtsFirstAudio(TtsConfig cfg, Duration total, Duration ttsOnly) {
-	        String vendor = cfg == null || cfg.vendor() == null ? "-" : cfg.vendor().code();
-	        String voice = cfg == null || cfg.voice() == null || cfg.voice().isBlank() ? "-" : cfg.voice();
-	        log.info("TTS 首音频耗时: 纯TTS={} ms, 含LLM出句={} ms, session={}, vendor={}, voice={}",
-	                ttsOnly.toMillis(), total.toMillis(), context.sessionId(), vendor, voice);
-	    }
-
 	    /** 把 reactor 结束信号归一成埋点用的 outcome 标签 */
     private static String outcomeOf(reactor.core.publisher.SignalType sig) {
         return switch (sig) {
@@ -343,69 +518,38 @@ public class ConversationSession {
     }
 
     /**
-     * 文字进、文字出: 写历史 → LLM 流式出文本(经 listener 实时回传前端), 不分句、不合成 TTS。
-     * 返回的音频流恒为空 —— 打字输入不产生语音回复。
-     */
-    private Flux<AudioChunk> respondTextOnly(String userText) {
-        return Flux.defer(() -> {
-            long startNanos = System.nanoTime();
-            AtomicBoolean firstToken = new AtomicBoolean(false);
-            StringBuilder assistant = new StringBuilder();
-
-            appendHistory(Message.user(userText));
-            // 不回传 onAsrFinal: 打字输入前端已本地回显, 再 echo 会重复显示;
-            // onAsrFinal 仅用于"语音识别结果"这类前端尚未看到的文本。
-
-            // 点歌意图: 短路普通对话, 改去 QQ 音乐; 文字回合不合成语音
-            Optional<String> song = musicIntent.parsePlay(userText);
-            if (song.isPresent()) {
-                return musicTurn(song.get(), false);
-            }
-
-            stateMachine.tryTransition(SessionState.THINKING);
-	            return llm.chatStream(historySnapshot(), activeLlmConfig)
-	                    .doOnNext(tok -> {
-	                        if (firstToken.compareAndSet(false, true)) {
-	                            Duration ttft = elapsed(startNanos);
-	                            metrics.recordLlmFirstToken(ttft);
-	                            logLlmFirstToken("text", activeLlmConfig, ttft);
-	                        }
-	                        assistant.append(tok);
-	                        safeNotify(() -> listener.onAssistantDelta(tok));
-	                    })
-                    .doOnComplete(() -> {
-                        if (!assistant.isEmpty()) {
-                            appendHistory(Message.assistant(assistant.toString()));
-                            safeNotify(() -> listener.onAssistantText(assistant.toString()));
-                        }
-                    })
-                    .doFinally(sig -> {
-                        metrics.recordTurnTotal(elapsed(startNanos));
-                        metrics.countTurn("text", outcomeOf(sig));
-                    })
-                    .thenMany(Flux.<AudioChunk>empty());   // 文本回合不回传任何音频块
-        });
-    }
-
-    /**
      * 点歌回合: 通知接入层让前端去 QQ 音乐播放, 并给一句确认。
      * 不走 LLM —— 点歌是确定性动作。{@code speak=true}(语音回合)时用 TTS 念确认语,
      * {@code speak=false}(文字回合)则只把动作交给前端(歌曲卡片即反馈), 不发声。
      *
-     * @param query 想听的歌(歌名/歌手)
-     * @param speak 是否合成语音确认
+     * @param query      想听的歌(歌名/歌手)
+     * @param speak      是否合成语音确认
+     * @param actionTurn 置位标记本轮为动作回合, 由调用方在收尾时撤掉本轮用户消息(动作不留对话历史)
      */
-    private Flux<AudioChunk> musicTurn(String query, boolean speak) {
-        String reply = "好的，为您播放音乐" + query;
-        appendHistory(Message.assistant(reply));
+    private Flux<AudioChunk> musicTurn(String query, boolean speak, AtomicBoolean actionTurn) {
+        // 动作回合: 不写助手历史; 调用方据 actionTurn 撤掉用户那句, 整轮不留痕(避免模型仿写确认语跳过工具)
+        actionTurn.set(true);
+        String spoken = "好的，为您播放音乐" + query;
         // 动作: 让前端打开 QQ 音乐(具体 URL 由接入层按厂商拼装, 编排层不感知)
         safeNotify(() -> listener.onMusicRequest("play", query));
         if (!speak) {
             return Flux.empty();
         }
         stateMachine.tryTransition(SessionState.THINKING);
-        return tts.synthesize(Flux.just(reply), activeTtsConfig)
+        return tts.synthesize(Flux.just(spoken), activeTtsConfig)
                 .doOnNext(chunk -> stateMachine.tryTransition(SessionState.SPEAKING));
+    }
+
+    /** 从历史里撤掉指定的那条消息(按实例匹配, 用于动作回合事后清痕)。 */
+    private void removeFromHistory(Message message) {
+        synchronized (history) {
+            for (int i = history.size() - 1; i >= 0; i--) {
+                if (history.get(i) == message) {
+                    history.remove(i);
+                    return;
+                }
+            }
+        }
     }
 
     /**

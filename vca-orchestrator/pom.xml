@@ -22,6 +22,11 @@
 			<groupId>org.slf4j</groupId>
 			<artifactId>slf4j-api</artifactId>
 		</dependency>
+		<!-- 解析 function-calling 的工具参数 JSON(版本由 Spring Boot 父 BOM 管理) -->
+		<dependency>
+			<groupId>com.fasterxml.jackson.core</groupId>
+			<artifactId>jackson-databind</artifactId>
+		</dependency>
 		<!-- 埋点门面: 仅依赖 Micrometer core(不绑定具体后端), 由宿主注入 MeterRegistry -->
 		<dependency>
 			<groupId>io.micrometer</groupId>

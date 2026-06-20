@@ -8,6 +8,10 @@ import com.vca.web.music.ItunesMusicProvider;
 import com.vca.web.music.LocalMusicProvider;
 import com.vca.web.music.LocalMusicRoute;
 import com.vca.orchestrator.metrics.TurnMetrics;
+import com.vca.orchestrator.skill.PlayMusicSkill;
+import com.vca.orchestrator.skill.Skill;
+import com.vca.orchestrator.skill.SkillRegistry;
+import com.vca.orchestrator.skill.TimeSkill;
 import com.vca.orchestrator.vad.EnergyVad;
 import com.vca.orchestrator.vad.SileroVadModel;
 import com.vca.orchestrator.vad.VoiceActivityDetector;
@@ -86,8 +90,35 @@ public class WebAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     ConversationSessionFactory conversationSessionFactory(ProviderGateway gateway, WebProperties props,
-                                                          TurnMetrics turnMetrics) {
-        return new ConversationSessionFactory(gateway, props, turnMetrics);
+                                                          TurnMetrics turnMetrics, SkillRegistry skillRegistry) {
+        return new ConversationSessionFactory(gateway, props, turnMetrics, skillRegistry);
+    }
+
+    /**
+     * function-calling 技能目录。把所有 {@link Skill} Bean 汇总成注册表交给编排层下发给模型;
+     * 新增技能只需再声明一个 Skill Bean。{@code vca.web.tools-enabled=false} 时给空注册表(退回纯文本对话)。
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    SkillRegistry skillRegistry(ObjectProvider<Skill> skills, WebProperties props) {
+        if (!props.isToolsEnabled()) {
+            return SkillRegistry.empty();
+        }
+        return new SkillRegistry(skills.orderedStream().toList());
+    }
+
+    /** 点歌技能(动作型): 模型理解到模糊点歌时调用; 明确点歌仍走编排层正则快路径。 */
+    @Bean
+    @ConditionalOnMissingBean
+    PlayMusicSkill playMusicSkill() {
+        return new PlayMusicSkill();
+    }
+
+    /** 当前时间技能(数据型): 演示"工具结果回灌模型组织口语答复"的完整往返, 零外部依赖。 */
+    @Bean
+    @ConditionalOnMissingBean
+    TimeSkill timeSkill() {
+        return new TimeSkill();
     }
 
     /**

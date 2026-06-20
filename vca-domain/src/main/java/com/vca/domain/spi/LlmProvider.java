@@ -3,7 +3,9 @@ package com.vca.domain.spi;
 import com.vca.domain.enums.Capability;
 import com.vca.domain.enums.VendorType;
 import com.vca.domain.model.LlmConfig;
+import com.vca.domain.model.LlmEvent;
 import com.vca.domain.model.Message;
+import com.vca.domain.model.ToolSpec;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
@@ -33,4 +35,18 @@ public interface LlmProvider {
      * @return 文本增量流
      */
     Flux<String> chatStream(List<Message> history, LlmConfig cfg);
+
+    /**
+     * 带工具通道的流式对话(function-calling)。在 {@link #chatStream} 的纯文本流之上, 当传入 {@code tools}
+     * 且模型决定调用工具时, 额外在流末尾给出一次 {@link LlmEvent.ToolCalls}; 否则等价于把 token 包成
+     * {@link LlmEvent.TextDelta}。
+     *
+     * <p><b>默认实现</b>不支持工具(忽略 {@code tools}, 退化为 {@link #chatStream} 的文本流), 让尚未适配的
+     * 厂商零改动可用; 支持工具的厂商覆盖此方法。{@code tools} 为空时行为应与 {@link #chatStream} 一致。
+     *
+     * @param tools 本轮可用的工具声明; 空表示不启用 function-calling
+     */
+    default Flux<LlmEvent> chat(List<Message> history, LlmConfig cfg, List<ToolSpec> tools) {
+        return chatStream(history, cfg).map(LlmEvent.TextDelta::new);
+    }
 }

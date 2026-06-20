@@ -11,6 +11,7 @@ import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.pipeline.SentenceSplitter;
 import com.vca.orchestrator.session.ConversationSession;
 import com.vca.orchestrator.session.TurnListener;
+import com.vca.orchestrator.skill.SkillRegistry;
 import com.vca.web.WebProperties;
 
 /**
@@ -23,12 +24,15 @@ public class ConversationSessionFactory {
     private final ProviderGateway gateway;
     private final WebProperties props;
     private final TurnMetrics metrics;
+    private final SkillRegistry skills;
     private final SentenceSplitter splitter = new SentenceSplitter();
 
-    public ConversationSessionFactory(ProviderGateway gateway, WebProperties props, TurnMetrics metrics) {
+    public ConversationSessionFactory(ProviderGateway gateway, WebProperties props, TurnMetrics metrics,
+                                      SkillRegistry skills) {
         this.gateway = gateway;
         this.props = props;
         this.metrics = metrics;
+        this.skills = skills == null ? SkillRegistry.empty() : skills;
     }
 
     public ConversationSession create(String sessionId, TurnListener listener) {
@@ -36,7 +40,7 @@ public class ConversationSessionFactory {
 
         ConversationSession session = new ConversationSession(
                 ctx, gateway.asr(), gateway.llm(), gateway.tts(), gateway.s2s(), splitter,
-                props.getHistoryMaxMessages(), metrics);
+                props.getHistoryMaxMessages(), metrics, skills);
         session.setTurnListener(listener);
         return session;
     }
