@@ -309,8 +309,11 @@ public class ConversationSession {
                 body = musicTurn(song.get(), speak, actionTurn);
             } else {
                 stateMachine.tryTransition(SessionState.THINKING);
-                // 工作消息列表 = 历史快照 + 本回合内临时追加的工具调用/结果(不进长期历史)
-                List<Message> working = new ArrayList<>(historySnapshot());
+                // 工作消息列表 = [当前时间(每轮新鲜注入)] + 历史快照 + 本回合临时的工具调用/结果(都不进长期历史)。
+                // 时间/日期是廉价上下文, 直接给比靠模型调工具更可靠 —— 模型据此直接答对, 无需也无延迟。
+                List<Message> working = new ArrayList<>();
+                working.add(Message.system(currentTimeContext()));
+                working.addAll(historySnapshot());
                 body = runLlmRound(working, 0, speak, reply, actionTurn, firstToken, firstAudio, startNanos);
             }
 
@@ -538,6 +541,17 @@ public class ConversationSession {
         stateMachine.tryTransition(SessionState.THINKING);
         return tts.synthesize(Flux.just(spoken), activeTtsConfig)
                 .doOnNext(chunk -> stateMachine.tryTransition(SessionState.SPEAKING));
+    }
+
+    /** 每轮新鲜生成的"当前时间"上下文(注入 LLM 但不存历史)。让时间/日期问题直接答对, 不依赖工具调用。 */
+    private static String currentTimeContext() {
+        java.time.ZonedDateTime now = java.time.ZonedDateTime.now();
+        String[] weekday = {"星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"};
+        return String.format(java.util.Locale.CHINA,
+                "【实时信息】当前日期时间：%d年%d月%d日 %s %02d:%02d。"
+                        + "涉及当前时间、几号、星期几等问题，一律以此为准直接作答，不要凭记忆推算或编造。",
+                now.getYear(), now.getMonthValue(), now.getDayOfMonth(),
+                weekday[now.getDayOfWeek().getValue() - 1], now.getHour(), now.getMinute());
     }
 
     /** 从历史里撤掉指定的那条消息(按实例匹配, 用于动作回合事后清痕)。 */
