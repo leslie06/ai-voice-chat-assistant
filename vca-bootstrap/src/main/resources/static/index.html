@@ -264,8 +264,22 @@ function addMsg(role, text){
 }
 function addSys(text){ if(empty&&empty.parentNode) empty.remove();
   const d=document.createElement('div'); d.className='sys'; d.textContent=text; chat.appendChild(d); scroll(); }
-// 点歌卡片: 渲染封面+歌名歌手+原生 <audio> 播放器, 在助手内直接播放(30 秒预览片段)
-let musicEl=null;   // 当前播放的 <audio>, 便于打断时停掉
+// 点歌卡片: 渲染封面+歌名歌手+原生 <audio> 播放器, 在助手内直接播放。
+// iOS 关键: <audio> 元素的首次 play() 必须在用户手势内触发; 点歌是语音触发的, 故
+// 用<b>一个常驻、已在手势里解锁过的</b> musicPlayer 复用播放, 而不是每首新建元素(新元素未解锁→iOS 拒播)。
+const SILENT_WAV='data:audio/wav;base64,UklGRqQCAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YYACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const musicPlayer=document.createElement('audio');
+musicPlayer.controls=true; musicPlayer.playsInline=true; musicPlayer.setAttribute('playsinline','');
+musicPlayer.preload='auto';   // 提前缓冲, 抗网络抖动导致的断续
+musicPlayer.style.cssText='width:100%;margin-top:2px;';
+let musicUnlocked=false;
+// 在用户手势内同步调用: 用静音解锁 <audio> 播放通道(iOS), 之后语音点歌即可自动播放
+function unlockMedia(){
+  if(musicUnlocked) return;
+  musicUnlocked=true;
+  try{ musicPlayer.src=SILENT_WAV; const p=musicPlayer.play();
+       if(p&&p.then) p.then(()=>{ try{musicPlayer.pause(); musicPlayer.currentTime=0;}catch(e){} }).catch(()=>{}); }catch(e){}
+}
 function addMusic(t){
   if(empty&&empty.parentNode) empty.remove();
   const m=document.createElement('div'); m.className='msg bot';
@@ -279,9 +293,9 @@ function addMusic(t){
   meta.innerHTML='<div style="font-weight:600">'+esc(t.title||t.query||'')+'</div>'+
                  '<div style="color:var(--sub);font-size:13px">'+esc(t.artist||'')+' · '+tag+'</div>';
   head.appendChild(meta);
-  const audio=document.createElement('audio'); audio.src=t.url; audio.controls=true; audio.autoplay=true;
-  audio.style.cssText='width:100%;margin-top:2px;';
-  b.append(head,audio);
+  // 复用常驻播放器: 设新源、挂到当前卡片(append 会自动从上一张卡片移走)
+  musicPlayer.src=t.url;
+  b.append(head,musicPlayer);
   // 只有在线试听片段才提示去 QQ 音乐听整首; 本地已是整首, 不需要
   if(!t.full){
     const kw=((t.title||t.query||'')+' '+(t.artist||'')).trim();
@@ -294,10 +308,9 @@ function addMusic(t){
   m.append(av,b); chat.appendChild(m); scroll();
   // 播音乐前先停掉 TTS 残留, 避免和确认语重叠太久
   stopPlayback();
-  musicEl=audio;
-  audio.play().catch(()=>{});   // 用户已与页面交互过, 一般可自动播放; 失败则用户点播放键
+  musicPlayer.play().catch(()=>{});   // 已在手势里解锁过, iOS 也能自动播; 万一失败用户点一下播放键
 }
-function stopMusic(){ if(musicEl){ try{musicEl.pause()}catch(e){} musicEl=null; } }
+function stopMusic(){ try{musicPlayer.pause()}catch(e){} }
 
 /* ---------- 流式回复状态 ---------- */
 let turnActive=false, botText='', botBubble=null;
@@ -311,7 +324,7 @@ function botFinish(text){ if(text!=null) botText=text; if(botBubble) botBubble.i
 let audioCtx=null;
 async function ensureAudio(){ if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)();
   if(audioCtx.state==='suspended') await audioCtx.resume(); D.sr=audioCtx.sampleRate; paint(); return audioCtx; }
-document.getElementById('enable').onclick=async()=>{ await ensureAudio(); D.last='已开启声音'; paint(); };
+document.getElementById('enable').onclick=async()=>{ unlockMedia(); await ensureAudio(); D.last='已开启声音'; paint(); };
 document.getElementById('tone').onclick=async()=>{ await ensureAudio();
   const o=audioCtx.createOscillator(),g=audioCtx.createGain(); o.frequency.value=440;g.gain.value=.2;
   o.connect(g);g.connect(audioCtx.destination);o.start();o.stop(audioCtx.currentTime+1); };
@@ -436,6 +449,7 @@ function announceMic(){ send({type:'mic',sampleRate:audioCtx.sampleRate}); }
 /* ---------- 按住说话 (PTT) ---------- */
 let talking=false;
 async function startTalk(){ if(hfBtn.classList.contains('on')) return;
+  unlockMedia();   // 手势内解锁 <audio>(iOS), 让随后语音点歌能自动出声
   try{ await ensureMic(); }catch(e){ addSys('⚠ 麦克风: '+e.message); return; }
   announceMic(); send({type:'ptt',value:'start'}); talking=true; streaming=true; talkBtn.classList.add('rec'); }
 function endTalk(){ if(!talking) return; talking=false; streaming=false; talkBtn.classList.remove('rec'); send({type:'ptt',value:'stop'}); }
@@ -446,6 +460,7 @@ talkBtn.addEventListener('pointercancel',endTalk);
 /* ---------- 免提 ---------- */
 hfBtn.onclick=async()=>{
   if(!hfBtn.classList.contains('on')){
+    unlockMedia();   // 手势内解锁 <audio> 播放通道(iOS), 让语音点歌能自动出声
     try{ await ensureMic(); }catch(e){ addSys('⚠ 麦克风: '+e.message); return; }
     announceMic(); send({type:'mode',value:'handsfree'}); streaming=true;
     hfBtn.classList.add('on'); talkBtn.disabled=true; addSys('— 免提已开启，直接说话即可 —');
