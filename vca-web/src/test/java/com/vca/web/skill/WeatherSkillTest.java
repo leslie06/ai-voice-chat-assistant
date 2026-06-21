@@ -25,6 +25,12 @@ class WeatherSkillTest {
         assertEquals(List.of("city"), params.get("required"));
         Object props = params.get("properties");
         assertTrue(props instanceof Map<?, ?> m && m.containsKey("city"), "properties 应含 city");
+        // 支持实况/预报二选一: type 是带 enum 的可选参数(不在 required 里)
+        Map<?, ?> propMap = (Map<?, ?>) props;
+        assertTrue(propMap.containsKey("type"), "properties 应含 type");
+        Object typeSpec = propMap.get("type");
+        assertTrue(typeSpec instanceof Map<?, ?> t
+                && List.of("current", "forecast").equals(t.get("enum")), "type 应是 current/forecast 枚举");
     }
 
     @Test
