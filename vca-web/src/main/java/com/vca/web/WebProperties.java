@@ -76,6 +76,10 @@ public class WebProperties {
      *  默认用户主目录下的 Music 文件夹。 */
     private String musicDir = System.getProperty("user.home") + "/Music";
 
+    /** 高德开放平台 Web 服务 key(查天气技能用)。留空则 get_weather 工具不注册。
+     *  申请: https://console.amap.com → 应用管理 → Key(类型选"Web服务")。 */
+    private String amapKey = "";
+
     /** 免提 VAD/断句参数(原先在前端, 现收口到后端) */
     @NestedConfigurationProperty
     private Vad vad = new Vad();
@@ -227,6 +231,14 @@ public class WebProperties {
 
     public void setMusicDir(String musicDir) {
         this.musicDir = musicDir;
+    }
+
+    public String getAmapKey() {
+        return amapKey;
+    }
+
+    public void setAmapKey(String amapKey) {
+        this.amapKey = amapKey;
     }
 
     public Vad getVad() {

@@ -11,6 +11,7 @@ import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.skill.PlayMusicSkill;
 import com.vca.orchestrator.skill.Skill;
 import com.vca.orchestrator.skill.SkillRegistry;
+import com.vca.web.skill.WeatherSkill;
 import com.vca.orchestrator.vad.EnergyVad;
 import com.vca.orchestrator.vad.SileroVadModel;
 import com.vca.orchestrator.vad.VoiceActivityDetector;
@@ -113,8 +114,24 @@ public class WebAutoConfiguration {
         return new PlayMusicSkill();
     }
 
+    /**
+     * 查天气技能(数据型): 模型据用户问的城市调用, 高德实况回灌后由模型组织口语答复。
+     * 没配 {@code vca.web.amap-key}(env {@code AMAP_API_KEY})就不注册——返回 null, Spring 跳过该 Bean,
+     * {@code ObjectProvider} 也不会收进 SkillRegistry, 避免给模型下发一个注定失败的工具。
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    WeatherSkill weatherSkill(ObjectMapper objectMapper, WebProperties props) {
+        String key = props.getAmapKey();
+        if (key == null || key.isBlank()) {
+            log.info("未配置 vca.web.amap-key, 跳过查天气工具 get_weather");
+            return null;
+        }
+        return new WeatherSkill(objectMapper, key);
+    }
+
     // 时间/日期不再做成工具: 改为每轮把当前真实时间注入 LLM 上下文(见 ConversationSession#currentTimeContext),
-    // 模型据此直接答对、零延迟, 比靠 tool_choice=auto 偶发不调工具更可靠。新增数据型工具(如天气)仍声明 Skill Bean 即可。
+    // 模型据此直接答对、零延迟, 比靠 tool_choice=auto 偶发不调工具更可靠。新增数据型工具仍声明 Skill Bean 即可。
 
     /**
      * 音乐检索: 先查本地曲库(整首播放), 没有再回退 iTunes(30 秒试听)。

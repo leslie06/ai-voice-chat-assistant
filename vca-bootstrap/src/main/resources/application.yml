@@ -56,6 +56,9 @@ vca:
     # 单会话最长存活秒数(防连着不挂烧账单); 同时在线连接上限。0=不限。
     max-session-seconds: ${VCA_MAX_SESSION_SECONDS:3600}
     max-connections: ${VCA_MAX_CONNECTIONS:8}
+    # 高德 Web 服务 key: 查天气工具(get_weather)用。留空=不注册该工具。
+    # 申请: https://console.amap.com → 应用管理 → Key(类型选"Web服务")。
+    amap-key: ${AMAP_API_KEY:}
     vad:
       # 免提开口/断句检测。use-silero=true 用 Silero(ONNX)语义级 VAD, 抗噪更好;
       # false(默认)用能量阈值法。模型加载失败会自动降级回能量法, 不影响启动。
