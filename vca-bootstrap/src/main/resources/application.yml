@@ -183,7 +183,7 @@ vca:
         # 启用: QWEN_S2S_ENABLED=true + DASHSCOPE_API_KEY=sk-...; 再把 vca.web.mode 设为 s2s。
         enabled: ${QWEN_S2S_ENABLED:true}
         api-key: ${DASHSCOPE_API_KEY:}
-        model: ${QWEN_S2S_MODEL:qwen3.5-omni-plus-realtime}
+        model: ${QWEN_S2S_MODEL:qwen3.5-omni-flash-realtime}
         voice: ${QWEN_S2S_VOICE:Tina}
 
 # ============ 长提示词集中区 ============
