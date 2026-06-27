@@ -3,6 +3,7 @@ package com.vca.store;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
 import com.vca.store.mapper.ConversationTurnMapper;
+import com.vca.store.mapper.EvaluationMapper;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.mybatis.spring.SqlSessionTemplate;
 
@@ -29,6 +30,7 @@ final class MyBatisSupport {
         try {
             SqlSessionFactory factory = factoryBean.getObject();
             factory.getConfiguration().addMapper(ConversationTurnMapper.class);
+            factory.getConfiguration().addMapper(EvaluationMapper.class);
             return factory;
         } catch (Exception e) {
             throw new IllegalStateException("构建对话存档 SqlSessionFactory 失败", e);
@@ -36,7 +38,7 @@ final class MyBatisSupport {
     }
 
     /** 由工厂取一个线程安全的 Mapper(底层 {@link SqlSessionTemplate}, 每次操作自管会话)。 */
-    static ConversationTurnMapper mapper(SqlSessionFactory factory) {
-        return new SqlSessionTemplate(factory).getMapper(ConversationTurnMapper.class);
+    static <T> T mapper(SqlSessionFactory factory, Class<T> type) {
+        return new SqlSessionTemplate(factory).getMapper(type);
     }
 }

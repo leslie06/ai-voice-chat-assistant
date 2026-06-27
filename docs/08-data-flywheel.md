@@ -65,6 +65,36 @@ vca:
 
 启用并跑几轮真实对话后：`SELECT * FROM conversation_turn ORDER BY id DESC;` 应看到逐轮记录。
 
-## 下一步（P2）
+## P2-A：零标注评测查询
 
-落库后即可做**零标注**的自动指标：延迟 p50/p95、回合失败率（`outcome=error`）、误打断率（`interrupted` 但无后续有效 `user_text`）、工具命中。WER 需 golden set（抽样 + 人工参考转写），留作有标注数据后再开。
+落库后即可算**零标注**自动指标（全部从 `conversation_turn` 算得，不需人工标注）。已实现，暴露成只读端点：
+
+```
+GET /eval/report          # 全部历史
+GET /eval/report?days=7   # 最近 7 天
+```
+
+返回 JSON（`EvaluationReport`）：
+
+| 指标 | 口径 | 信号 |
+|---|---|---|
+| `totalTurns` / `totalSessions` | 回合数 / 会话数 | 活跃度 |
+| `byMode[].errorRate` | 各链路 `outcome=error` 占比 | 回合失败率 |
+| `byMode[].interruptRate` | 各链路 `interrupted` 占比 | 打断频度（主要看 s2s-persistent） |
+| `byOutcome[]` | 按 complete/interrupted/error 计数 | 结局分布 |
+| `latency` | `total_ms` 的 p50/p95/avg（仅三段式有计时） | 延迟 SLO |
+| `emptyReplyRate` | `complete` 但助手文本为空的占比 | **疑似内容审查命中/模型沉默** |
+| `suspectedFalseBargeRate` | `interrupted` 且助手文本 <8 字的占比 | **疑似回声自打断** |
+
+**实现要点**：
+- SQL 写成 H2/MySQL 通用（`SUM(CASE WHEN…)`、`CHAR_LENGTH`，不用 MySQL 专有布尔求和），**分位数在 Java 算**（MySQL 8 无 `PERCENTILE_CONT`）——见 `ConversationEvaluator.latencyOf`（最近秩法）。
+- 端点是 `RouterFunction` Bean（同 `LocalMusicRoute`），阻塞查询走 `boundedElastic`，不占事件循环。
+- 报告只含计数/比率/延迟，**不含对话原文**；但仍属内部观测面，公网部署应同 `/actuator` 用反向代理限制访问。
+
+> 已用真实 MySQL 8 数据验证（端点返回 JSON）+ H2 单测覆盖每项指标。
+
+## 下一步（P2-B 及以后）
+
+- **WER**：需 golden set（抽样对话 + 人工参考转写），离线脚本算，留作有标注数据后再开。
+- **误打断的精确判定**：当前 `suspectedFalseBargeRate` 是"助手刚开口就被打断"的启发式代理；要精确区分真假打断需更多信号（打断后是否真有有效用户转写跟随）。
+- **周期报告 / 落库**：把 `EvaluationReport` 定时落一张汇总表或推送，形成趋势线。

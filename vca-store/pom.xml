@@ -70,6 +70,12 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-autoconfigure</artifactId>
 		</dependency>
+		<!-- 评测端点 GET /eval/report 用 WebFlux 的 RouterFunction; provided: 由宿主(vca-web 已带)提供 -->
+		<dependency>
+			<groupId>org.springframework</groupId>
+			<artifactId>spring-webflux</artifactId>
+			<scope>provided</scope>
+		</dependency>
 		<!-- MySQL 驱动(版本由 Boot BOM 管理) -->
 		<dependency>
 			<groupId>com.mysql</groupId>

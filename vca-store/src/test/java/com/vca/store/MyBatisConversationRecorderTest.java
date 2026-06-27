@@ -45,7 +45,7 @@ class MyBatisConversationRecorderTest {
 
     private static ConversationTurnMapper mapper(DataSource ds) {
         SqlSessionFactory factory = MyBatisSupport.sqlSessionFactory(ds);
-        return MyBatisSupport.mapper(factory);
+        return MyBatisSupport.mapper(factory, ConversationTurnMapper.class);
     }
 
     @Test

@@ -1,7 +1,10 @@
 package com.vca.store;
 
 import com.vca.orchestrator.recorder.ConversationRecorder;
+import com.vca.store.eval.ConversationEvaluator;
+import com.vca.store.eval.EvaluationRoute;
 import com.vca.store.mapper.ConversationTurnMapper;
+import com.vca.store.mapper.EvaluationMapper;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.apache.ibatis.session.SqlSessionFactory;
@@ -62,7 +65,7 @@ public class StoreAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     ConversationTurnMapper conversationTurnMapper(SqlSessionFactory conversationSqlSessionFactory) {
-        return MyBatisSupport.mapper(conversationSqlSessionFactory);
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, ConversationTurnMapper.class);
     }
 
     @Bean(destroyMethod = "close")
@@ -70,5 +73,27 @@ public class StoreAutoConfiguration {
     MyBatisConversationRecorder conversationRecorder(ConversationTurnMapper conversationTurnMapper,
                                                      StoreProperties props) {
         return new MyBatisConversationRecorder(conversationTurnMapper, props.getQueueCapacity());
+    }
+
+    // ---- 评测查询(P2-A): 只读, 暴露 GET /eval/report ----
+
+    @Bean
+    @ConditionalOnMissingBean
+    EvaluationMapper evaluationMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, EvaluationMapper.class);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    ConversationEvaluator conversationEvaluator(EvaluationMapper evaluationMapper) {
+        return new ConversationEvaluator(evaluationMapper);
+    }
+
+    /** 把评测报告挂到 GET /eval/report(WebFlux 自动接入所有 RouterFunction Bean)。 */
+    @Bean
+    org.springframework.web.reactive.function.server.RouterFunction<
+            org.springframework.web.reactive.function.server.ServerResponse> evaluationRoute(
+            ConversationEvaluator conversationEvaluator) {
+        return EvaluationRoute.create(conversationEvaluator);
     }
 }
