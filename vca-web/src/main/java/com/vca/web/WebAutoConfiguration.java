@@ -8,6 +8,7 @@ import com.vca.web.music.ItunesMusicProvider;
 import com.vca.web.music.LocalMusicProvider;
 import com.vca.web.music.LocalMusicRoute;
 import com.vca.orchestrator.metrics.TurnMetrics;
+import com.vca.orchestrator.recorder.ConversationRecorder;
 import com.vca.orchestrator.skill.PlayMusicSkill;
 import com.vca.orchestrator.skill.Skill;
 import com.vca.orchestrator.skill.SkillRegistry;
@@ -90,8 +91,11 @@ public class WebAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     ConversationSessionFactory conversationSessionFactory(ProviderGateway gateway, WebProperties props,
-                                                          TurnMetrics turnMetrics, SkillRegistry skillRegistry) {
-        return new ConversationSessionFactory(gateway, props, turnMetrics, skillRegistry);
+                                                          TurnMetrics turnMetrics, SkillRegistry skillRegistry,
+                                                          ObjectProvider<ConversationRecorder> recorder) {
+        // 落库模块(vca-store)在场且启用时注入其 recorder; 否则 NOOP(不落库, 对话照常)
+        return new ConversationSessionFactory(gateway, props, turnMetrics, skillRegistry,
+                recorder.getIfAvailable(() -> ConversationRecorder.NOOP));
     }
 
     /**

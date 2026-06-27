@@ -6,6 +6,11 @@ spring:
     # 直接用 mvn/IDE 启动时也读取项目根目录 .env；run.sh 仍会显式 source .env。
     # 第二个路径兼容工作目录在 vca-bootstrap 模块内的启动方式。
     import: optional:file:.env[.properties],optional:file:../.env[.properties]
+  # 对话落库(vca-store)自带连接池、手动装配 MyBatis-Plus 并自行建表, 不走 Boot 的 DataSource 自动装配。
+  # 必须排除它: 否则 classpath 上的 MySQL 驱动会触发 Boot 自动配 DataSource, 而未配 url 时启动直接失败。
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
   application:
     name: voice-chat-assistant
   profiles:
@@ -93,6 +98,16 @@ vca:
       # 外放无回声消除时, 这是断掉"自己声音→麦克风→不停重复"死循环的根治开关。
       # 代价: 不能用语音随时插嘴(想打断点屏幕 ⏹ 按钮)。戴耳机/有 AEC 时设 false 可恢复全双工语音打断。
       half-duplex: ${VCA_VAD_HALF_DUPLEX:false}
+
+  # 对话落库(数据飞轮 P1): MySQL + MyBatis-Plus。开启后每轮对话异步写入 conversation_turn 表,
+  # 供后续评测(延迟/失败率/误打断率/WER 抽样)。需先建库(CREATE DATABASE vca), 表由启动时 schema.sql 幂等建。
+  # 凭据(密码)放 .env(VCA_STORE_*), 不进 yaml; 默认 enabled=false, 用 .env 打开。
+  store:
+    enabled: ${VCA_STORE_ENABLED:false}
+    url: '${VCA_STORE_URL:jdbc:mysql://localhost:3306/vca?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}'
+    username: ${VCA_STORE_USERNAME:root}
+    password: ${VCA_STORE_PASSWORD:}
+    queue-capacity: ${VCA_STORE_QUEUE_CAPACITY:1000}
 
   gateway:
     circuit:

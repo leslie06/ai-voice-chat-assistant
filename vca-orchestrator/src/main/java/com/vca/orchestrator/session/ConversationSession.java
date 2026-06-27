@@ -21,6 +21,8 @@ import com.vca.domain.spi.S2sProvider;
 import com.vca.domain.spi.S2sSession;
 import com.vca.domain.spi.TtsProvider;
 import com.vca.orchestrator.metrics.TurnMetrics;
+import com.vca.orchestrator.recorder.ConversationRecorder;
+import com.vca.orchestrator.recorder.TurnRecord;
 import com.vca.orchestrator.pipeline.SentenceSplitter;
 import com.vca.orchestrator.skill.MusicIntent;
 import com.vca.orchestrator.skill.PlayMusicSkill;
@@ -41,7 +43,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -90,6 +94,16 @@ public class ConversationSession {
     private final AtomicReference<Sinks.One<Void>> currentInterrupt = new AtomicReference<>();
     /** 回合事件回调(字幕透传), 默认空实现 */
     private volatile TurnListener listener = TurnListener.NOOP;
+    /** 对话存档端口(数据飞轮), 默认不落库; 异步、失败不影响对话 */
+    private volatile ConversationRecorder recorder = ConversationRecorder.NOOP;
+    /** 本会话回合序号(落库用, 从 1 递增) */
+    private final AtomicInteger turnSeq = new AtomicInteger();
+    /**
+     * 最近一次识别到的用户文本。S2S(每轮/持久)路径里"用户说了什么"与"机器人回了什么"是<b>分离的异步事件</b>,
+     * 落库需要把二者配成一轮 —— 故在用户转写到达时暂存, 机器人回复收尾时取它配对。三段式 {@code respond}
+     * 直接有 userText 参数, 不读它。
+     */
+    private volatile String lastUserText;
     /**
      * 当前生效的 LLM 配置, <b>语音三段式回合与打字回合共用</b>; 默认取自上下文。
      * 前端经 {@link #selectLlm} 在线切换模型/厂商时更新它, 语音与打字同时改用新模型。
@@ -149,6 +163,28 @@ public class ConversationSession {
     /** 设置回合事件回调(用于把 ASR/回复文本透传给前端) */
     public void setTurnListener(TurnListener listener) {
         this.listener = listener == null ? TurnListener.NOOP : listener;
+    }
+
+    /** 设置对话存档端口(数据飞轮); 不设则不落库。 */
+    public void setRecorder(ConversationRecorder recorder) {
+        this.recorder = recorder == null ? ConversationRecorder.NOOP : recorder;
+    }
+
+    /**
+     * 把一轮对话交给 recorder 异步落库。<b>对热路径透明</b>: 未启用落库({@link ConversationRecorder#NOOP})
+     * 时直接返回; 提交本身只入队、不阻塞; 任何异常就地吞掉, 绝不影响正在进行的对话。
+     */
+    private void recordTurn(String userText, String assistantText, String mode, String outcome, Long totalMs) {
+        ConversationRecorder r = recorder;
+        if (r == ConversationRecorder.NOOP) {
+            return;
+        }
+        try {
+            r.recordTurn(new TurnRecord(context.sessionId(), turnSeq.incrementAndGet(),
+                    mode, userText, assistantText, Instant.now(), totalMs, outcome));
+        } catch (Exception e) {
+            log.debug("对话落库提交失败(忽略, 不影响对话): {}", e.toString());
+        }
     }
 
     /**
@@ -331,8 +367,11 @@ public class ConversationSession {
                         if (actionTurn.get()) {
                             removeFromHistory(userMsg);
                         }
-                        metrics.recordTurnTotal(elapsed(startNanos));
+                        Duration total = elapsed(startNanos);
+                        metrics.recordTurnTotal(total);
                         metrics.countTurn(speak ? "voice" : "text", outcomeOf(sig));
+                        // 落库: 动作型回合(点歌)reply 为空, 仍存用户那句作为档案
+                        recordTurn(userText, reply.get(), mode.name(), outcomeOf(sig), total.toMillis());
                     });
         });
     }
@@ -592,6 +631,7 @@ public class ConversationSession {
                     if (!assistant.isEmpty()) {
                         appendHistory(Message.assistant(assistant.toString()));
                         safeNotify(() -> listener.onAssistantText(assistant.toString()));
+                        recordTurn(lastUserText, assistant.toString(), "s2s", "complete", null);
                     }
                 });
     }
@@ -603,6 +643,7 @@ public class ConversationSession {
             return;
         }
         if (chunk.textRole() == AudioChunk.TextRole.USER) {
+            lastUserText = text;   // 暂存, 待本轮机器人回复收尾时配对落库
             appendHistory(Message.user(text));
             safeNotify(() -> listener.onAsrFinal(text));
         } else {
@@ -650,6 +691,7 @@ public class ConversationSession {
     private void onS2sLiveEvent(S2sEvent ev, LiveResponse resp, S2sSession session,
                                reactor.core.publisher.SynchronousSink<AudioChunk> sink) {
         if (ev instanceof S2sEvent.UserTranscript u) {
+            lastUserText = u.text();   // 暂存, 待本轮回复收尾(ResponseDone/被打断)时配对落库
             appendHistory(Message.user(u.text()));
             safeNotify(() -> listener.onAsrFinal(u.text()));
         } else if (ev instanceof S2sEvent.AssistantText t) {
@@ -667,13 +709,13 @@ public class ConversationSession {
             handleS2sFunctionCall(fc, session);
         } else if (ev instanceof S2sEvent.UserSpeechStarted) {
             // 全双工打断: 落已说出的部分、回到聆听, 并通知接入层冲掉前端播放缓冲(止住已下发的音频)
-            flushAssistant(resp);
+            flushAssistant(resp, "interrupted");
             stateMachine.tryTransition(SessionState.INTERRUPTED);
             stateMachine.tryTransition(SessionState.LISTENING);
             safeNotify(listener::onUserSpeechStarted);
         } else if (ev instanceof S2sEvent.ResponseDone) {
             // 本次回复正常结束(会话不关): 落历史, 回到聆听等下一轮
-            flushAssistant(resp);
+            flushAssistant(resp, "complete");
             stateMachine.tryTransition(SessionState.LISTENING);
         }
     }
@@ -707,11 +749,13 @@ public class ConversationSession {
     }
 
     /** 把当前累计的机器人回复落历史并通知 listener, 然后复位本次回复态; 空则只复位。 */
-    private void flushAssistant(LiveResponse resp) {
+    private void flushAssistant(LiveResponse resp, String outcome) {
         if (!resp.assistant.isEmpty()) {
             String full = resp.assistant.toString();
             appendHistory(Message.assistant(full));
             safeNotify(() -> listener.onAssistantText(full));
+            // 持久 S2S 每次回复结束/被打断算一轮; 用户那句来自之前的 UserTranscript 事件(lastUserText)
+            recordTurn(lastUserText, full, "s2s-persistent", outcome, null);
         }
         resp.assistant.setLength(0);
         resp.thinking = false;

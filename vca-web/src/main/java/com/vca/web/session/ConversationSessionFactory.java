@@ -9,6 +9,7 @@ import com.vca.domain.model.TtsConfig;
 import com.vca.gateway.ProviderGateway;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.pipeline.SentenceSplitter;
+import com.vca.orchestrator.recorder.ConversationRecorder;
 import com.vca.orchestrator.session.ConversationSession;
 import com.vca.orchestrator.session.TurnListener;
 import com.vca.orchestrator.skill.SkillRegistry;
@@ -25,14 +26,22 @@ public class ConversationSessionFactory {
     private final WebProperties props;
     private final TurnMetrics metrics;
     private final SkillRegistry skills;
+    /** 对话存档端口(数据飞轮); 未启用落库时为 NOOP, 编排会话照常工作 */
+    private final ConversationRecorder recorder;
     private final SentenceSplitter splitter = new SentenceSplitter();
 
     public ConversationSessionFactory(ProviderGateway gateway, WebProperties props, TurnMetrics metrics,
                                       SkillRegistry skills) {
+        this(gateway, props, metrics, skills, ConversationRecorder.NOOP);
+    }
+
+    public ConversationSessionFactory(ProviderGateway gateway, WebProperties props, TurnMetrics metrics,
+                                      SkillRegistry skills, ConversationRecorder recorder) {
         this.gateway = gateway;
         this.props = props;
         this.metrics = metrics;
         this.skills = skills == null ? SkillRegistry.empty() : skills;
+        this.recorder = recorder == null ? ConversationRecorder.NOOP : recorder;
     }
 
     public ConversationSession create(String sessionId, TurnListener listener) {
@@ -42,6 +51,7 @@ public class ConversationSessionFactory {
                 ctx, gateway.asr(), gateway.llm(), gateway.tts(), gateway.s2s(), splitter,
                 props.getHistoryMaxMessages(), metrics, skills);
         session.setTurnListener(listener);
+        session.setRecorder(recorder);
         return session;
     }
 

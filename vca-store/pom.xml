@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+		<groupId>com.vca</groupId>
+		<artifactId>voice-chat-assistant</artifactId>
+		<version>0.0.1-SNAPSHOT</version>
+	</parent>
+
+	<artifactId>vca-store</artifactId>
+	<name>vca-store</name>
+	<description>对话存档落库(MySQL + MyBatis-Plus): 实现 orchestrator 的 ConversationRecorder 端口,
+		异步写库形成数据飞轮第一环。默认关(vca.store.enabled=false), 开启时自带连接池,
+		手动装配 SqlSessionFactory, 不依赖也不干扰宿主的 DataSource 自动装配。</description>
+
+	<properties>
+		<!-- MyBatis-Plus 不在 Spring Boot BOM 内, 版本显式声明 -->
+		<mybatis-plus.version>3.5.14</mybatis-plus.version>
+		<!-- 强制 Spring 7(Boot 4)兼容的 mybatis-spring/mybatis: MyBatis-Plus 3.5.14 自带的
+		     mybatis-spring 2.1.2 仅适配 Spring 5, 必须覆盖成 4.0.0(其要求 mybatis 3.5.19) -->
+		<mybatis-spring.version>4.0.0</mybatis-spring.version>
+		<mybatis.version>3.5.19</mybatis.version>
+	</properties>
+
+	<dependencies>
+		<!-- 实现 orchestrator 的 ConversationRecorder 端口 -->
+		<dependency>
+			<groupId>com.vca</groupId>
+			<artifactId>vca-orchestrator</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+		</dependency>
+
+		<!-- MyBatis-Plus 的 Spring 集成(含 MybatisSqlSessionFactoryBean / BaseMapper),
+		     不用 spring-boot3-starter: 其 autoconfigure 面向 Boot 3, 在 Boot 4 上有兼容风险,
+		     本模块手动装配 SqlSessionFactory 更可控。 -->
+		<dependency>
+			<groupId>com.baomidou</groupId>
+			<artifactId>mybatis-plus-spring</artifactId>
+			<version>${mybatis-plus.version}</version>
+		</dependency>
+		<!-- 覆盖成 Spring 7 兼容版(直接声明 → Maven nearest-wins 压过 MyBatis-Plus 传递来的 2.1.2) -->
+		<dependency>
+			<groupId>org.mybatis</groupId>
+			<artifactId>mybatis-spring</artifactId>
+			<version>${mybatis-spring.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.mybatis</groupId>
+			<artifactId>mybatis</artifactId>
+			<version>${mybatis.version}</version>
+		</dependency>
+
+		<!-- 自建连接池(不走 Boot DataSource 自动装配) -->
+		<dependency>
+			<groupId>com.zaxxer</groupId>
+			<artifactId>HikariCP</artifactId>
+		</dependency>
+		<!-- 建表用 ResourceDatabasePopulator(spring-jdbc 的 datasource.init), 显式声明确保在编译路径 -->
+		<dependency>
+			<groupId>org.springframework</groupId>
+			<artifactId>spring-jdbc</artifactId>
+		</dependency>
+		<!-- Spring Boot 条件装配(@ConditionalOnProperty 等) -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-autoconfigure</artifactId>
+		</dependency>
+		<!-- MySQL 驱动(版本由 Boot BOM 管理) -->
+		<dependency>
+			<groupId>com.mysql</groupId>
+			<artifactId>mysql-connector-j</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.assertj</groupId>
+			<artifactId>assertj-core</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- 单测用 H2(MySQL 兼容模式)替身, 免起真实 MySQL -->
+		<dependency>
+			<groupId>com.h2database</groupId>
+			<artifactId>h2</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+</project>

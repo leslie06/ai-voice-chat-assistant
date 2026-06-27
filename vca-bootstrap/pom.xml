@@ -36,6 +36,11 @@
 			<groupId>com.vca</groupId>
 			<artifactId>vca-provider-s2s-qwen</artifactId>
 		</dependency>
+		<!-- 对话落库(数据飞轮); 默认关(vca.store.enabled=false), 开启后自带连接池 -->
+		<dependency>
+			<groupId>com.vca</groupId>
+			<artifactId>vca-store</artifactId>
+		</dependency>
 		<!-- 可观测性: 健康检查/指标端点 + Prometheus 抓取格式 -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
