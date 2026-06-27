@@ -195,9 +195,20 @@ public class QwenOmniSession implements S2sSession {
             log.info("Qwen-Omni 持久会话事件(首次): {}", type);
         }
         switch (type) {
-            case "error" -> sink.error(ProviderException.retryable(VendorType.QWEN, Capability.S2S,
-                    "Qwen-Omni 服务端错误: "
-                            + (event.has("error") ? event.get("error").toString() : event.toString()), null));
+            case "error" -> {
+                String detail = event.has("error") ? event.get("error").toString() : event.toString();
+                // 内容安全拦截(data_inspection_failed)是<b>单次回复级、可恢复</b>错误: 服务端把这一次生成判成
+                // 疑似不当内容, 但长连仍健康。若按致命错误 sink.error() 处理会拆掉整条通话(用户体验=突然断线),
+                // 故仅取消当前回复并 ResponseDone 收尾, 保留会话让对话继续。
+                if (isContentInspection(event)) {
+                    log.warn("Qwen-Omni 内容安全拦截, 跳过本次回复(会话保留): {}", detail);
+                    cancelResponse();
+                    sink.next(new S2sEvent.ResponseDone());
+                } else {
+                    sink.error(ProviderException.retryable(VendorType.QWEN, Capability.S2S,
+                            "Qwen-Omni 服务端错误: " + detail, null));
+                }
+            }
             case OmniRealtimeConstants.PROTOCOL_RESPONSE_TYPE_SESSION_FINISHED -> sink.complete();
             // 服务端 VAD 判定用户开口: 全双工打断 —— 先截断机器人当前回复, 再上报让接入层冲掉前端播放缓冲
             case "input_audio_buffer.speech_started" -> {
@@ -211,6 +222,18 @@ public class QwenOmniSession implements S2sSession {
                 }
             }
         }
+    }
+
+    /**
+     * 是否为内容安全审查触发的<b>可恢复</b>错误(输入或输出命中 DashScope 内容审查)。这类错误 code 为
+     * {@code data_inspection_failed}, 只该跳过当前回复、不该终结整条持久会话。包级可见以便单测。
+     */
+    static boolean isContentInspection(JsonObject event) {
+        if (event == null || !event.has("error") || !event.get("error").isJsonObject()) {
+            return false;
+        }
+        String code = QwenOmniS2sProvider.optString(event.getAsJsonObject("error"), "code");
+        return "data_inspection_failed".equals(code);
     }
 
     @Override
