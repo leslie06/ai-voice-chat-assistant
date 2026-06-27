@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vca.domain.enums.VendorType;
 import com.vca.domain.model.AudioChunk;
 import com.vca.domain.model.AudioFrame;
+import com.vca.domain.model.Message;
 import com.vca.domain.model.MusicTrack;
 import com.vca.domain.model.SessionContext;
 import com.vca.domain.spi.MusicProvider;
@@ -30,7 +31,9 @@ import reactor.core.scheduler.Schedulers;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -326,8 +329,38 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                 case "voice" -> conversation.selectVoice(parseVendor(str(msg.get("vendor"))), str(msg.get("value")));
                 case "engine" -> onEngine(str(msg.get("value")));
                 case "barge_in" -> manualBarge();
+                case "load_history" -> onLoadHistory(msg.get("messages"));
                 default -> log.debug("未知控制消息: {}", json);
             }
+        }
+
+        /**
+         * 切换/打开某个会话(多会话/类 ChatGPT): 用前端送来的该会话历史回灌上下文(保留 system 提示),
+         * 之后回合据此续聊。{@code messages} 形如 {@code [{role:"user"|"bot", text:"…"}]}。
+         * 持久 S2S 需关掉当前长连, 下一句开免提时按新上下文重开; 三段式无 live 时 stopLive 为空操作。
+         */
+        private void onLoadHistory(Object raw) {
+            List<Message> history = new ArrayList<>();
+            if (raw instanceof List<?> list) {
+                for (Object o : list) {
+                    if (!(o instanceof Map<?, ?> m)) {
+                        continue;
+                    }
+                    String role = str(m.get("role"));
+                    String text = str(m.get("text"));
+                    if (text == null || text.isBlank()) {
+                        continue;
+                    }
+                    if ("user".equals(role)) {
+                        history.add(Message.user(text));
+                    } else if ("bot".equals(role) || "assistant".equals(role)) {
+                        history.add(Message.assistant(text));
+                    }
+                }
+            }
+            conversation.loadHistory(history);
+            stopLive();
+            log.debug("切换会话: 回灌历史 {} 条", history.size());
         }
 
         private void onMode(String value) {

@@ -811,6 +811,28 @@ public class ConversationSession {
         }
     }
 
+    /**
+     * 用一段外部历史重置会话上下文: <b>保留 system 提示</b>, 清掉旧的 user/assistant, 再按序注入给定历史。
+     * 供接入层在"切换会话"(多会话/类 ChatGPT)时回灌该会话的上文 —— 之后的回合据此续聊。
+     * 仅接收 user/assistant 文本消息; 持久 S2S 会在下次开连接(openS2sLive)时用上这段历史。
+     */
+    public void loadHistory(List<Message> messages) {
+        synchronized (history) {
+            history.removeIf(m -> m.role() != Message.Role.SYSTEM);
+            if (messages != null) {
+                for (Message m : messages) {
+                    if (m == null || m.content() == null || m.content().isBlank()) {
+                        continue;
+                    }
+                    if (m.role() == Message.Role.USER || m.role() == Message.Role.ASSISTANT) {
+                        history.add(m);
+                    }
+                }
+            }
+            trimHistory();
+        }
+    }
+
     // ---- 内部: 历史维护(synchronized 保护) ----
 
     private void seedSystemPrompt() {
