@@ -22,6 +22,8 @@ import com.vca.domain.spi.S2sSession;
 import com.vca.domain.spi.TtsProvider;
 import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
+import com.vca.orchestrator.search.WebSearchHeuristic;
+import com.vca.orchestrator.search.WebSearchProvider;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.recorder.ConversationRecorder;
 import com.vca.orchestrator.recorder.TurnRecord;
@@ -103,6 +105,11 @@ public class ConversationSession {
     private volatile MemoryStore memory = MemoryStore.NOOP;
     /** 知识库检索端口(RAG), 默认空; 每回合据用户问题自动召回相关资料注入上下文(不依赖模型自调工具) */
     private volatile KnowledgeStore knowledge = KnowledgeStore.NOOP;
+    /** 联网搜索端口, 默认空; 据用户问题时效性自动联网检索并注入(不依赖模型自调工具)。不分用户。 */
+    private volatile WebSearchProvider webSearch = WebSearchProvider.NOOP;
+    /** 自动注入式联网搜索开关与每次取的条数(由接入层配置注入)。 */
+    private volatile boolean webSearchAuto = true;
+    private volatile int webSearchCount = 5;
     /** 当前登录用户 id(账号系统启用且已登录时非空); 用于长期记忆/知识库按用户隔离 */
     private volatile String userId;
     /** 本会话回合序号(落库用, 从 1 递增) */
@@ -183,6 +190,55 @@ public class ConversationSession {
     /** 设置知识库检索端口(RAG); 未设则不检索。userId 由 {@link #setMemory} 一并设置(同一登录用户)。 */
     public void setKnowledge(KnowledgeStore knowledge) {
         this.knowledge = knowledge == null ? KnowledgeStore.NOOP : knowledge;
+    }
+
+    /** 设置联网搜索端口及自动注入参数; 未设则不联网。联网信息非个人数据, 不分用户。 */
+    public void setWebSearch(WebSearchProvider webSearch, boolean auto, int count) {
+        this.webSearch = webSearch == null ? WebSearchProvider.NOOP : webSearch;
+        this.webSearchAuto = auto;
+        this.webSearchCount = count > 0 ? count : 5;
+    }
+
+    /**
+     * 据当前问题的时效性自动联网检索, 命中则拼成一条 system 注入本回合(否则返回 null)。
+     * 自动注入式: 不依赖模型自调 web_search 工具, 凡命中时效启发式就直接搜并喂结果; 普通闲聊不触发, 不产生调用。
+     */
+    private String webSearchContext(String query) {
+        if (!webSearchAuto || webSearch == WebSearchProvider.NOOP
+                || !WebSearchHeuristic.isTimeSensitive(query)) {
+            return null;
+        }
+        List<WebSearchProvider.Result> hits;
+        try {
+            hits = webSearch.search(query, webSearchCount);
+        } catch (Exception e) {
+            log.debug("联网搜索失败(忽略): {}", e.toString());
+            return null;
+        }
+        if (hits == null || hits.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder(
+                "以下是刚刚联网检索到的实时信息, 回答时<b>以此为准</b>(可注明来源/时间, 不要编造):");
+        for (WebSearchProvider.Result r : hits) {
+            if (r == null) {
+                continue;
+            }
+            sb.append("\n- ");
+            if (r.title() != null && !r.title().isBlank()) {
+                sb.append(r.title().strip()).append(": ");
+            }
+            if (r.snippet() != null) {
+                sb.append(r.snippet().strip());
+            }
+            if (r.date() != null && !r.date().isBlank()) {
+                sb.append(" (").append(r.date().strip()).append(")");
+            }
+            if (r.url() != null && !r.url().isBlank()) {
+                sb.append(" 来源: ").append(r.url().strip());
+            }
+        }
+        return sb.toString();
     }
 
     /**
@@ -439,6 +495,10 @@ public class ConversationSession {
                 String kb = knowledgeContext(userText);   // RAG: 自动检索知识库并注入(不依赖模型自调工具)
                 if (kb != null) {
                     working.add(Message.system(kb));
+                }
+                String web = webSearchContext(userText);   // 联网: 时效性问题自动检索并注入
+                if (web != null) {
+                    working.add(Message.system(web));
                 }
                 working.addAll(historySnapshot());
                 body = runLlmRound(working, 0, speak, reply, actionTurn, firstToken, firstAudio, startNanos);

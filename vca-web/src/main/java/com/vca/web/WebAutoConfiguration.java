@@ -11,12 +11,15 @@ import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.recorder.ConversationRecorder;
+import com.vca.orchestrator.search.WebSearchProvider;
 import com.vca.orchestrator.skill.PlayMusicSkill;
 import com.vca.orchestrator.skill.RememberSkill;
 import com.vca.orchestrator.skill.SearchKnowledgeSkill;
 import com.vca.orchestrator.skill.Skill;
 import com.vca.orchestrator.skill.SkillRegistry;
+import com.vca.web.search.BochaWebSearchProvider;
 import com.vca.web.skill.WeatherSkill;
+import com.vca.web.skill.WebSearchSkill;
 import com.vca.orchestrator.vad.EnergyVad;
 import com.vca.orchestrator.vad.SileroVadModel;
 import com.vca.orchestrator.vad.VoiceActivityDetector;
@@ -98,12 +101,14 @@ public class WebAutoConfiguration {
                                                           TurnMetrics turnMetrics, SkillRegistry skillRegistry,
                                                           ObjectProvider<ConversationRecorder> recorder,
                                                           ObjectProvider<MemoryStore> memory,
-                                                          ObjectProvider<KnowledgeStore> knowledge) {
-        // 落库模块(vca-store)在场且启用时注入其 recorder / 长期记忆 / 知识库; 否则 NOOP(对话照常)
+                                                          ObjectProvider<KnowledgeStore> knowledge,
+                                                          ObjectProvider<WebSearchProvider> webSearch) {
+        // 落库模块(vca-store)在场且启用时注入其 recorder / 长期记忆 / 知识库; 联网搜索配了 key 才注入; 否则 NOOP
         return new ConversationSessionFactory(gateway, props, turnMetrics, skillRegistry,
                 recorder.getIfAvailable(() -> ConversationRecorder.NOOP),
                 memory.getIfAvailable(() -> MemoryStore.NOOP),
-                knowledge.getIfAvailable(() -> KnowledgeStore.NOOP));
+                knowledge.getIfAvailable(() -> KnowledgeStore.NOOP),
+                webSearch.getIfAvailable(() -> WebSearchProvider.NOOP));
     }
 
     /**
@@ -171,6 +176,33 @@ public class WebAutoConfiguration {
             return null;
         }
         return new WeatherSkill(objectMapper, key);
+    }
+
+    /**
+     * 联网搜索 provider(博查 Bocha)。配了 {@code vca.web.bocha-key}(env {@code BOCHA_API_KEY})才建,
+     * 否则返回 null —— web_search 工具不注册、编排自动注入降级为空, 联网能力静默关闭。
+     */
+    @Bean
+    @ConditionalOnMissingBean(WebSearchProvider.class)
+    WebSearchProvider webSearchProvider(ObjectMapper objectMapper, WebProperties props) {
+        String key = props.getBochaKey();
+        if (key == null || key.isBlank()) {
+            log.info("未配置 vca.web.bocha-key, 联网搜索关闭(web_search 工具与自动注入均不启用)");
+            return null;
+        }
+        log.info("联网搜索已启用(博查 Bocha): auto={}, count={}", props.isWebSearchAuto(), props.getWebSearchCount());
+        return new BochaWebSearchProvider(objectMapper, key, props.getWebSearchFreshness());
+    }
+
+    /** 联网搜索技能(数据型): 模型判断需要最新/实时信息时调用。仅当 provider 在场(配了 key)时注册。 */
+    @Bean
+    @ConditionalOnMissingBean
+    WebSearchSkill webSearchSkill(ObjectProvider<WebSearchProvider> webSearch, WebProperties props) {
+        WebSearchProvider provider = webSearch.getIfAvailable();
+        if (provider == null) {
+            return null;
+        }
+        return new WebSearchSkill(provider, props.getWebSearchCount());
     }
 
     // 时间/日期不再做成工具: 改为每轮把当前真实时间注入 LLM 上下文(见 ConversationSession#currentTimeContext),

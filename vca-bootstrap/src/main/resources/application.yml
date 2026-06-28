@@ -64,6 +64,12 @@ vca:
     # 高德 Web 服务 key: 查天气工具(get_weather)用。留空=不注册该工具。
     # 申请: https://console.amap.com → 应用管理 → Key(类型选"Web服务")。
     amap-key: ${AMAP_API_KEY:}
+    # 博查 Bocha 联网搜索 key: web_search 工具 + 时效问题自动注入用。留空=联网搜索关闭(仅 Qwen 内置 enable_search 生效)。
+    # 申请: https://open.bochaai.com 。web-search-auto=false 可只保留工具、关掉自动注入。
+    bocha-key: ${BOCHA_API_KEY:}
+    web-search-auto: ${VCA_WEB_SEARCH_AUTO:true}
+    web-search-count: ${VCA_WEB_SEARCH_COUNT:5}
+    web-search-freshness: ${VCA_WEB_SEARCH_FRESHNESS:noLimit}
     vad:
       # 免提开口/断句检测。use-silero=true 用 Silero(ONNX)语义级 VAD, 抗噪更好;
       # false(默认)用能量阈值法。模型加载失败会自动降级回能量法, 不影响启动。
@@ -187,8 +193,11 @@ vca:
             # 关闭思考模式: Qwen3 默认先生成一大段 reasoning 再吐正式回答, 导致"正式内容首 token"
             # 要等思考完(实测 6s+)。语音场景要的是秒回, 故关掉思考。DashScope 兼容接口的开关是
             # 顶层参数 enable_thinking=false, 经 provider 的 extra-body 原样并入请求体。
+            # enable_search=true: 打开 Qwen 内置联网搜索(由模型自行决定是否检索), 作为联网能力的即时兜底,
+            # 与专用 web_search 工具/自动注入(vca.web.bocha-key)互补。可设 QWEN_ENABLE_SEARCH=false 关掉。
             extra-body:
               enable_thinking: false
+              enable_search: ${QWEN_ENABLE_SEARCH:true}
           kimi:
             # Kimi/Moonshot 私有网关。启用时设置 KIMI_ENABLED=true 和 KIMI_API_KEY/MOONSHOT_API_KEY。
             # 示例请求中的真实 key 不写入仓库, 通过环境变量注入。

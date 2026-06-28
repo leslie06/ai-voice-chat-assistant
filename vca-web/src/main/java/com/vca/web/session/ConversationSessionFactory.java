@@ -9,6 +9,7 @@ import com.vca.domain.model.TtsConfig;
 import com.vca.gateway.ProviderGateway;
 import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
+import com.vca.orchestrator.search.WebSearchProvider;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.pipeline.SentenceSplitter;
 import com.vca.orchestrator.recorder.ConversationRecorder;
@@ -34,16 +35,19 @@ public class ConversationSessionFactory {
     private final MemoryStore memory;
     /** 知识库检索端口(RAG, 自动注入); 未启用时为 NOOP */
     private final KnowledgeStore knowledge;
+    /** 联网搜索端口(自动注入 + 工具); 未配 key 时为 NOOP */
+    private final WebSearchProvider webSearch;
     private final SentenceSplitter splitter = new SentenceSplitter();
 
     public ConversationSessionFactory(ProviderGateway gateway, WebProperties props, TurnMetrics metrics,
                                       SkillRegistry skills) {
-        this(gateway, props, metrics, skills, ConversationRecorder.NOOP, MemoryStore.NOOP, KnowledgeStore.NOOP);
+        this(gateway, props, metrics, skills, ConversationRecorder.NOOP, MemoryStore.NOOP, KnowledgeStore.NOOP,
+                WebSearchProvider.NOOP);
     }
 
     public ConversationSessionFactory(ProviderGateway gateway, WebProperties props, TurnMetrics metrics,
                                       SkillRegistry skills, ConversationRecorder recorder, MemoryStore memory,
-                                      KnowledgeStore knowledge) {
+                                      KnowledgeStore knowledge, WebSearchProvider webSearch) {
         this.gateway = gateway;
         this.props = props;
         this.metrics = metrics;
@@ -51,6 +55,7 @@ public class ConversationSessionFactory {
         this.recorder = recorder == null ? ConversationRecorder.NOOP : recorder;
         this.memory = memory == null ? MemoryStore.NOOP : memory;
         this.knowledge = knowledge == null ? KnowledgeStore.NOOP : knowledge;
+        this.webSearch = webSearch == null ? WebSearchProvider.NOOP : webSearch;
     }
 
     public ConversationSession create(String sessionId, TurnListener listener) {
@@ -69,6 +74,8 @@ public class ConversationSessionFactory {
                 props.getHistoryMaxMessages(), metrics, skills);
         session.setTurnListener(listener);
         session.setRecorder(recorder);
+        // 联网搜索不分用户(实时信息非个人数据), 无条件启用
+        session.setWebSearch(webSearch, props.isWebSearchAuto(), props.getWebSearchCount());
         if (userId != null && !userId.isBlank()) {
             session.setMemory(memory, userId);
             session.setKnowledge(knowledge);   // RAG 自动注入按同一登录用户隔离

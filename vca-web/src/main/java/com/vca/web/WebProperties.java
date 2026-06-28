@@ -80,6 +80,15 @@ public class WebProperties {
      *  申请: https://console.amap.com → 应用管理 → Key(类型选"Web服务")。 */
     private String amapKey = "";
 
+    /** 博查 Bocha 联网搜索 key。留空则 web_search 工具不注册、自动注入关闭。申请: https://open.bochaai.com 。 */
+    private String bochaKey = "";
+    /** 自动注入式联网搜索: 命中时效启发式就直接搜并注入(不靠模型调工具)。关掉则只保留 web_search 工具。 */
+    private boolean webSearchAuto = true;
+    /** 每次联网搜索取回的结果条数。 */
+    private int webSearchCount = 5;
+    /** 博查时效过滤: noLimit / oneDay / oneWeek / oneMonth / oneYear。 */
+    private String webSearchFreshness = "noLimit";
+
     /** 免提 VAD/断句参数(原先在前端, 现收口到后端) */
     @NestedConfigurationProperty
     private Vad vad = new Vad();
@@ -239,6 +248,38 @@ public class WebProperties {
 
     public void setAmapKey(String amapKey) {
         this.amapKey = amapKey;
+    }
+
+    public String getBochaKey() {
+        return bochaKey;
+    }
+
+    public void setBochaKey(String bochaKey) {
+        this.bochaKey = bochaKey;
+    }
+
+    public boolean isWebSearchAuto() {
+        return webSearchAuto;
+    }
+
+    public void setWebSearchAuto(boolean webSearchAuto) {
+        this.webSearchAuto = webSearchAuto;
+    }
+
+    public int getWebSearchCount() {
+        return webSearchCount;
+    }
+
+    public void setWebSearchCount(int webSearchCount) {
+        this.webSearchCount = webSearchCount;
+    }
+
+    public String getWebSearchFreshness() {
+        return webSearchFreshness;
+    }
+
+    public void setWebSearchFreshness(String webSearchFreshness) {
+        this.webSearchFreshness = webSearchFreshness;
     }
 
     public Vad getVad() {
