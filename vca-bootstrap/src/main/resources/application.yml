@@ -110,6 +110,20 @@ vca:
     queue-capacity: ${VCA_STORE_QUEUE_CAPACITY:1000}
     # 登录令牌签名密钥: 生产务必经 VCA_STORE_TOKEN_SECRET 设一个随机串; 改了会让已登录用户全部失效。
     token-secret: ${VCA_STORE_TOKEN_SECRET:vca-default-secret-change-me}
+    # 找回/修改密码邮件。dev-echo=true 时把重置令牌回显给前端(便于无邮件时联调); 配好 SMTP 后建议设 false。
+    base-url: ${VCA_STORE_BASE_URL:}
+    mail-dev-echo: ${VCA_STORE_MAIL_DEV_ECHO:true}
+    # SMTP: 配了 mail-host 才真实发邮件。密码是邮箱的 SMTP 授权码(非登录密码), 放 .env。
+    mail-host: ${VCA_STORE_MAIL_HOST:}
+    mail-port: ${VCA_STORE_MAIL_PORT:465}
+    mail-username: ${VCA_STORE_MAIL_USERNAME:}
+    mail-password: ${VCA_STORE_MAIL_PASSWORD:}
+    mail-from: ${VCA_STORE_MAIL_FROM:}
+    mail-ssl: ${VCA_STORE_MAIL_SSL:true}
+    mail-starttls: ${VCA_STORE_MAIL_STARTTLS:false}
+    # 可选: JVM 直连 SMTP 被网络重置时, 经 HTTP 代理 CONNECT 隧道发信(如本地 Clash 127.0.0.1:7890)
+    mail-proxy-host: ${VCA_STORE_MAIL_PROXY_HOST:}
+    mail-proxy-port: ${VCA_STORE_MAIL_PROXY_PORT:0}
 
   gateway:
     circuit:

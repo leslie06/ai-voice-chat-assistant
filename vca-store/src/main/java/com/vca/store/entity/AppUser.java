@@ -13,6 +13,7 @@ public class AppUser {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String username;
+    private String email;
     private String passSalt;
     private String passHash;
     private LocalDateTime createdAt;
@@ -31,6 +32,14 @@ public class AppUser {
 
     public void setUsername(String username) {
         this.username = username;
+    }
+
+    public String getEmail() {
+        return email;
+    }
+
+    public void setEmail(String email) {
+        this.email = email;
     }
 
     public String getPassSalt() {

@@ -15,15 +15,17 @@ CREATE TABLE IF NOT EXISTS conversation_turn (
     KEY idx_turn_created (created_at)                -- 按时间做评测切片
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '对话存档(数据飞轮)';
 
--- 用户账号: 密码用 PBKDF2 加盐哈希(不存明文)。
+-- 用户账号: 密码用 PBKDF2 加盐哈希(不存明文); 邮箱用于找回/修改密码。
 CREATE TABLE IF NOT EXISTS app_user (
     id         BIGINT       NOT NULL AUTO_INCREMENT,
     username   VARCHAR(64)  NOT NULL,
+    email      VARCHAR(128) NOT NULL,
     pass_salt  VARCHAR(64)  NOT NULL,
     pass_hash  VARCHAR(128) NOT NULL,
     created_at DATETIME     NOT NULL,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_user_name (username)
+    UNIQUE KEY uk_user_name (username),
+    UNIQUE KEY uk_user_email (email)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户账号';
 
 -- 每个用户的会话(类 ChatGPT 左侧列表)。按 user_id 隔离。

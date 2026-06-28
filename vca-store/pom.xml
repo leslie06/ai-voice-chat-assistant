@@ -65,6 +65,15 @@
 			<groupId>org.springframework</groupId>
 			<artifactId>spring-jdbc</artifactId>
 		</dependency>
+		<!-- 邮件(找回/修改密码): JavaMailSenderImpl + Jakarta Mail 实现(版本由 Boot BOM 管理) -->
+		<dependency>
+			<groupId>org.springframework</groupId>
+			<artifactId>spring-context-support</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.eclipse.angus</groupId>
+			<artifactId>angus-mail</artifactId>
+		</dependency>
 		<!-- Spring Boot 条件装配(@ConditionalOnProperty 等) -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

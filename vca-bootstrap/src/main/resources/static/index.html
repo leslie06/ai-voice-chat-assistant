@@ -184,24 +184,40 @@
   </footer>
   </div>
 
-  <!-- 登录/注册模态 -->
+  <!-- 登录/注册/找回/重置 模态(按 view 切换字段) -->
   <div class="overlay" id="authOverlay" hidden>
     <div class="panel authpanel" style="max-width:360px">
       <div class="panel-head">
         <h2 id="authTitle">登录</h2>
         <button class="iconbtn" id="authClose" title="关闭">✕</button>
       </div>
-      <div class="field">
-        <label for="authUser">用户名</label>
+      <div class="field" id="fUser">
+        <label for="authUser" id="lblUser">用户名</label>
         <input class="modelsel" id="authUser" autocomplete="username" placeholder="2-32 个字符">
       </div>
-      <div class="field">
+      <div class="field" id="fEmail">
+        <label for="authEmail">邮箱</label>
+        <input class="modelsel" id="authEmail" type="email" autocomplete="email" placeholder="用于找回密码">
+      </div>
+      <div class="field" id="fPass">
         <label for="authPass">密码</label>
         <input class="modelsel" id="authPass" type="password" autocomplete="current-password" placeholder="至少 6 位">
       </div>
+      <div class="field" id="fToken">
+        <label for="authToken">重置令牌</label>
+        <input class="modelsel" id="authToken" placeholder="粘贴邮件里的令牌">
+      </div>
+      <div class="field" id="fNewPass">
+        <label for="authNewPass">新密码</label>
+        <input class="modelsel" id="authNewPass" type="password" autocomplete="new-password" placeholder="至少 6 位">
+      </div>
       <div id="authErr" style="color:var(--danger);font-size:13px;min-height:18px;margin:2px 0 8px"></div>
       <button class="cta-solid" id="authSubmit" style="width:100%;padding:10px">登录</button>
-      <button class="linkbtn" id="authToggle" style="width:100%;margin-top:12px">没有账号？去注册</button>
+      <div style="display:flex;justify-content:space-between;margin-top:12px">
+        <button class="linkbtn" id="authToggle">没有账号？去注册</button>
+        <button class="linkbtn" id="authForgot">忘记密码？</button>
+      </div>
+      <button class="linkbtn" id="authBack" style="width:100%;margin-top:8px">返回登录</button>
     </div>
   </div>
 
@@ -309,6 +325,11 @@
           </optgroup>
         </select>
         <div class="field-hint">仅三段式生效，切换即时生效（作用于下一句）。CosyVoice（阿里云）与 Qwen-TTS 两套音色任选——选哪个会自动把 TTS 引擎切到对应厂商。Qwen-TTS 首音更快；CosyVoice 音色更多。</div>
+      </div>
+      <div class="field authonly">
+        <label>账号</label>
+        <button class="modelsel" id="changePwBtn" style="cursor:pointer;text-align:left">🔑 修改密码（发送邮件）</button>
+        <div class="field-hint">点此向你注册邮箱发送一封密码重置邮件，按邮件里的令牌设置新密码。</div>
       </div>
       <div class="field">
         <label>对话记录</label>
@@ -549,6 +570,9 @@ async function boot(){
   const probe=await api('GET','/api/conversations');
   if(probe.status===401){ showLanding(); }
   else { startGuest(); }
+  // 邮件重置链接 ?reset=令牌: 打开重置视图并预填令牌
+  const rt=new URLSearchParams(location.search).get('reset');
+  if(rt){ openAuth('login'); toResetView(rt); history.replaceState(null,'',location.pathname); }
 }
 function startGuest(){   // 无账号系统: 访客模式, 直接进 App(无登录/无服务端会话)
   guest=true;
@@ -558,28 +582,66 @@ function startGuest(){   // 无账号系统: 访客模式, 直接进 App(无登�
 }
 function logout(){ token=''; me=null; localStorage.removeItem('vca_auth_token'); showLanding(); }
 
-/* ---------- 登录/注册模态(用户名 + 密码) ---------- */
-let authMode='login';
-function openAuth(mode){ authMode=mode||'login'; renderAuth(); document.getElementById('authOverlay').hidden=false;
-  setTimeout(()=>{ const u=document.getElementById('authUser'); if(u) u.focus(); },50); }
-function closeAuth(){ document.getElementById('authOverlay').hidden=true; document.getElementById('authErr').textContent=''; }
+/* ---------- 登录/注册/找回/重置 模态 ---------- */
+let authView='login';   // login | register | forgot | reset
+function $a(id){ return document.getElementById(id); }
+function authMsg(msg, ok){ const e=$a('authErr'); e.style.color = ok?'var(--sub)':'var(--danger)'; e.textContent=msg||''; }
+function show(id, on){ $a(id).style.display = on?'':'none'; }
+function openAuth(view){ authView=view||'login'; renderAuth(); $a('authOverlay').hidden=false;
+  setTimeout(()=>{ const f=$a(authView==='reset'?'authToken':'authUser'); if(f) f.focus(); },50); }
+function closeAuth(){ $a('authOverlay').hidden=true; authMsg(''); }
 function renderAuth(){
-  document.getElementById('authTitle').textContent = authMode==='login'?'登录':'注册';
-  document.getElementById('authSubmit').textContent = authMode==='login'?'登录':'注册';
-  document.getElementById('authToggle').textContent = authMode==='login'?'没有账号？去注册':'已有账号？去登录';
-  document.getElementById('authErr').textContent='';
+  const v=authView;
+  show('fUser',  v==='login'||v==='register'||v==='forgot');
+  show('fEmail', v==='register');
+  show('fPass',  v==='login'||v==='register');
+  show('fToken', v==='reset');
+  show('fNewPass', v==='reset');
+  show('authToggle', v==='login'||v==='register');
+  show('authForgot', v==='login');
+  show('authBack', v==='forgot'||v==='reset');
+  $a('lblUser').textContent = v==='forgot'?'用户名 / 邮箱':'用户名';
+  $a('authTitle').textContent = {login:'登录',register:'注册',forgot:'找回密码',reset:'重置密码'}[v];
+  $a('authSubmit').textContent = {login:'登录',register:'注册',forgot:'发送重置邮件',reset:'重置密码'}[v];
+  $a('authToggle').textContent = v==='login'?'没有账号？去注册':'已有账号？去登录';
+  authMsg('');
 }
 async function submitAuth(){
-  const u=document.getElementById('authUser').value.trim();
-  const p=document.getElementById('authPass').value;
-  if(!u||!p){ document.getElementById('authErr').textContent='请输入用户名和密码'; return; }
-  const r=await api('POST', authMode==='login'?'/api/login':'/api/register', {username:u,password:p});
-  if(r.ok && r.data && r.data.token){
-    token=r.data.token; me=r.data.username; localStorage.setItem('vca_auth_token',token);
-    closeAuth(); await enterApp();
-  } else {
-    document.getElementById('authErr').textContent=(r.data&&r.data.error)||'操作失败，请重试';
+  const v=authView;
+  if(v==='login' || v==='register'){
+    const u=$a('authUser').value.trim(), p=$a('authPass').value;
+    if(!u||!p){ authMsg('请输入用户名和密码'); return; }
+    const body=v==='register' ? {username:u,email:$a('authEmail').value.trim(),password:p} : {username:u,password:p};
+    const r=await api('POST', v==='login'?'/api/login':'/api/register', body);
+    if(r.ok && r.data && r.data.token){
+      token=r.data.token; me=r.data.username; localStorage.setItem('vca_auth_token',token);
+      closeAuth(); await enterApp();
+    } else authMsg((r.data&&r.data.error)||'操作失败，请重试');
+  } else if(v==='forgot'){
+    const acc=$a('authUser').value.trim();
+    if(!acc){ authMsg('请输入用户名或邮箱'); return; }
+    const r=await api('POST','/api/password/forgot',{account:acc});
+    if(r.ok){ toResetView(r.data&&r.data.devToken, '重置邮件已发送，请查收邮箱'); }
+    else authMsg((r.data&&r.data.error)||'发送失败，请重试');
+  } else if(v==='reset'){
+    const tk=$a('authToken').value.trim(), np=$a('authNewPass').value;
+    if(!tk||!np){ authMsg('请输入令牌和新密码'); return; }
+    const r=await api('POST','/api/password/reset',{token:tk,password:np});
+    if(r.ok){ authView='login'; renderAuth(); authMsg('密码已重置，请用新密码登录', true); }
+    else authMsg((r.data&&r.data.error)||'重置失败，请重试');
   }
+}
+/* 切到重置视图: 带令牌(dev 回显或邮件链接)则自动填入 */
+function toResetView(prefillToken, sentMsg){
+  authView='reset'; renderAuth();
+  if(prefillToken){ $a('authToken').value=prefillToken; authMsg('请设置新密码', true); }
+  else authMsg(sentMsg||'重置邮件已发送，请查收邮箱', true);
+}
+/* 已登录用户在设置里点"修改密码": 发重置邮件到本人邮箱, 然后进重置视图 */
+async function changePassword(){
+  const r=await api('POST','/api/password/change-request');
+  if(r.ok){ closeSettings(); openAuth('login'); toResetView(r.data&&r.data.devToken); }
+  else alert((r.data&&r.data.error)||'操作失败，请重试');
 }
 
 /* ---------- AudioContext ---------- */
@@ -788,6 +850,7 @@ function closeSettings(){ settings.hidden=true; }
 document.getElementById('settingsBtn').onclick=openSettings;
 document.getElementById('settingsClose').onclick=closeSettings;
 document.getElementById('clearHistory').onclick=()=>{ if(confirm('清空所有会话？此操作不可撤销。')) clearAllChats(); };
+document.getElementById('changePwBtn').onclick=changePassword;
 settings.addEventListener('click',e=>{ if(e.target===settings) closeSettings(); }); // 点遮罩空白处关闭
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&!settings.hidden) closeSettings(); });
 
@@ -805,9 +868,12 @@ document.getElementById('sbLogin').onclick=()=>openAuth('login');
 document.getElementById('logoutBtn').onclick=logout;
 document.getElementById('authClose').onclick=closeAuth;
 document.getElementById('authSubmit').onclick=submitAuth;
-document.getElementById('authToggle').onclick=()=>{ authMode=(authMode==='login'?'register':'login'); renderAuth(); };
+document.getElementById('authToggle').onclick=()=>{ authView=(authView==='login'?'register':'login'); renderAuth(); };
+document.getElementById('authForgot').onclick=()=>{ authView='forgot'; renderAuth(); };
+document.getElementById('authBack').onclick=()=>{ authView='login'; renderAuth(); };
 document.getElementById('authOverlay').addEventListener('click',e=>{ if(e.target.id==='authOverlay') closeAuth(); });
 document.getElementById('authPass').addEventListener('keydown',e=>{ if(e.key==='Enter') submitAuth(); });
+document.getElementById('authNewPass').addEventListener('keydown',e=>{ if(e.key==='Enter') submitAuth(); });
 document.addEventListener('keydown',e=>{ if(e.key==='Escape' && !document.getElementById('authOverlay').hidden) closeAuth(); });
 
 paint(); boot();   // 校验登录态 → 登录则进 App(拉会话+连WS), 否则落地页

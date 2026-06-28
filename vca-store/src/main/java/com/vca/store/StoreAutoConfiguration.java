@@ -4,6 +4,10 @@ import com.vca.orchestrator.auth.TokenAuthenticator;
 import com.vca.orchestrator.recorder.ConversationRecorder;
 import com.vca.store.account.AccountRoutes;
 import com.vca.store.account.ConversationService;
+import com.vca.store.account.EmailSender;
+import com.vca.store.account.LogEmailSender;
+import com.vca.store.account.PasswordResetService;
+import com.vca.store.account.SmtpEmailSender;
 import com.vca.store.account.UserService;
 import com.vca.store.account.UserTokenAuthenticator;
 import com.vca.store.auth.TokenUtil;
@@ -152,11 +156,33 @@ public class StoreAutoConfiguration {
         return new ConversationService(chatConversationMapper, chatMessageMapper);
     }
 
+    /** 邮件发送器: 配了 SMTP host 用真实发送, 否则回退打日志(配合 mail-dev-echo 联调)。 */
+    @Bean
+    @ConditionalOnMissingBean(EmailSender.class)
+    EmailSender emailSender(StoreProperties props) {
+        if (StringUtils.hasText(props.getMailHost())) {
+            log.info("邮件: 启用 SMTP(host={}, port={})", props.getMailHost(), props.getMailPort());
+            return new SmtpEmailSender(props.getMailHost(), props.getMailPort(), props.getMailUsername(),
+                    props.getMailPassword(), props.getMailFrom(), props.isMailSsl(), props.isMailStarttls(),
+                    props.getMailProxyHost(), props.getMailProxyPort());
+        }
+        log.info("邮件: 未配置 SMTP, 使用日志发送器(重置令牌打日志; 配合 vca.store.mail-dev-echo 联调)");
+        return new LogEmailSender();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    PasswordResetService passwordResetService(UserService userService, EmailSender emailSender, StoreProperties props) {
+        return new PasswordResetService(userService, emailSender, props.getBaseUrl(),
+                props.getResetTtlSeconds(), props.isMailDevEcho());
+    }
+
     /** 账号/会话 REST(/api/**)挂成 RouterFunction Bean。 */
     @Bean
     org.springframework.web.reactive.function.server.RouterFunction<
             org.springframework.web.reactive.function.server.ServerResponse> accountRoutes(
-            UserService userService, ConversationService conversationService) {
-        return AccountRoutes.create(userService, conversationService);
+            UserService userService, ConversationService conversationService,
+            PasswordResetService passwordResetService) {
+        return AccountRoutes.create(userService, conversationService, passwordResetService);
     }
 }

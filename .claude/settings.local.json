@@ -63,7 +63,20 @@
       "Bash(mvn -pl vca-store,vca-web test)",
       "Bash(mvn -pl vca-store test -Dtest=AliyunSmsSignatureTest)",
       "Bash(awk '/^<script>/{f=1;next} /^<\\\\/script>/{f=0} f' vca-bootstrap/src/main/resources/static/index.html)",
-      "Bash(node --check /tmp/vf.js)"
+      "Bash(node --check /tmp/vf.js)",
+      "Bash(nslookup smtp.qq.com)",
+      "Bash(nc -z -G 5 smtp.qq.com 465)",
+      "Bash(nc -z -G 5 smtp.qq.com 587)",
+      "Bash(timeout 8 openssl s_client -connect smtp.qq.com:465 -quiet)",
+      "Bash(openssl s_client -connect smtp.qq.com:465 -tls1_2)",
+      "Bash(openssl s_client -connect smtp.qq.com:465 -tls1_3)",
+      "Bash(openssl s_client -connect smtp.qq.com:465 -noservername)",
+      "Bash(openssl s_client -connect smtp.qq.com:587 -starttls smtp)",
+      "Bash(sed -i '' 's/^VCA_STORE_MAIL_PORT=.*/VCA_STORE_MAIL_PORT=587/' .env)",
+      "Bash(sed -i '' 's/^VCA_STORE_MAIL_SSL=.*/VCA_STORE_MAIL_SSL=false/' .env)",
+      "Bash(openssl s_client -connect smtp.qq.com:465)",
+      "Bash(java SockTest.java)",
+      "Bash(python3 -c \"import socket; print\\('Python/系统解析 smtp.qq.com ->', socket.gethostbyname_ex\\('smtp.qq.com'\\)\\)\")"
     ]
   }
 }

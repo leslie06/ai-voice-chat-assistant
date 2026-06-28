@@ -25,9 +25,12 @@ import static org.springframework.web.reactive.function.server.RequestPredicates
  *
  * <p>端点:
  * <pre>
- *   POST /api/register {username,password}            → {token,username}
+ *   POST /api/register {username,email,password}      → {token,username}
  *   POST /api/login    {username,password}            → {token,username}
  *   GET  /api/me                                      → {username}
+ *   POST /api/password/forgot {account}               → {ok} (dev 附 devToken)  发重置邮件
+ *   POST /api/password/reset  {token,password}        → {ok}                    凭令牌设新密码
+ *   POST /api/password/change-request                 → {ok} (dev 附 devToken)  已登录, 发重置邮件到本人邮箱
  *   GET    /api/conversations                         → [{id,title,updatedAt}]
  *   POST   /api/conversations {title?}                → {id,title}
  *   DELETE /api/conversations/{id}                    → {ok}
@@ -39,17 +42,23 @@ public final class AccountRoutes {
 
     private final UserService users;
     private final ConversationService convs;
+    private final PasswordResetService reset;
 
-    private AccountRoutes(UserService users, ConversationService convs) {
+    private AccountRoutes(UserService users, ConversationService convs, PasswordResetService reset) {
         this.users = users;
         this.convs = convs;
+        this.reset = reset;
     }
 
-    public static RouterFunction<ServerResponse> create(UserService users, ConversationService convs) {
-        AccountRoutes r = new AccountRoutes(users, convs);
+    public static RouterFunction<ServerResponse> create(UserService users, ConversationService convs,
+                                                        PasswordResetService reset) {
+        AccountRoutes r = new AccountRoutes(users, convs, reset);
         return RouterFunctions.route(POST("/api/register"), r::register)
                 .andRoute(POST("/api/login"), r::login)
                 .andRoute(GET("/api/me"), r::me)
+                .andRoute(POST("/api/password/forgot"), r::forgot)
+                .andRoute(POST("/api/password/reset"), r::resetPassword)
+                .andRoute(POST("/api/password/change-request"), r::changeRequest)
                 .andRoute(GET("/api/conversations"), r::listConvs)
                 .andRoute(POST("/api/conversations"), r::createConv)
                 .andRoute(DELETE("/api/conversations/{id}"), r::deleteConv)
@@ -57,15 +66,53 @@ public final class AccountRoutes {
                 .andRoute(POST("/api/conversations/{id}/messages"), r::appendMessage);
     }
 
-    // ---- 认证(用户名 + 密码) ----
+    // ---- 认证(用户名 + 邮箱 + 密码) ----
 
     private Mono<ServerResponse> register(ServerRequest req) {
         return req.bodyToMono(Map.class).flatMap(body ->
-                blocking(() -> users.register(str(body.get("username")), str(body.get("password"))))
+                blocking(() -> users.register(str(body.get("username")), str(body.get("email")), str(body.get("password"))))
                         .flatMap(res -> res.error() != null
                                 ? json(400, Map.of("error", res.error()))
                                 : json(200, Map.of("token", res.token(), "username", res.username()))))
-                .onErrorResume(e -> json(400, Map.of("error", "注册失败: 用户名可能已被占用")))
+                .onErrorResume(e -> json(400, Map.of("error", "注册失败: 用户名或邮箱可能已被占用")))
+                .switchIfEmpty(json(400, Map.of("error", "请求体缺失")));
+    }
+
+    // ---- 找回 / 修改密码(邮件) ----
+
+    private Mono<ServerResponse> forgot(ServerRequest req) {
+        return req.bodyToMono(Map.class).flatMap(body ->
+                blocking(() -> reset.request(str(body.get("account")))).flatMap(this::resetRequestResponse))
+                .switchIfEmpty(json(400, Map.of("error", "请求体缺失")));
+    }
+
+    /** 已登录用户请求修改密码: 发重置邮件到本人邮箱。 */
+    private Mono<ServerResponse> changeRequest(ServerRequest req) {
+        Long uid = userId(req);
+        if (uid == null) {
+            return unauthorized();
+        }
+        return blocking(() -> reset.requestForUser(uid)).flatMap(this::resetRequestResponse);
+    }
+
+    private Mono<ServerResponse> resetRequestResponse(PasswordResetService.RequestResult res) {
+        if (res.error() != null) {
+            return json(400, Map.of("error", res.error()));
+        }
+        Map<String, Object> ok = new LinkedHashMap<>();
+        ok.put("ok", true);
+        if (res.devToken() != null) {
+            ok.put("devToken", res.devToken());   // 开发回显: 无真实邮件时方便联调
+        }
+        return json(200, ok);
+    }
+
+    private Mono<ServerResponse> resetPassword(ServerRequest req) {
+        // reset() 成功返回 null → fromCallable 发空 → switchIfEmpty 出 200; 失败返回错误串 → flatMap 出 400
+        return req.bodyToMono(Map.class).flatMap(body ->
+                blocking(() -> reset.reset(str(body.get("token")), str(body.get("password"))))
+                        .flatMap(err -> json(400, Map.of("error", err)))
+                        .switchIfEmpty(json(200, Map.of("ok", true))))
                 .switchIfEmpty(json(400, Map.of("error", "请求体缺失")));
     }
 
