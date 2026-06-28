@@ -76,7 +76,12 @@
       "Bash(sed -i '' 's/^VCA_STORE_MAIL_SSL=.*/VCA_STORE_MAIL_SSL=false/' .env)",
       "Bash(openssl s_client -connect smtp.qq.com:465)",
       "Bash(java SockTest.java)",
-      "Bash(python3 -c \"import socket; print\\('Python/系统解析 smtp.qq.com ->', socket.gethostbyname_ex\\('smtp.qq.com'\\)\\)\")"
+      "Bash(python3 -c \"import socket; print\\('Python/系统解析 smtp.qq.com ->', socket.gethostbyname_ex\\('smtp.qq.com'\\)\\)\")",
+      "Bash(mvn -q -pl vca-orchestrator,vca-web -am compile)",
+      "Bash(mvn -q -pl vca-orchestrator test -Dtest=EndpointPolicyTest)",
+      "Bash(mvn -pl vca-orchestrator test -Dtest=EndpointPolicyTest)",
+      "Bash(perl -0pi -e 's/\\(new VadConfig\\\\\\(0\\\\.015, 150, 800, 0\\\\.020, 250, 400, 16000, false, \"\", 600, false\\)\\\\\\)/$1, false, 400, 1600\\)/g' vca-orchestrator/src/test/java/com/vca/orchestrator/HandsFreeVadTest.java)",
+      "Bash(mvn -pl vca-orchestrator test -Dtest=\"EndpointPolicyTest,HandsFreeVadTest\")"
     ]
   }
 }

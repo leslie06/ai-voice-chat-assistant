@@ -89,6 +89,12 @@ vca:
       # 学英语爱停顿找词, 默认 800ms 太短会把半句话提前提交、模型只听到片段→答非所问。
       # 调大给你留出停顿空间; 太大则你说完后要多等一会儿才回复。1000~1500 之间按习惯权衡。
       silence-ms: ${VCA_VAD_SILENCE_MS:1200}
+      # --- 语义端点判定(自适应断句, 仅三段式生效) ---
+      # 开启后句尾静音阈值随 ASR 中间转写的"完整度"自适应: 末尾是连词/口头停顿(然后…/那个…)→拉长多等,
+      # 句末有标点(。？)→缩短更快回复。这样既不会把停顿找词的你切断, 说完了又能snappy响应。
+      semantic-endpoint: ${VCA_VAD_SEMANTIC_ENDPOINT:false}
+      min-silence-ms: ${VCA_VAD_MIN_SILENCE_MS:400}    # "已说完"时下限
+      max-silence-ms: ${VCA_VAD_MAX_SILENCE_MS:1600}   # "没说完"时上限
       # 开口判定: 人声需持续这么久(ms)才算开口, 顺带过滤短促杂音/咳嗽误触发新一轮。
       onset-ms: ${VCA_VAD_ONSET_MS:200}
       # 开口阈值: 超过即算"有人声"。与检测器同尺度 —— 能量法约 0.015; Silero 是人声概率(0~1),

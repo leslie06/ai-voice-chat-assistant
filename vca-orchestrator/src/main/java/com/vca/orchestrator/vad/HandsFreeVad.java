@@ -61,6 +61,8 @@ public class HandsFreeVad {
 
     private State state = State.OFF;
     private int inputSampleRate = 48000;
+    /** 本轮 ASR 中间转写(语义端点判定用); 接入层随 ASR partial 更新, 每轮开始清空。 */
+    private volatile String interimText = "";
 
     private double speechMs;
     private double silenceMs;
@@ -171,7 +173,13 @@ public class HandsFreeVad {
                     silenceMs = 0;
                 } else if (level < cfg.speechThreshold() * RELEASE_RATIO) {
                     silenceMs += frameMs;
-                    if (silenceMs >= cfg.silenceMs()) {
+                    // 语义端点判定: 句尾静音阈值随 ASR 中间转写的完整度自适应(没说完拉长、说完缩短);
+                    // 关闭时退回固定 silenceMs。
+                    int required = cfg.semanticEndpoint()
+                            ? EndpointPolicy.requiredSilenceMs(interimText, cfg.silenceMs(),
+                                    cfg.minSilenceMs(), cfg.maxSilenceMs())
+                            : cfg.silenceMs();
+                    if (silenceMs >= required) {
                         end();
                     }
                 }
@@ -197,10 +205,18 @@ public class HandsFreeVad {
 
     // ---- 内部 ----
 
+    /** 接入层随 ASR 中间转写更新本轮文本(语义端点判定用)。非说话状态忽略。 */
+    public void setInterimText(String text) {
+        if (state == State.SPEAK && text != null) {
+            this.interimText = text;
+        }
+    }
+
     /** 开口 → 开启本轮: 先回调开启, 再把预滚(含开口瞬间)补发出去 */
     private void begin() {
         state = State.SPEAK;
         resetCounters();
+        interimText = "";   // 新一轮清空上轮残留的中间转写
         listener.onSpeechStart();
         flushPreroll();
     }

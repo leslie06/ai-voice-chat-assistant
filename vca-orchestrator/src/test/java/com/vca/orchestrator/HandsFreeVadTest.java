@@ -83,7 +83,7 @@ class HandsFreeVadTest {
     @Test
     void bargeGracePeriodSuppressesEarlyBargeIn() {
         // grace=600ms; 其余沿用默认(barge 阈值 0.020, bargeMs 250), 全双工以便验证打断
-        VadConfig cfg = new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 600, false);
+        VadConfig cfg = new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 600, false, false, 400, 1600);
         HandsFreeVad v = new HandsFreeVad(cfg, new HandsFreeVad.Listener() {
             @Override public void onSpeechStart() { events.add("start"); }
             @Override public void onAudio(byte[] pcm16le) { events.add("audio"); }
@@ -111,7 +111,7 @@ class HandsFreeVadTest {
     /** 半双工: 机器人说话期间即使有持续人声(回声)也绝不打断, 从根上断掉自打断死循环。 */
     @Test
     void halfDuplexNeverBargesWhileBotSpeaking() {
-        VadConfig cfg = new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 0, true);
+        VadConfig cfg = new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 0, true, false, 400, 1600);
         HandsFreeVad v = new HandsFreeVad(cfg, new HandsFreeVad.Listener() {
             @Override public void onSpeechStart() { events.add("start"); }
             @Override public void onAudio(byte[] pcm16le) { events.add("audio"); }

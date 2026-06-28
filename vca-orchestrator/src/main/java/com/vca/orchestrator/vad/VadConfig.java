@@ -31,15 +31,19 @@ public record VadConfig(
         boolean useSilero,
         String sileroModelPath,
         int bargeGraceMs,
-        boolean halfDuplex) {
+        boolean halfDuplex,
+        boolean semanticEndpoint,
+        int minSilenceMs,
+        int maxSilenceMs) {
 
     /** 与原前端常量一致的能量阈值法默认值(无起播保护、全双工, 保持库默认行为) */
     public static VadConfig defaults() {
-        return new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 0, false);
+        return new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 0, false, false, 400, 1600);
     }
 
     /** Silero 默认: 阈值换成人声概率尺度(0.5/0.6), 时序沿用能量法, 采样率锁 16k。 */
     public static VadConfig silero(String modelPath) {
-        return new VadConfig(0.5, 150, 800, 0.6, 250, 400, 16000, true, modelPath == null ? "" : modelPath, 0, false);
+        return new VadConfig(0.5, 150, 800, 0.6, 250, 400, 16000, true, modelPath == null ? "" : modelPath,
+                0, false, false, 400, 1600);
     }
 }

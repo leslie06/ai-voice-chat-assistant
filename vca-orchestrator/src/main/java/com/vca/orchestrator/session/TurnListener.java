@@ -13,6 +13,10 @@ public interface TurnListener {
     default void onAsrFinal(String text) {
     }
 
+    /** ASR 中间转写(流式假设, 非最终)。仅三段式产生; 接入层用它做语义端点判定。 */
+    default void onAsrPartial(String text) {
+    }
+
     /** LLM 回复的增量 token(逐段流式回调, 用于前端打字机式实时显示) */
     default void onAssistantDelta(String delta) {
     }

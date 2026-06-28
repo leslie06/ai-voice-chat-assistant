@@ -135,11 +135,22 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         }
 
         Sinks.Many<WebSocketMessage> outbound = Sinks.many().unicast().onBackpressureBuffer();
+        // listener 在 Connection 之前创建, 用 holder 让 onAsrPartial 能回灌到本连接的 VAD(语义端点判定)
+        final Connection[] connRef = new Connection[1];
         // 把 ASR 识别文本 / LLM 回复文本透传给前端做字幕
         TurnListener listener = new TurnListener() {
             @Override
             public void onAsrFinal(String text) {
                 pushJson(session, outbound, Map.of("type", "asr", "text", text));
+            }
+
+            @Override
+            public void onAsrPartial(String text) {
+                // 三段式 ASR 中间转写 → 喂给本地 VAD 做语义端点判定(自适应断句)
+                Connection c = connRef[0];
+                if (c != null) {
+                    c.feedInterim(text);
+                }
             }
 
             @Override
@@ -170,6 +181,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         };
         ConversationSession conversation = sessionFactory.create(session.getId(), listener);
         Connection conn = new Connection(session, conversation, outbound);
+        connRef[0] = conn;   // 就位后 onAsrPartial 才能回灌 VAD
         log.debug("WS 连接建立: {}", session.getId());
 
         Mono<Void> receive = session.receive()
@@ -298,6 +310,11 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                     bargeIn();
                 }
             }, vadDetectorFactory.get());
+        }
+
+        /** 把 ASR 中间转写喂给本地 VAD 做语义端点判定(仅免提本地 VAD 路径有意义)。 */
+        private void feedInterim(String text) {
+            vad.setInterimText(text);
         }
 
         void onInbound(WebSocketMessage message) {

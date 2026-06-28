@@ -300,9 +300,15 @@ public class ConversationSession {
                 });
     }
 
-    /** 三段式: ASR(取 final) → 交给 {@link #respond} 走 LLM → 分句 → TTS */
+    /** 三段式: ASR(中间结果透传给语义端点判定, 取 final) → 交给 {@link #respond} 走 LLM → 分句 → TTS */
     private Flux<AudioChunk> pipelineTurn(Flux<AudioFrame> userAudio) {
         return asr.transcribe(userAudio, context.asrConfig())
+                // 旁路中间转写给接入层做语义端点判定(自适应断句); 不影响主链路
+                .doOnNext(ev -> {
+                    if (!ev.isFinal() && !ev.isBlank()) {
+                        safeNotify(() -> listener.onAsrPartial(ev.text()));
+                    }
+                })
                 .filter(AsrEvent::isFinal)
                 .next()                                  // 取本轮最终识别结果
                 .filter(ev -> !ev.isBlank())

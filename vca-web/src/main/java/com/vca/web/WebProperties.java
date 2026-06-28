@@ -271,6 +271,12 @@ public class WebProperties {
         private int bargeGraceMs = 0;
         /** 半双工: 机器人说话时不收麦/不语音打断, 外放无回声消除时靠它断掉自打断死循环。默认开, 戴耳机可关。 */
         private boolean halfDuplex = true;
+        /** 语义端点判定: 句尾静音阈值随 ASR 中间转写完整度自适应(没说完拉长、说完缩短)。仅三段式生效。 */
+        private boolean semanticEndpoint = false;
+        /** 自适应下限(ms): "已说完"时句尾静音最短不低于此。 */
+        private int minSilenceMs = 400;
+        /** 自适应上限(ms): "没说完"时句尾静音最长不超过此。 */
+        private int maxSilenceMs = 1600;
 
         public VadConfig toConfig() {
             // 阈值有两套尺度: 能量法是 RMS(≈0.01~0.1), Silero 是人声概率(0~1)。
@@ -291,7 +297,8 @@ public class WebProperties {
                 }
             }
             return new VadConfig(speech, onsetMs, silenceMs, barge, bargeMs, prerollMs, targetSampleRate,
-                    useSilero, sileroModelPath, bargeGraceMs, halfDuplex);
+                    useSilero, sileroModelPath, bargeGraceMs, halfDuplex,
+                    semanticEndpoint, minSilenceMs, maxSilenceMs);
         }
 
         public double getSpeechThreshold() {
@@ -380,6 +387,30 @@ public class WebProperties {
 
         public void setHalfDuplex(boolean halfDuplex) {
             this.halfDuplex = halfDuplex;
+        }
+
+        public boolean isSemanticEndpoint() {
+            return semanticEndpoint;
+        }
+
+        public void setSemanticEndpoint(boolean semanticEndpoint) {
+            this.semanticEndpoint = semanticEndpoint;
+        }
+
+        public int getMinSilenceMs() {
+            return minSilenceMs;
+        }
+
+        public void setMinSilenceMs(int minSilenceMs) {
+            this.minSilenceMs = minSilenceMs;
+        }
+
+        public int getMaxSilenceMs() {
+            return maxSilenceMs;
+        }
+
+        public void setMaxSilenceMs(int maxSilenceMs) {
+            this.maxSilenceMs = maxSilenceMs;
         }
     }
 }
