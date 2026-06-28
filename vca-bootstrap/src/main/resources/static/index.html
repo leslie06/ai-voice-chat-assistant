@@ -3,7 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>小智AI</title>
+  <title>Flying Fish</title>
+  <link rel="icon" type="image/png" href="/logo.png">
+  <link rel="apple-touch-icon" href="/logo.png">
+  <meta name="apple-mobile-web-app-title" content="Flying Fish">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <style>
     :root{
       --bg:#ffffff; --panel:#f7f7f8; --line:#e5e5e5; --text:#1f2023; --sub:#8e8ea0;
@@ -119,12 +123,17 @@
     .merow{display:flex;align-items:center;justify-content:space-between;gap:8px;}
     .mename{font-size:13.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
     .authpanel input.modelsel{cursor:text;}
+    /* 品牌(Flying Fish) */
+    .brand{display:flex;align-items:center;gap:9px;padding:2px 4px 12px;font-size:16px;font-weight:700;letter-spacing:.3px;}
+    .brand img{width:28px;height:28px;border-radius:7px;flex:none;}
+    .hero-logo{width:76px;height:76px;border-radius:18px;margin-bottom:18px;box-shadow:0 8px 28px rgba(0,0,0,.18);}
   </style>
 </head>
 <body class="logged-out">
   <!-- 左侧会话栏(类 ChatGPT): 新聊天 + 历史会话列表; 窄屏为抽屉 -->
   <aside class="sidebar" id="sidebar">
     <div class="sb-top">
+      <div class="brand"><img src="/logo.png" alt="Flying Fish"><span>Flying Fish</span></div>
       <button class="newchat" id="newChat" title="新建会话">✏️ 新聊天</button>
     </div>
     <div class="conv-list" id="convList"></div>
@@ -142,7 +151,7 @@
   <header>
     <button class="iconbtn" id="sbToggle" title="会话列表">☰</button>
     <span class="dot" id="dot"></span>
-    <h1 id="convTitle">小智AI</h1>
+    <h1 id="convTitle">Flying Fish</h1>
     <button class="iconbtn" id="bargeBtn" title="打断" style="display:none">⏹</button>
     <button class="iconbtn authonly" id="settingsBtn" title="设置">⚙</button>
     <div class="authctas guestonly">
@@ -153,7 +162,8 @@
 
   <main id="main">
     <div class="hero guestonly" id="hero">
-      <div class="hero-title">我们先从哪里开始呢？</div>
+      <img src="/logo.png" alt="Flying Fish" class="hero-logo">
+      <div class="hero-title">Flying Fish · 我们先从哪里开始呢？</div>
       <div class="hero-sub">登录或注册后即可保存并继续你的对话</div>
     </div>
     <div class="wrap" id="chat">
@@ -487,7 +497,7 @@ async function clearAllChats(){
 function renderActiveConv(){
   chat.innerHTML='';
   const cur=convs.find(c=>c.id===activeId);
-  document.getElementById('convTitle').textContent=(cur&&cur.title)||'小智AI';
+  document.getElementById('convTitle').textContent=(cur&&cur.title)||'Flying Fish';
   if(!activeMsgs.length){
     const e=document.createElement('div'); e.className='empty'; e.id='empty';
     e.innerHTML='👋 你好，我是语音助手<br>点击 🎙 开启免提语音，或直接打字'; chat.appendChild(e);
@@ -519,7 +529,7 @@ function renderConvList(){
 function showLanding(){
   document.body.classList.remove('logged-in'); document.body.classList.add('logged-out');
   convs=[]; activeId=null; activeMsgs=[]; renderConvList();
-  chat.innerHTML=''; document.getElementById('convTitle').textContent='小智AI';
+  chat.innerHTML=''; document.getElementById('convTitle').textContent='Flying Fish';
   if(ws){ try{ws.close();}catch(e){} ws=null; }   // 退出后断开语音连接
 }
 async function enterApp(){
