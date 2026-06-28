@@ -55,7 +55,32 @@ CREATE TABLE IF NOT EXISTS user_memory (
     id         BIGINT       NOT NULL AUTO_INCREMENT,
     user_id    BIGINT       NOT NULL,
     content    VARCHAR(512) NOT NULL,
+    embedding  BLOB         COMMENT '内容向量(小端 float32); 旧行/未启用 embedding 时为 NULL',
     created_at DATETIME     NOT NULL,
     PRIMARY KEY (id),
     KEY idx_mem_user (user_id, id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户长期记忆';
+
+-- RAG 知识库: 用户上传的文档(一条/文件), 按 user_id 隔离。
+CREATE TABLE IF NOT EXISTS knowledge_doc (
+    id         BIGINT       NOT NULL AUTO_INCREMENT,
+    user_id    BIGINT       NOT NULL,
+    title      VARCHAR(255) NOT NULL,
+    created_at DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    KEY idx_doc_user (user_id, id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'RAG 文档';
+
+-- 文档切块 + 向量, RAG 检索的最小单位。
+CREATE TABLE IF NOT EXISTS knowledge_chunk (
+    id         BIGINT   NOT NULL AUTO_INCREMENT,
+    user_id    BIGINT   NOT NULL,
+    doc_id     BIGINT   NOT NULL,
+    ordinal    INT      NOT NULL COMMENT '在文档内的序号',
+    content    TEXT     NOT NULL,
+    embedding  BLOB     COMMENT '片段向量(小端 float32)',
+    created_at DATETIME NOT NULL,
+    PRIMARY KEY (id),
+    KEY idx_chunk_user (user_id, id),
+    KEY idx_chunk_doc (doc_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'RAG 文档切块';

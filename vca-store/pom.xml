@@ -91,6 +91,12 @@
 			<artifactId>mysql-connector-j</artifactId>
 			<scope>runtime</scope>
 		</dependency>
+		<!-- RAG 知识库: 解析上传的 PDF 文本(txt/md 零依赖直接读); bouncycastle 等为可选, 不传递 -->
+		<dependency>
+			<groupId>org.apache.pdfbox</groupId>
+			<artifactId>pdfbox</artifactId>
+			<version>3.0.6</version>
+		</dependency>
 
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>

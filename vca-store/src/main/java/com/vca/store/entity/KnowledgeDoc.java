@@ -6,16 +6,14 @@ import com.baomidou.mybatisplus.annotation.TableName;
 
 import java.time.LocalDateTime;
 
-/** 用户长期记忆(对应表 {@code user_memory})。按 {@code userId} 隔离。 */
-@TableName("user_memory")
-public class UserMemory {
+/** RAG 知识库里的一篇文档(对应表 {@code knowledge_doc}, 一条/上传文件)。按 userId 隔离。 */
+@TableName("knowledge_doc")
+public class KnowledgeDoc {
 
     @TableId(type = IdType.AUTO)
     private Long id;
     private Long userId;
-    private String content;
-    /** 内容的向量(小端 float32 打包); 旧行或 embedding 未启用时为 null。 */
-    private byte[] embedding;
+    private String title;
     private LocalDateTime createdAt;
 
     public Long getId() {
@@ -34,20 +32,12 @@ public class UserMemory {
         this.userId = userId;
     }
 
-    public String getContent() {
-        return content;
+    public String getTitle() {
+        return title;
     }
 
-    public void setContent(String content) {
-        this.content = content;
-    }
-
-    public byte[] getEmbedding() {
-        return embedding;
-    }
-
-    public void setEmbedding(byte[] embedding) {
-        this.embedding = embedding;
+    public void setTitle(String title) {
+        this.title = title;
     }
 
     public LocalDateTime getCreatedAt() {

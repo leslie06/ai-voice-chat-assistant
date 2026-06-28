@@ -6,15 +6,17 @@ import com.baomidou.mybatisplus.annotation.TableName;
 
 import java.time.LocalDateTime;
 
-/** 用户长期记忆(对应表 {@code user_memory})。按 {@code userId} 隔离。 */
-@TableName("user_memory")
-public class UserMemory {
+/** RAG 文档的一个切块 + 向量(对应表 {@code knowledge_chunk}), 检索的最小单位。按 userId 隔离。 */
+@TableName("knowledge_chunk")
+public class KnowledgeChunk {
 
     @TableId(type = IdType.AUTO)
     private Long id;
     private Long userId;
+    private Long docId;
+    private Integer ordinal;
     private String content;
-    /** 内容的向量(小端 float32 打包); 旧行或 embedding 未启用时为 null。 */
+    /** 片段向量(小端 float32 打包); embedding 不可用时为 null。 */
     private byte[] embedding;
     private LocalDateTime createdAt;
 
@@ -32,6 +34,22 @@ public class UserMemory {
 
     public void setUserId(Long userId) {
         this.userId = userId;
+    }
+
+    public Long getDocId() {
+        return docId;
+    }
+
+    public void setDocId(Long docId) {
+        this.docId = docId;
+    }
+
+    public Integer getOrdinal() {
+        return ordinal;
+    }
+
+    public void setOrdinal(Integer ordinal) {
+        this.ordinal = ordinal;
     }
 
     public String getContent() {

@@ -1,6 +1,7 @@
 package com.vca.store;
 
 import com.vca.orchestrator.auth.TokenAuthenticator;
+import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.recorder.ConversationRecorder;
 import com.vca.store.account.AccountRoutes;
@@ -17,8 +18,15 @@ import com.vca.store.eval.EvaluationRoute;
 import com.vca.store.mapper.AppUserMapper;
 import com.vca.store.mapper.ChatConversationMapper;
 import com.vca.store.mapper.ChatMessageMapper;
+import com.vca.store.embed.DashScopeEmbedder;
+import com.vca.store.embed.Embedder;
+import com.vca.store.knowledge.KnowledgeRoutes;
+import com.vca.store.knowledge.KnowledgeService;
+import com.vca.store.knowledge.MyBatisKnowledgeStore;
 import com.vca.store.mapper.ConversationTurnMapper;
 import com.vca.store.mapper.EvaluationMapper;
+import com.vca.store.mapper.KnowledgeChunkMapper;
+import com.vca.store.mapper.KnowledgeDocMapper;
 import com.vca.store.mapper.UserMemoryMapper;
 import com.vca.store.memory.MyBatisMemoryStore;
 import com.zaxxer.hikari.HikariConfig;
@@ -26,6 +34,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -68,8 +77,40 @@ public class StoreAutoConfiguration {
 
         DatabasePopulatorUtils.execute(
                 new ResourceDatabasePopulator(new ClassPathResource("com/vca/store/schema.sql")), ds);
+        // 轻量迁移: CREATE TABLE IF NOT EXISTS 不会给已存在的表补新列, 故对升级后新增的列做幂等补齐
+        // (MySQL 不支持 ADD COLUMN IF NOT EXISTS, 用 information_schema 判存在再 ALTER)。
+        migrate(ds);
         log.info("对话落库已启用(数据飞轮, MySQL+MyBatis-Plus): url={}", props.getUrl());
         return ds;
+    }
+
+    /** 幂等列迁移: 给老库补上升级后新增的列(向量化记忆的 embedding 列)。 */
+    private void migrate(HikariDataSource ds) {
+        addColumnIfMissing(ds, "user_memory", "embedding", "BLOB NULL");
+    }
+
+    private void addColumnIfMissing(HikariDataSource ds, String table, String column, String ddl) {
+        try (java.sql.Connection c = ds.getConnection()) {
+            boolean exists;
+            try (java.sql.PreparedStatement ps = c.prepareStatement(
+                    "SELECT 1 FROM information_schema.COLUMNS "
+                            + "WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?")) {
+                ps.setString(1, table);
+                ps.setString(2, column);
+                try (java.sql.ResultSet rs = ps.executeQuery()) {
+                    exists = rs.next();
+                }
+            }
+            if (!exists) {
+                try (java.sql.Statement st = c.createStatement()) {
+                    st.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + ddl);
+                }
+                log.info("迁移: 给表 {} 补列 {} {}", table, column, ddl);
+            }
+        } catch (Exception e) {
+            log.warn("列迁移失败({}.{}), 可手动执行 ALTER TABLE {} ADD COLUMN {} {}: {}",
+                    table, column, table, column, ddl, e.toString());
+        }
     }
 
     @Bean
@@ -159,7 +200,25 @@ public class StoreAutoConfiguration {
         return new ConversationService(chatConversationMapper, chatMessageMapper);
     }
 
-    // ---- 长期记忆(跨会话个性化): remember 工具写入, 每轮对话回灌上下文 ----
+    // ---- Embedding(向量化长期记忆 + RAG 共用): 配了 key 才建 embedder, 否则功能降级 ----
+
+    /**
+     * 文本向量化器。仅当 {@code embedding-enabled} 且配了 key 时建; 否则返回 null(不注册 Bean)——
+     * 下游经 {@code ObjectProvider} 取不到即降级: 记忆退回关键词级、RAG 检索返回空。
+     */
+    @Bean
+    @ConditionalOnMissingBean(Embedder.class)
+    Embedder embedder(StoreProperties props) {
+        if (!props.isEmbeddingEnabled() || props.getEmbeddingKey() == null || props.getEmbeddingKey().isBlank()) {
+            log.info("Embedding 未启用(无 key), 长期记忆退回关键词级、RAG 检索关闭");
+            return null;
+        }
+        log.info("Embedding 已启用: model={}, dim={}", props.getEmbeddingModel(), props.getEmbeddingDim());
+        return new DashScopeEmbedder(props.getEmbeddingBaseUrl(), props.getEmbeddingKey(),
+                props.getEmbeddingModel(), props.getEmbeddingDim(), props.getEmbeddingProxy());
+    }
+
+    // ---- 长期记忆(跨会话个性化): remember 工具写入, 每轮对话回灌上下文(语义召回) ----
 
     @Bean
     @ConditionalOnMissingBean
@@ -169,8 +228,43 @@ public class StoreAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(MemoryStore.class)
-    MemoryStore memoryStore(UserMemoryMapper userMemoryMapper) {
-        return new MyBatisMemoryStore(userMemoryMapper);
+    MemoryStore memoryStore(UserMemoryMapper userMemoryMapper, ObjectProvider<Embedder> embedder) {
+        return new MyBatisMemoryStore(userMemoryMapper, embedder.getIfAvailable());
+    }
+
+    // ---- RAG 知识库: 文档上传/切块/向量入库(/api/knowledge) + 检索(KnowledgeStore 端口) ----
+
+    @Bean
+    @ConditionalOnMissingBean
+    KnowledgeDocMapper knowledgeDocMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, KnowledgeDocMapper.class);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    KnowledgeChunkMapper knowledgeChunkMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, KnowledgeChunkMapper.class);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    KnowledgeService knowledgeService(KnowledgeDocMapper knowledgeDocMapper, KnowledgeChunkMapper knowledgeChunkMapper,
+                                      ObjectProvider<Embedder> embedder) {
+        return new KnowledgeService(knowledgeDocMapper, knowledgeChunkMapper, embedder.getIfAvailable());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(KnowledgeStore.class)
+    KnowledgeStore knowledgeStore(KnowledgeChunkMapper knowledgeChunkMapper, ObjectProvider<Embedder> embedder) {
+        return new MyBatisKnowledgeStore(knowledgeChunkMapper, embedder.getIfAvailable());
+    }
+
+    /** 知识库 REST(/api/knowledge*)挂成 RouterFunction Bean。 */
+    @Bean
+    org.springframework.web.reactive.function.server.RouterFunction<
+            org.springframework.web.reactive.function.server.ServerResponse> knowledgeRoutes(
+            UserService userService, KnowledgeService knowledgeService) {
+        return KnowledgeRoutes.create(userService, knowledgeService);
     }
 
     /** 邮件发送器: 配了 SMTP host 用真实发送, 否则回退打日志(配合 mail-dev-echo 联调)。 */

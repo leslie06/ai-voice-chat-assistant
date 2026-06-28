@@ -331,6 +331,13 @@
         <button class="modelsel" id="changePwBtn" style="cursor:pointer;text-align:left">🔑 修改密码（发送邮件）</button>
         <div class="field-hint">点此向你注册邮箱发送一封密码重置邮件，按邮件里的令牌设置新密码。</div>
       </div>
+      <div class="field authonly">
+        <label>知识库（RAG）</label>
+        <input type="file" id="kbFile" accept=".txt,.md,.markdown,.pdf" style="display:none">
+        <button class="modelsel" id="kbUpload" style="cursor:pointer;text-align:left">📄 上传文档（txt / md / pdf）</button>
+        <div id="kbList" style="margin:6px 0"></div>
+        <div class="field-hint">上传你的资料后，提问时助手会自动检索并据此回答（按账号隔离，仅你可见）。需已配置 embedding。</div>
+      </div>
       <div class="field">
         <label>对话记录</label>
         <button class="modelsel" id="clearHistory" style="cursor:pointer;text-align:left">🗑 清空所有会话</button>
@@ -845,9 +852,49 @@ engineSel.onchange=()=>{ sendEngine(); addSys('— 已切换为'+(engineSel.valu
 
 /* ---------- 设置面板开关 ---------- */
 const settings=document.getElementById('settings');
-function openSettings(){ settings.hidden=false; }
+function openSettings(){ settings.hidden=false; if(authed()) refreshKnowledge(); }
 function closeSettings(){ settings.hidden=true; }
 document.getElementById('settingsBtn').onclick=openSettings;
+
+/* ---------- 知识库（RAG）：上传 / 列表 / 删除 ---------- */
+async function refreshKnowledge(){
+  const r=await api('GET','/api/knowledge');
+  renderKnowledgeList(r.ok ? (r.data||[]) : []);
+}
+function renderKnowledgeList(docs){
+  const box=document.getElementById('kbList'); if(!box) return;
+  box.innerHTML='';
+  if(!docs.length){ box.innerHTML='<div class="field-hint" style="margin:0">（暂无文档）</div>'; return; }
+  for(const d of docs){
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px';
+    const name=document.createElement('span'); name.textContent='📄 '+(d.title||'未命名'); name.style.cssText='flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    const del=document.createElement('button'); del.className='iconbtn'; del.textContent='🗑'; del.title='删除';
+    del.onclick=()=>deleteKnowledge(d.id);
+    row.appendChild(name); row.appendChild(del); box.appendChild(row);
+  }
+}
+async function deleteKnowledge(id){
+  if(!confirm('从知识库删除该文档？')) return;
+  await api('DELETE','/api/knowledge/'+id);
+  refreshKnowledge();
+}
+async function uploadKnowledge(file){
+  if(!file) return;
+  const btn=document.getElementById('kbUpload'); const old=btn.textContent;
+  btn.textContent='⏳ 上传中…'; btn.disabled=true;
+  try{
+    const fd=new FormData(); fd.append('file', file, file.name);
+    const r=await fetch('/api/knowledge',{method:'POST', headers:authHeaders(), body:fd});
+    let data=null; try{ data=await r.json(); }catch(e){}
+    if(r.status===401){ onAuthExpired(); return; }
+    if(r.ok){ btn.textContent='✅ 已加入知识库'; await refreshKnowledge(); }
+    else { btn.textContent='❌ '+((data&&data.error)||'上传失败'); }
+  }catch(e){ btn.textContent='❌ 上传失败'; }
+  finally{ btn.disabled=false; setTimeout(()=>{ btn.textContent=old; }, 1800); }
+}
+document.getElementById('kbUpload').onclick=()=>document.getElementById('kbFile').click();
+document.getElementById('kbFile').onchange=e=>{ const f=e.target.files[0]; e.target.value=''; uploadKnowledge(f); };
 document.getElementById('settingsClose').onclick=closeSettings;
 document.getElementById('clearHistory').onclick=()=>{ if(confirm('清空所有会话？此操作不可撤销。')) clearAllChats(); };
 document.getElementById('changePwBtn').onclick=changePassword;

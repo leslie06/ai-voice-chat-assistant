@@ -20,6 +20,7 @@ import com.vca.domain.spi.LlmProvider;
 import com.vca.domain.spi.S2sProvider;
 import com.vca.domain.spi.S2sSession;
 import com.vca.domain.spi.TtsProvider;
+import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.recorder.ConversationRecorder;
@@ -100,7 +101,9 @@ public class ConversationSession {
     private volatile ConversationRecorder recorder = ConversationRecorder.NOOP;
     /** 长期记忆端口, 默认不记忆; 登录用户才有 userId */
     private volatile MemoryStore memory = MemoryStore.NOOP;
-    /** 当前登录用户 id(账号系统启用且已登录时非空); 用于长期记忆按用户隔离 */
+    /** 知识库检索端口(RAG), 默认空; 每回合据用户问题自动召回相关资料注入上下文(不依赖模型自调工具) */
+    private volatile KnowledgeStore knowledge = KnowledgeStore.NOOP;
+    /** 当前登录用户 id(账号系统启用且已登录时非空); 用于长期记忆/知识库按用户隔离 */
     private volatile String userId;
     /** 本会话回合序号(落库用, 从 1 递增) */
     private final AtomicInteger turnSeq = new AtomicInteger();
@@ -177,17 +180,51 @@ public class ConversationSession {
         this.userId = userId;
     }
 
+    /** 设置知识库检索端口(RAG); 未设则不检索。userId 由 {@link #setMemory} 一并设置(同一登录用户)。 */
+    public void setKnowledge(KnowledgeStore knowledge) {
+        this.knowledge = knowledge == null ? KnowledgeStore.NOOP : knowledge;
+    }
+
+    /**
+     * 据当前问题自动检索知识库, 命中则拼成一条 system 上下文注入本回合(没命中/未登录返回 null)。
+     * 这是<b>自动注入</b>式 RAG: 不依赖模型自己决定调 search_knowledge 工具, 凡问题能召回到相关资料就直接喂给它,
+     * 召回为空(阈值过滤)时不注入、不影响闲聊。条数/阈值由 {@link KnowledgeStore#search} 实现决定。
+     */
+    private String knowledgeContext(String query) {
+        if (knowledge == KnowledgeStore.NOOP || userId == null || query == null || query.isBlank()) {
+            return null;
+        }
+        List<String> hits;
+        try {
+            hits = knowledge.search(userId, query);
+        } catch (Exception e) {
+            log.debug("知识库检索失败(忽略): {}", e.toString());
+            return null;
+        }
+        if (hits == null || hits.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder(
+                "从用户知识库检索到以下相关资料, 回答时<b>优先据此作答</b>(与你的预设不一致时以资料为准):");
+        for (String h : hits) {
+            if (h != null && !h.isBlank()) {
+                sb.append("\n- ").append(h.strip());
+            }
+        }
+        return sb.toString();
+    }
+
     /**
      * 把该用户的长期记忆拼成一条 system 上下文(没有记忆/未登录则返回 null), 每回合注入,
      * 让助手据此"记得"用户。条数已由 {@link MemoryStore#recall} 截断。
      */
-    private String memoryContext() {
+    private String memoryContext(String query) {
         if (memory == MemoryStore.NOOP || userId == null) {
             return null;
         }
         List<String> mems;
         try {
-            mems = memory.recall(userId);
+            mems = memory.recall(userId, query);
         } catch (Exception e) {
             log.debug("读取长期记忆失败(忽略): {}", e.toString());
             return null;
@@ -395,9 +432,13 @@ public class ConversationSession {
                 // 时间/日期是廉价上下文, 直接给比靠模型调工具更可靠 —— 模型据此直接答对, 无需也无延迟。
                 List<Message> working = new ArrayList<>();
                 working.add(Message.system(currentTimeContext()));
-                String mem = memoryContext();
+                String mem = memoryContext(userText);   // 用当轮问题做语义召回
                 if (mem != null) {
                     working.add(Message.system(mem));   // 长期记忆: 让助手记得用户(跨会话)
+                }
+                String kb = knowledgeContext(userText);   // RAG: 自动检索知识库并注入(不依赖模型自调工具)
+                if (kb != null) {
+                    working.add(Message.system(kb));
                 }
                 working.addAll(historySnapshot());
                 body = runLlmRound(working, 0, speak, reply, actionTurn, firstToken, firstAudio, startNanos);
@@ -737,7 +778,7 @@ public class ConversationSession {
             return null;
         }
         String persona = (base.systemPrompt() == null ? "" : base.systemPrompt()) + "\n\n" + currentTimeContext();
-        String mem = memoryContext();
+        String mem = memoryContext(null);   // S2S 会话级注入, 无当轮 query → 退回最近 N
         if (mem != null) {
             persona = persona + "\n\n" + mem;   // 长期记忆注入端到端人设(seedHistory 会跳过 system, 故走人设)
         }

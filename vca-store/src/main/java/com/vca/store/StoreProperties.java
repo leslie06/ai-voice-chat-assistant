@@ -56,6 +56,16 @@ public class StoreProperties {
     private String mailProxyHost;
     private int mailProxyPort;
 
+    // ---- Embedding(向量化长期记忆 + RAG 知识库): 配了 key 才启用; 否则记忆退回关键词级、RAG 检索为空 ----
+    private boolean embeddingEnabled = true;
+    private String embeddingBaseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+    /** embedding API key; 复用 DASHSCOPE_API_KEY。空则不建 embedder, 功能降级。 */
+    private String embeddingKey;
+    private String embeddingModel = "text-embedding-v4";
+    private int embeddingDim = 1024;
+    /** 可选 HTTP 代理(host:port 形式的 URL, 如 http://127.0.0.1:7890); 本机开代理直连超时时用。 */
+    private String embeddingProxy;
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -206,5 +216,53 @@ public class StoreProperties {
 
     public void setMailProxyPort(int mailProxyPort) {
         this.mailProxyPort = mailProxyPort;
+    }
+
+    public boolean isEmbeddingEnabled() {
+        return embeddingEnabled;
+    }
+
+    public void setEmbeddingEnabled(boolean embeddingEnabled) {
+        this.embeddingEnabled = embeddingEnabled;
+    }
+
+    public String getEmbeddingBaseUrl() {
+        return embeddingBaseUrl;
+    }
+
+    public void setEmbeddingBaseUrl(String embeddingBaseUrl) {
+        this.embeddingBaseUrl = embeddingBaseUrl;
+    }
+
+    public String getEmbeddingKey() {
+        return embeddingKey;
+    }
+
+    public void setEmbeddingKey(String embeddingKey) {
+        this.embeddingKey = embeddingKey;
+    }
+
+    public String getEmbeddingModel() {
+        return embeddingModel;
+    }
+
+    public void setEmbeddingModel(String embeddingModel) {
+        this.embeddingModel = embeddingModel;
+    }
+
+    public int getEmbeddingDim() {
+        return embeddingDim;
+    }
+
+    public void setEmbeddingDim(int embeddingDim) {
+        this.embeddingDim = embeddingDim;
+    }
+
+    public String getEmbeddingProxy() {
+        return embeddingProxy;
+    }
+
+    public void setEmbeddingProxy(String embeddingProxy) {
+        this.embeddingProxy = embeddingProxy;
     }
 }

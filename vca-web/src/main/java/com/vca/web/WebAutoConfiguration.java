@@ -7,11 +7,13 @@ import com.vca.gateway.ProviderGateway;
 import com.vca.web.music.ItunesMusicProvider;
 import com.vca.web.music.LocalMusicProvider;
 import com.vca.web.music.LocalMusicRoute;
+import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.recorder.ConversationRecorder;
 import com.vca.orchestrator.skill.PlayMusicSkill;
 import com.vca.orchestrator.skill.RememberSkill;
+import com.vca.orchestrator.skill.SearchKnowledgeSkill;
 import com.vca.orchestrator.skill.Skill;
 import com.vca.orchestrator.skill.SkillRegistry;
 import com.vca.web.skill.WeatherSkill;
@@ -95,11 +97,13 @@ public class WebAutoConfiguration {
     ConversationSessionFactory conversationSessionFactory(ProviderGateway gateway, WebProperties props,
                                                           TurnMetrics turnMetrics, SkillRegistry skillRegistry,
                                                           ObjectProvider<ConversationRecorder> recorder,
-                                                          ObjectProvider<MemoryStore> memory) {
-        // 落库模块(vca-store)在场且启用时注入其 recorder / 长期记忆; 否则 NOOP(不落库, 对话照常)
+                                                          ObjectProvider<MemoryStore> memory,
+                                                          ObjectProvider<KnowledgeStore> knowledge) {
+        // 落库模块(vca-store)在场且启用时注入其 recorder / 长期记忆 / 知识库; 否则 NOOP(对话照常)
         return new ConversationSessionFactory(gateway, props, turnMetrics, skillRegistry,
                 recorder.getIfAvailable(() -> ConversationRecorder.NOOP),
-                memory.getIfAvailable(() -> MemoryStore.NOOP));
+                memory.getIfAvailable(() -> MemoryStore.NOOP),
+                knowledge.getIfAvailable(() -> KnowledgeStore.NOOP));
     }
 
     /**
@@ -136,6 +140,21 @@ public class WebAutoConfiguration {
             return null;
         }
         return new RememberSkill(store);
+    }
+
+    /**
+     * 知识库检索技能(数据型, RAG): 模型据用户问题判断是否要查其上传的资料。仅当落库模块提供了真实
+     * {@link KnowledgeStore} 时注册(否则不给模型下发查不到东西的工具)。userId 由会话调用时注入。
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    SearchKnowledgeSkill searchKnowledgeSkill(ObjectProvider<KnowledgeStore> knowledge) {
+        KnowledgeStore store = knowledge.getIfAvailable();
+        if (store == null) {
+            log.info("未启用知识库(无 KnowledgeStore), 跳过 search_knowledge 工具");
+            return null;
+        }
+        return new SearchKnowledgeSkill(store);
     }
 
     /**

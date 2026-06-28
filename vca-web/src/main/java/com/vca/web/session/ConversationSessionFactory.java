@@ -7,6 +7,7 @@ import com.vca.domain.model.S2sConfig;
 import com.vca.domain.model.SessionContext;
 import com.vca.domain.model.TtsConfig;
 import com.vca.gateway.ProviderGateway;
+import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.pipeline.SentenceSplitter;
@@ -31,21 +32,25 @@ public class ConversationSessionFactory {
     private final ConversationRecorder recorder;
     /** 长期记忆端口(跨会话个性化); 未启用落库时为 NOOP */
     private final MemoryStore memory;
+    /** 知识库检索端口(RAG, 自动注入); 未启用时为 NOOP */
+    private final KnowledgeStore knowledge;
     private final SentenceSplitter splitter = new SentenceSplitter();
 
     public ConversationSessionFactory(ProviderGateway gateway, WebProperties props, TurnMetrics metrics,
                                       SkillRegistry skills) {
-        this(gateway, props, metrics, skills, ConversationRecorder.NOOP, MemoryStore.NOOP);
+        this(gateway, props, metrics, skills, ConversationRecorder.NOOP, MemoryStore.NOOP, KnowledgeStore.NOOP);
     }
 
     public ConversationSessionFactory(ProviderGateway gateway, WebProperties props, TurnMetrics metrics,
-                                      SkillRegistry skills, ConversationRecorder recorder, MemoryStore memory) {
+                                      SkillRegistry skills, ConversationRecorder recorder, MemoryStore memory,
+                                      KnowledgeStore knowledge) {
         this.gateway = gateway;
         this.props = props;
         this.metrics = metrics;
         this.skills = skills == null ? SkillRegistry.empty() : skills;
         this.recorder = recorder == null ? ConversationRecorder.NOOP : recorder;
         this.memory = memory == null ? MemoryStore.NOOP : memory;
+        this.knowledge = knowledge == null ? KnowledgeStore.NOOP : knowledge;
     }
 
     public ConversationSession create(String sessionId, TurnListener listener) {
@@ -66,6 +71,7 @@ public class ConversationSessionFactory {
         session.setRecorder(recorder);
         if (userId != null && !userId.isBlank()) {
             session.setMemory(memory, userId);
+            session.setKnowledge(knowledge);   // RAG 自动注入按同一登录用户隔离
         }
         return session;
     }

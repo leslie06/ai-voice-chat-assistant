@@ -11,7 +11,7 @@ public interface MemoryStore {
 
     MemoryStore NOOP = new MemoryStore() {
         @Override
-        public List<String> recall(String userId) {
+        public List<String> recall(String userId, String query) {
             return List.of();
         }
 
@@ -20,8 +20,11 @@ public interface MemoryStore {
         }
     };
 
-    /** 取某用户的长期记忆(较新在前, 实现可截断条数)。 */
-    List<String> recall(String userId);
+    /**
+     * 取某用户的长期记忆。{@code query} 非空时按语义相关性召回最相关的若干条(向量召回);
+     * 为空时退回"最近 N 条"(如端到端 S2S 会话级注入, 无当轮 query)。实现自行截断条数。
+     */
+    List<String> recall(String userId, String query);
 
     /** 为某用户新增一条长期记忆。实现自行去重/限量, 失败不抛。 */
     void remember(String userId, String content);

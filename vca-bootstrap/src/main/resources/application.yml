@@ -130,6 +130,12 @@ vca:
     # 可选: JVM 直连 SMTP 被网络重置时, 经 HTTP 代理 CONNECT 隧道发信(如本地 Clash 127.0.0.1:7890)
     mail-proxy-host: ${VCA_STORE_MAIL_PROXY_HOST:}
     mail-proxy-port: ${VCA_STORE_MAIL_PROXY_PORT:0}
+    # Embedding(向量化长期记忆 + RAG 知识库): 复用 DASHSCOPE_API_KEY; 空则关闭(记忆退回关键词级、RAG 不启用)。
+    embedding-enabled: ${VCA_STORE_EMBEDDING_ENABLED:true}
+    embedding-base-url: ${VCA_STORE_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    embedding-key: ${DASHSCOPE_API_KEY:}
+    embedding-model: ${VCA_STORE_EMBEDDING_MODEL:text-embedding-v4}
+    embedding-dim: ${VCA_STORE_EMBEDDING_DIM:1024}
 
   gateway:
     circuit:
