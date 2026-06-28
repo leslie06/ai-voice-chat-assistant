@@ -103,16 +103,38 @@
     details.dbg{max-width:760px;margin:6px auto 0;padding:0 16px;font-size:12px;color:var(--sub);}
     details.dbg pre{background:#1c1c1e;color:#9fe870;padding:8px;border-radius:8px;white-space:pre-wrap;overflow:auto;}
     details.dbg button{font:inherit;padding:4px 10px;margin-right:6px;border:1px solid var(--line);border-radius:8px;background:var(--bg);cursor:pointer;}
+    /* 登录态切换 + 落地页 + 登录注册 */
+    body.logged-in .guestonly{display:none!important;}
+    body.logged-out .authonly{display:none!important;}
+    body.logged-out #chat{display:none;}
+    body.logged-in #hero{display:none;}
+    .authctas{display:flex;gap:8px;align-items:center;}
+    .cta-ghost{border:1px solid var(--line);background:var(--bg);border-radius:18px;padding:6px 14px;font:inherit;font-size:13.5px;cursor:pointer;color:var(--text);}
+    .cta-solid{border:none;background:var(--text);color:#fff;border-radius:18px;padding:7px 16px;font:inherit;font-size:13.5px;cursor:pointer;}
+    .cta-ghost:hover{background:var(--panel);}
+    .linkbtn{border:none;background:none;color:var(--user);font:inherit;font-size:13.5px;cursor:pointer;}
+    .hero{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:62vh;text-align:center;padding:0 16px;}
+    .hero-title{font-size:27px;font-weight:600;letter-spacing:.5px;}
+    .hero-sub{color:var(--sub);margin-top:12px;font-size:14px;}
+    .merow{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+    .mename{font-size:13.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .authpanel input.modelsel{cursor:text;}
   </style>
 </head>
-<body>
+<body class="logged-out">
   <!-- 左侧会话栏(类 ChatGPT): 新聊天 + 历史会话列表; 窄屏为抽屉 -->
   <aside class="sidebar" id="sidebar">
     <div class="sb-top">
       <button class="newchat" id="newChat" title="新建会话">✏️ 新聊天</button>
     </div>
     <div class="conv-list" id="convList"></div>
-    <div class="sb-foot">小智AI · 本机多会话</div>
+    <div class="sb-foot">
+      <button class="newchat guestonly" id="sbLogin">登录 / 注册</button>
+      <div class="merow authonly">
+        <span class="mename" id="meName"></span>
+        <button class="iconbtn" id="logoutBtn" title="退出登录">退出</button>
+      </div>
+    </div>
   </aside>
   <div class="sb-backdrop" id="sbBackdrop"></div>
 
@@ -122,10 +144,18 @@
     <span class="dot" id="dot"></span>
     <h1 id="convTitle">小智AI</h1>
     <button class="iconbtn" id="bargeBtn" title="打断" style="display:none">⏹</button>
-    <button class="iconbtn" id="settingsBtn" title="设置">⚙</button>
+    <button class="iconbtn authonly" id="settingsBtn" title="设置">⚙</button>
+    <div class="authctas guestonly">
+      <button class="cta-ghost" id="loginBtn">登录</button>
+      <button class="cta-solid" id="registerBtn">免费注册</button>
+    </div>
   </header>
 
   <main id="main">
+    <div class="hero guestonly" id="hero">
+      <div class="hero-title">我们先从哪里开始呢？</div>
+      <div class="hero-sub">登录或注册后即可保存并继续你的对话</div>
+    </div>
     <div class="wrap" id="chat">
       <div class="empty" id="empty">👋 你好，我是语音助手<br>点击 🎙 开启免提语音，或直接打字</div>
     </div>
@@ -142,6 +172,27 @@
       </div>
     </div>
   </footer>
+  </div>
+
+  <!-- 登录/注册模态 -->
+  <div class="overlay" id="authOverlay" hidden>
+    <div class="panel authpanel" style="max-width:360px">
+      <div class="panel-head">
+        <h2 id="authTitle">登录</h2>
+        <button class="iconbtn" id="authClose" title="关闭">✕</button>
+      </div>
+      <div class="field">
+        <label for="authUser">用户名</label>
+        <input class="modelsel" id="authUser" autocomplete="username" placeholder="2-32 个字符">
+      </div>
+      <div class="field">
+        <label for="authPass">密码</label>
+        <input class="modelsel" id="authPass" type="password" autocomplete="current-password" placeholder="至少 6 位">
+      </div>
+      <div id="authErr" style="color:var(--danger);font-size:13px;min-height:18px;margin:2px 0 8px"></div>
+      <button class="cta-solid" id="authSubmit" style="width:100%;padding:10px">登录</button>
+      <button class="linkbtn" id="authToggle" style="width:100%;margin-top:12px">没有账号？去注册</button>
+    </div>
   </div>
 
   <!-- 设置面板(ChatGPT 式): 默认隐藏, 点 ⚙ 打开; 模型选择/调试信息都收在这里, 不暴露在主界面 -->
@@ -252,7 +303,7 @@
       <div class="field">
         <label>对话记录</label>
         <button class="modelsel" id="clearHistory" style="cursor:pointer;text-align:left">🗑 清空所有会话</button>
-        <div class="field-hint">所有会话与聊天记录保存在本机浏览器，刷新或重开页面会自动恢复；左侧可新建/切换/删除单个会话。点此清空全部（仅清本机，不影响服务端数据）。</div>
+        <div class="field-hint">所有会话与消息按账号保存在服务端，仅你本人可见，换设备登录也能看到。左侧可新建/切换/删除单个会话；点此清空你账号下的全部会话（不可撤销）。</div>
       </div>
       <details class="dbg">
         <summary>调试信息</summary>
@@ -368,102 +419,158 @@ function botFinish(text){ if(text!=null) botText=text; const had=botBubble; if(b
   if(had && botText && botText.trim()) pushHist({role:'bot', text:botText});
   botBubble=null; turnActive=false; bargeBtn.style.display='none'; }
 
-/* ---------- 多会话(类 ChatGPT) + 本机持久化 ----------
-   会话只是"展示视图 + 上下文", 存浏览器 localStorage 即可还原。每个会话独立历史; 切换/新建时把该
-   会话历史经 load_history 回灌后端, 让模型据此续聊。与后端 conversation_turn 落库(评测用)解耦。 */
-const CKEY='vca_chats_v1', CMAX=50, MMAX=300;
-let restoring=false;   // 还原渲染期间不回写, 防止重复累积
-function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
-function loadChats(){
-  try{ const o=JSON.parse(localStorage.getItem(CKEY)); if(o&&o.list) return o; }catch(e){}
-  // 从旧的单历史(vca_chat_history_v1)迁移成一个会话
-  let migrated=null;
-  try{ const old=JSON.parse(localStorage.getItem('vca_chat_history_v1')||'[]');
-    if(old.length){ migrated={id:uid(),title:titleFrom(old),createdAt:Date.now(),updatedAt:Date.now(),messages:old}; } }catch(e){}
-  const conv=migrated||{id:uid(),title:'新对话',createdAt:Date.now(),updatedAt:Date.now(),messages:[]};
-  const o={activeId:conv.id,list:[conv]}; saveChats(o);
-  try{ localStorage.removeItem('vca_chat_history_v1'); }catch(e){}
-  return o;
+/* ---------- 账号 + 服务端会话(类 ChatGPT, 按用户隔离) ----------
+   会话与消息全存服务端(MySQL), 按登录用户隔离 —— 每人只看自己的历史。前端只持有登录令牌。
+   切换/新建会话时把该会话文本历史经 WS load_history 回灌后端模型, 让它据此续聊。 */
+let token=localStorage.getItem('vca_auth_token')||'';
+let me=null;                 // 当前用户名
+let convs=[];                // [{id,title,updatedAt}]
+let activeId=null;           // 当前会话 id(字符串)
+let activeMsgs=[];           // 当前会话消息 [{role,content}]
+let restoring=false;         // 还原渲染期间不回写
+let guest=false;             // 未启用账号系统(无 DB)时的访客模式: 不登录直接用, 不做服务端持久化
+function authed(){ return !!token && !!me; }
+function canUse(){ return authed() || guest; }   // 能否使用对话(登录 或 访客)
+function authHeaders(extra){ const h=Object.assign({},extra||{}); if(token) h['Authorization']='Bearer '+token; return h; }
+async function api(method, path, body){
+  try{
+    const opt={method, headers:authHeaders(body?{'Content-Type':'application/json'}:{})};
+    if(body) opt.body=JSON.stringify(body);
+    const r=await fetch(path, opt);
+    let data=null; try{ data=await r.json(); }catch(e){}
+    if(r.status===401){ onAuthExpired(); }
+    return {ok:r.ok, status:r.status, data};
+  }catch(e){ return {ok:false, status:0, data:null}; }
 }
-function saveChats(o){ try{ localStorage.setItem(CKEY, JSON.stringify(o)); }catch(e){} }
-let chats=loadChats();
-function activeConv(){ return chats.list.find(c=>c.id===chats.activeId) || chats.list[0]; }
-function titleFrom(msgs){ const u=(msgs||[]).find(m=>m.role==='user');
-  const t=(u&&(u.text||''))||'新对话'; return t.length>22? t.slice(0,22)+'…' : t; }
+function onAuthExpired(){ if(token){ token=''; me=null; localStorage.removeItem('vca_auth_token'); showLanding(); } }
 
-// 写入当前会话(展示侧 addMsg/botFinish/addMusic 调用), restoring 时跳过
+/* 写入当前会话(展示侧 addMsg/botFinish/addMusic 调用); restoring/未登录时跳过。fire-and-forget。 */
 function pushMsg(rec){
-  if(restoring) return;
-  const c=activeConv(); if(!c) return;
-  c.messages.push(rec);
-  if(c.messages.length>MMAX) c.messages.splice(0, c.messages.length-MMAX);
-  if((c.title==='新对话'||!c.title) && rec.role==='user') c.title=titleFrom(c.messages);
-  c.updatedAt=Date.now();
-  // 最近活跃的排前面
-  chats.list.sort((a,b)=>b.updatedAt-a.updatedAt);
-  saveChats(chats); renderConvList();
+  if(restoring || !authed() || !activeId) return;
+  const content = rec.role==='music' ? JSON.stringify(rec.data||{}) : (rec.text||'');
+  activeMsgs.push({role:rec.role, content});
+  api('POST','/api/conversations/'+activeId+'/messages',{role:rec.role, content})
+    .then(()=>{ if(rec.role==='user') refreshConvs(); });   // 首条 user 会改标题, 刷新列表
 }
-// 仅向后端回灌文本历史(音乐不算上下文)
-function historyForBackend(c){ return (c.messages||[])
-  .filter(m=>m.role==='user'||m.role==='bot').map(m=>({role:m.role,text:m.text})); }
-function sendHistory(){ const c=activeConv(); send({type:'load_history',messages:c?historyForBackend(c):[]}); }
+function pushHist(rec){ pushMsg(rec); }   // 兼容旧名
+
+/* 向后端 WS 回灌当前会话文本历史(音乐不算上下文) */
+function historyForBackend(){ return (activeMsgs||[])
+  .filter(m=>m.role==='user'||m.role==='bot').map(m=>({role:m.role,text:m.content})); }
+function sendHistory(){ send({type:'load_history',messages:authed()?historyForBackend():[]}); }
+
+async function refreshConvs(){ const r=await api('GET','/api/conversations'); if(r.ok){ convs=r.data||[]; renderConvList(); } }
+async function openConv(id){
+  activeId=id;
+  const r=await api('GET','/api/conversations/'+id+'/messages');
+  activeMsgs = r.ok ? (r.data||[]) : [];
+  renderConvList(); renderActiveConv(); sendHistory(); closeSidebar();
+}
+async function newChat(){
+  if(!authed()){ if(guest){ closeSidebar(); return; } openAuth('login'); return; }
+  const r=await api('POST','/api/conversations',{});
+  if(r.ok){ convs.unshift(r.data); activeId=r.data.id; activeMsgs=[];
+    renderConvList(); renderActiveConv(); sendHistory(); closeSidebar(); }
+}
+async function deleteChat(id){
+  if(!confirm('删除该会话？此操作不可撤销。')) return;
+  await api('DELETE','/api/conversations/'+id);
+  await refreshConvs();
+  if(id===activeId){ if(convs.length) openConv(convs[0].id); else newChat(); }
+}
+async function clearAllChats(){
+  if(!authed()) return;
+  for(const c of convs.slice()){ await api('DELETE','/api/conversations/'+c.id); }
+  await refreshConvs(); await newChat();
+}
 
 function renderActiveConv(){
-  chat.innerHTML='';   // 清空对话区(含空态)
-  const c=activeConv();
-  document.getElementById('convTitle').textContent=(c&&c.title)||'小智AI';
-  if(!c || !c.messages.length){
+  chat.innerHTML='';
+  const cur=convs.find(c=>c.id===activeId);
+  document.getElementById('convTitle').textContent=(cur&&cur.title)||'小智AI';
+  if(!activeMsgs.length){
     const e=document.createElement('div'); e.className='empty'; e.id='empty';
     e.innerHTML='👋 你好，我是语音助手<br>点击 🎙 开启免提语音，或直接打字'; chat.appendChild(e);
     return;
   }
   restoring=true;
-  for(const r of c.messages){
-    if(r.role==='user') addMsg('user', r.text);
-    else if(r.role==='bot') addMsg('bot', r.text);
-    else if(r.role==='music'){ const t=r.data||{};
+  for(const r of activeMsgs){
+    if(r.role==='user') addMsg('user', r.content);
+    else if(r.role==='bot') addMsg('bot', r.content);
+    else if(r.role==='music'){ let t={}; try{ t=JSON.parse(r.content||'{}'); }catch(e){}
       addMsg('bot', '🎵 已播放《'+(t.title||t.query||'')+'》'+(t.artist?(' — '+t.artist):'')); }
   }
   restoring=false; scroll();
 }
 function renderConvList(){
   const box=document.getElementById('convList'); box.innerHTML='';
-  for(const c of chats.list){
-    const it=document.createElement('div'); it.className='conv'+(c.id===chats.activeId?' active':'');
+  for(const c of convs){
+    const it=document.createElement('div'); it.className='conv'+(c.id===activeId?' active':'');
     const t=document.createElement('div'); t.className='t'; t.textContent=c.title||'新对话';
     const del=document.createElement('button'); del.className='del'; del.textContent='🗑'; del.title='删除会话';
     it.append(t,del);
-    it.onclick=(e)=>{ if(e.target===del) return; switchChat(c.id); };
+    it.onclick=(e)=>{ if(e.target===del) return; if(c.id!==activeId) openConv(c.id); else closeSidebar(); };
     del.onclick=(e)=>{ e.stopPropagation(); deleteChat(c.id); };
     box.appendChild(it);
   }
 }
-function switchChat(id){
-  if(id===chats.activeId){ closeSidebar(); return; }
-  chats.activeId=id; saveChats(chats);
-  renderConvList(); renderActiveConv(); sendHistory(); closeSidebar();
+
+/* ---------- 登录态切换 ---------- */
+function showLanding(){
+  document.body.classList.remove('logged-in'); document.body.classList.add('logged-out');
+  convs=[]; activeId=null; activeMsgs=[]; renderConvList();
+  chat.innerHTML=''; document.getElementById('convTitle').textContent='小智AI';
+  if(ws){ try{ws.close();}catch(e){} ws=null; }   // 退出后断开语音连接
 }
-function newChat(){
-  // 若当前已是空会话则不再新建, 直接复用
-  const cur=activeConv();
-  if(cur && !cur.messages.length){ closeSidebar(); return; }
-  const c={id:uid(),title:'新对话',createdAt:Date.now(),updatedAt:Date.now(),messages:[]};
-  chats.list.unshift(c); if(chats.list.length>CMAX) chats.list.length=CMAX;
-  chats.activeId=c.id; saveChats(chats);
-  renderConvList(); renderActiveConv(); sendHistory(); closeSidebar();
+async function enterApp(){
+  document.body.classList.remove('logged-out'); document.body.classList.add('logged-in');
+  document.getElementById('meName').textContent=me||'';
+  await refreshConvs();
+  if(convs.length) await openConv(convs[0].id); else await newChat();
+  connect();   // 连 WS(onopen 会按当前会话 sendHistory)
 }
-function deleteChat(id){
-  if(!confirm('删除该会话？此操作不可撤销。')) return;
-  chats.list=chats.list.filter(c=>c.id!==id);
-  if(!chats.list.length){ chats.list=[{id:uid(),title:'新对话',createdAt:Date.now(),updatedAt:Date.now(),messages:[]}]; }
-  const wasActive=(id===chats.activeId);
-  if(wasActive) chats.activeId=chats.list[0].id;
-  saveChats(chats); renderConvList();
-  if(wasActive){ renderActiveConv(); sendHistory(); }
+async function boot(){
+  if(token){
+    const r=await api('GET','/api/me');
+    if(r.ok && r.data){ me=r.data.username; await enterApp(); return; }
+    if(r.status===401){ token=''; localStorage.removeItem('vca_auth_token'); }  // 令牌失效→落地页
+  }
+  // 探测账号系统是否启用: 无有效 token 访问受保护接口, 401=启用(需登录), 404/0=未启用(访客直接用)
+  const probe=await api('GET','/api/conversations');
+  if(probe.status===401){ showLanding(); }
+  else { startGuest(); }
 }
-function clearAllChats(){ localStorage.removeItem(CKEY); location.reload(); }
-// 兼容旧名(hooks 仍调用 pushHist): 转发到 pushMsg
-function pushHist(rec){ pushMsg(rec); }
+function startGuest(){   // 无账号系统: 访客模式, 直接进 App(无登录/无服务端会话)
+  guest=true;
+  document.body.classList.remove('logged-out'); document.body.classList.add('logged-in');
+  convs=[]; activeId=null; activeMsgs=[]; renderConvList(); renderActiveConv();
+  connect();
+}
+function logout(){ token=''; me=null; localStorage.removeItem('vca_auth_token'); showLanding(); }
+
+/* ---------- 登录/注册模态(用户名 + 密码) ---------- */
+let authMode='login';
+function openAuth(mode){ authMode=mode||'login'; renderAuth(); document.getElementById('authOverlay').hidden=false;
+  setTimeout(()=>{ const u=document.getElementById('authUser'); if(u) u.focus(); },50); }
+function closeAuth(){ document.getElementById('authOverlay').hidden=true; document.getElementById('authErr').textContent=''; }
+function renderAuth(){
+  document.getElementById('authTitle').textContent = authMode==='login'?'登录':'注册';
+  document.getElementById('authSubmit').textContent = authMode==='login'?'登录':'注册';
+  document.getElementById('authToggle').textContent = authMode==='login'?'没有账号？去注册':'已有账号？去登录';
+  document.getElementById('authErr').textContent='';
+}
+async function submitAuth(){
+  const u=document.getElementById('authUser').value.trim();
+  const p=document.getElementById('authPass').value;
+  if(!u||!p){ document.getElementById('authErr').textContent='请输入用户名和密码'; return; }
+  const r=await api('POST', authMode==='login'?'/api/login':'/api/register', {username:u,password:p});
+  if(r.ok && r.data && r.data.token){
+    token=r.data.token; me=r.data.username; localStorage.setItem('vca_auth_token',token);
+    closeAuth(); await enterApp();
+  } else {
+    document.getElementById('authErr').textContent=(r.data&&r.data.error)||'操作失败，请重试';
+  }
+}
 
 /* ---------- AudioContext ---------- */
 let audioCtx=null;
@@ -483,16 +590,23 @@ function getToken(){
   return localStorage.getItem('vca_token') || '';
 }
 function connect(){
+  if(!authed() && !guest) return;   // 未登录(且非访客)不连语音; 退出后断连也靠它阻止重连
   const proto=location.protocol==='https:'?'wss':'ws';
-  const t=getToken();
+  // 统一登录: 已登录用用户令牌鉴权 WS; 访客(无账号系统)回退共享 token
+  const t = authed() ? token : getToken();
   const q=t?('?token='+encodeURIComponent(t)):'';
   ws=new WebSocket(`${proto}://${location.host}/ws/voice${q}`); ws.binaryType='arraybuffer';
   ws.onopen=()=>{ D.ws='已连接'; dot.className='dot on'; paint(); sendModel(); sendVoice(); sendEngine(); sendHistory(); };
   ws.onclose=(ev)=>{
-    if(ev.code===1008){ // 鉴权失败: 提示输入 token 后立即重连
+    if(ev.code===1008){ // 鉴权失败
+      if(authed()){ // 登录令牌失效(密钥变更/过期): 回登录页, 不重连
+        D.ws='登录失效'; dot.className='dot off'; paint(); onAuthExpired(); return;
+      }
+      // 访客(无账号系统)走共享 token: 提示输入后重连
       const v=prompt('需要访问令牌 (token):', localStorage.getItem('vca_token')||'');
       if(v){ localStorage.setItem('vca_token', v); D.ws='重连中'; dot.className='dot off'; paint(); setTimeout(connect,300); return; }
     }
+    if(!authed() && !guest){ D.ws='已断开'; dot.className='dot off'; paint(); return; }  // 已退出, 不重连
     D.ws='断开,3s重连'; dot.className='dot off'; paint(); setTimeout(connect,3000);
   };
   ws.onmessage=(ev)=>{
@@ -594,6 +708,7 @@ function announceMic(){ send({type:'mic',sampleRate:audioCtx.sampleRate}); }
 /* ---------- 按住说话 (PTT) ---------- */
 let talking=false;
 async function startTalk(){ if(hfBtn.classList.contains('on')) return;
+  if(!canUse()){ openAuth('login'); return; }
   unlockMedia();   // 手势内解锁 <audio>(iOS), 让随后语音点歌能自动出声
   try{ await ensureMic(); }catch(e){ addSys('⚠ 麦克风: '+e.message); return; }
   announceMic(); send({type:'ptt',value:'start'}); talking=true; streaming=true; talkBtn.classList.add('rec'); }
@@ -604,6 +719,7 @@ talkBtn.addEventListener('pointercancel',endTalk);
 
 /* ---------- 免提 ---------- */
 hfBtn.onclick=async()=>{
+  if(!canUse()){ openAuth('login'); return; }
   if(!hfBtn.classList.contains('on')){
     unlockMedia();   // 手势内解锁 <audio> 播放通道(iOS), 让语音点歌能自动出声
     try{ await ensureMic(); }catch(e){ addSys('⚠ 麦克风: '+e.message); return; }
@@ -616,7 +732,9 @@ hfBtn.onclick=async()=>{
 };
 
 /* ---------- 文本 ---------- */
-async function sendText(){ const t=ta.value.trim(); if(!t) return; await ensureAudio();
+async function sendText(){ const t=ta.value.trim(); if(!t) return;
+  if(!canUse()){ openAuth('login'); return; }
+  await ensureAudio();
   // 文本输入: 本地直接回显, 后端不再 echo; 自行进入"回合中"以便渲染流式回复
   addMsg('user',t); turnActive=true; acceptAudio=true; bargeBtn.style.display='inline';
   send({type:'text',text:t}); ta.value=''; ta.style.height='auto'; }
@@ -665,14 +783,24 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&!settings.hidden) 
 
 const main=document.getElementById('main');
 
-/* ---------- 侧栏(会话列表)开关与按钮 ---------- */
+/* ---------- 侧栏 + 账号按钮接线 ---------- */
 function openSidebar(){ document.body.classList.add('sb-open'); }
 function closeSidebar(){ document.body.classList.remove('sb-open'); }
 document.getElementById('newChat').onclick=newChat;
 document.getElementById('sbToggle').onclick=openSidebar;
 document.getElementById('sbBackdrop').onclick=closeSidebar;
+document.getElementById('loginBtn').onclick=()=>openAuth('login');
+document.getElementById('registerBtn').onclick=()=>openAuth('register');
+document.getElementById('sbLogin').onclick=()=>openAuth('login');
+document.getElementById('logoutBtn').onclick=logout;
+document.getElementById('authClose').onclick=closeAuth;
+document.getElementById('authSubmit').onclick=submitAuth;
+document.getElementById('authToggle').onclick=()=>{ authMode=(authMode==='login'?'register':'login'); renderAuth(); };
+document.getElementById('authOverlay').addEventListener('click',e=>{ if(e.target.id==='authOverlay') closeAuth(); });
+document.getElementById('authPass').addEventListener('keydown',e=>{ if(e.key==='Enter') submitAuth(); });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && !document.getElementById('authOverlay').hidden) closeAuth(); });
 
-paint(); renderConvList(); renderActiveConv(); connect();   // 先渲染会话列表+当前会话, 再连 WS(onopen 回灌历史)
+paint(); boot();   // 校验登录态 → 登录则进 App(拉会话+连WS), 否则落地页
 </script>
 </body>
 </html>

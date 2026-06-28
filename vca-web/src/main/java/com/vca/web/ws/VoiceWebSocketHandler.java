@@ -85,8 +85,10 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
     private final Supplier<VoiceActivityDetector> vadDetectorFactory;
     private final MusicProvider musicProvider;
 
-    /** 共享访问令牌; 空=不校验。 */
+    /** 共享访问令牌; 空=不校验。仅在<b>未启用账号系统</b>(无 {@link #authenticator})时作为回退鉴权。 */
     private final String authToken;
+    /** 用户登录令牌校验器; 非空表示账号系统启用 —— 此时 WS 用<b>用户令牌</b>鉴权, 忽略共享 token。 */
+    private final com.vca.orchestrator.auth.TokenAuthenticator authenticator;
     /** 单会话最长存活秒数; <=0=不限。 */
     private final int maxSessionSeconds;
     /** 同时在线连接上限; <=0=不限。 */
@@ -98,7 +100,8 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
 
     public VoiceWebSocketHandler(ConversationSessionFactory sessionFactory, ObjectMapper mapper, VadConfig vadConfig,
                                  Supplier<VoiceActivityDetector> vadDetectorFactory, MusicProvider musicProvider,
-                                 String authToken, int maxSessionSeconds, int maxConnections, boolean s2sPersistent) {
+                                 String authToken, int maxSessionSeconds, int maxConnections, boolean s2sPersistent,
+                                 com.vca.orchestrator.auth.TokenAuthenticator authenticator) {
         this.sessionFactory = sessionFactory;
         this.mapper = mapper;
         this.vadConfig = vadConfig;
@@ -108,13 +111,20 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         this.maxSessionSeconds = maxSessionSeconds;
         this.maxConnections = maxConnections;
         this.s2sPersistent = s2sPersistent;
+        this.authenticator = authenticator;
     }
 
     @Override
     public Mono<Void> handle(WebSocketSession session) {
-        // 1) 鉴权: 配置了共享 token 才校验, 不匹配直接关闭。
-        if (!authToken.isEmpty() && !authToken.equals(queryParam(session, "token"))) {
-            log.warn("WS 鉴权失败, 拒绝连接: {}", session.getId());
+        // 1) 鉴权: 启用账号系统则用用户登录令牌校验(统一一套登录); 否则回退共享 token。
+        String token = queryParam(session, "token");
+        if (authenticator != null) {
+            if (authenticator.authenticate(token) == null) {
+                log.warn("WS 用户令牌无效, 拒绝连接: {}", session.getId());
+                return session.close(CloseStatus.POLICY_VIOLATION.withReason("invalid token"));
+            }
+        } else if (!authToken.isEmpty() && !authToken.equals(token)) {
+            log.warn("WS 鉴权失败(共享 token 不匹配), 拒绝连接: {}", session.getId());
             return session.close(CloseStatus.POLICY_VIOLATION.withReason("invalid token"));
         }
         // 2) 连接数上限: 先占坑, 超限则立刻退坑并拒绝。

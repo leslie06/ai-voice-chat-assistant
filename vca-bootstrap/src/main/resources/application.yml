@@ -108,6 +108,8 @@ vca:
     username: ${VCA_STORE_USERNAME:root}
     password: ${VCA_STORE_PASSWORD:}
     queue-capacity: ${VCA_STORE_QUEUE_CAPACITY:1000}
+    # 登录令牌签名密钥: 生产务必经 VCA_STORE_TOKEN_SECRET 设一个随机串; 改了会让已登录用户全部失效。
+    token-secret: ${VCA_STORE_TOKEN_SECRET:vca-default-secret-change-me}
 
   gateway:
     circuit:

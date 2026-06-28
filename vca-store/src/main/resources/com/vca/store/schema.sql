@@ -14,3 +14,36 @@ CREATE TABLE IF NOT EXISTS conversation_turn (
     KEY idx_turn_session (session_id, turn_index),   -- 按会话回溯整段对话
     KEY idx_turn_created (created_at)                -- 按时间做评测切片
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '对话存档(数据飞轮)';
+
+-- 用户账号: 密码用 PBKDF2 加盐哈希(不存明文)。
+CREATE TABLE IF NOT EXISTS app_user (
+    id         BIGINT       NOT NULL AUTO_INCREMENT,
+    username   VARCHAR(64)  NOT NULL,
+    pass_salt  VARCHAR(64)  NOT NULL,
+    pass_hash  VARCHAR(128) NOT NULL,
+    created_at DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_user_name (username)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户账号';
+
+-- 每个用户的会话(类 ChatGPT 左侧列表)。按 user_id 隔离。
+CREATE TABLE IF NOT EXISTS chat_conversation (
+    id         BIGINT       NOT NULL AUTO_INCREMENT,
+    user_id    BIGINT       NOT NULL,
+    title      VARCHAR(255),
+    created_at DATETIME     NOT NULL,
+    updated_at DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    KEY idx_conv_user (user_id, updated_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户会话';
+
+-- 会话内的消息(展示用)。role: user | bot | music。
+CREATE TABLE IF NOT EXISTS chat_message (
+    id              BIGINT      NOT NULL AUTO_INCREMENT,
+    conversation_id BIGINT      NOT NULL,
+    role            VARCHAR(16) NOT NULL COMMENT 'user | bot | music',
+    content         TEXT,
+    created_at      DATETIME    NOT NULL,
+    PRIMARY KEY (id),
+    KEY idx_msg_conv (conversation_id, id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '会话消息';

@@ -1,8 +1,17 @@
 package com.vca.store;
 
+import com.vca.orchestrator.auth.TokenAuthenticator;
 import com.vca.orchestrator.recorder.ConversationRecorder;
+import com.vca.store.account.AccountRoutes;
+import com.vca.store.account.ConversationService;
+import com.vca.store.account.UserService;
+import com.vca.store.account.UserTokenAuthenticator;
+import com.vca.store.auth.TokenUtil;
 import com.vca.store.eval.ConversationEvaluator;
 import com.vca.store.eval.EvaluationRoute;
+import com.vca.store.mapper.AppUserMapper;
+import com.vca.store.mapper.ChatConversationMapper;
+import com.vca.store.mapper.ChatMessageMapper;
 import com.vca.store.mapper.ConversationTurnMapper;
 import com.vca.store.mapper.EvaluationMapper;
 import com.zaxxer.hikari.HikariConfig;
@@ -95,5 +104,59 @@ public class StoreAutoConfiguration {
             org.springframework.web.reactive.function.server.ServerResponse> evaluationRoute(
             ConversationEvaluator conversationEvaluator) {
         return EvaluationRoute.create(conversationEvaluator);
+    }
+
+    // ---- 账号 + 服务端会话(类 ChatGPT, 按用户隔离): 暴露 /api/** ----
+
+    @Bean
+    @ConditionalOnMissingBean
+    AppUserMapper appUserMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, AppUserMapper.class);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    ChatConversationMapper chatConversationMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, ChatConversationMapper.class);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    ChatMessageMapper chatMessageMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, ChatMessageMapper.class);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    TokenUtil tokenUtil(StoreProperties props) {
+        return new TokenUtil(props.getTokenSecret());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    UserService userService(AppUserMapper appUserMapper, TokenUtil tokenUtil) {
+        return new UserService(appUserMapper, tokenUtil);
+    }
+
+    /** 用户令牌校验器: 接入层(WS)据此用同一套登录令牌鉴权, 不再需要独立的共享 token。 */
+    @Bean
+    @ConditionalOnMissingBean(TokenAuthenticator.class)
+    TokenAuthenticator tokenAuthenticator(UserService userService) {
+        return new UserTokenAuthenticator(userService);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    ConversationService conversationService(ChatConversationMapper chatConversationMapper,
+                                            ChatMessageMapper chatMessageMapper) {
+        return new ConversationService(chatConversationMapper, chatMessageMapper);
+    }
+
+    /** 账号/会话 REST(/api/**)挂成 RouterFunction Bean。 */
+    @Bean
+    org.springframework.web.reactive.function.server.RouterFunction<
+            org.springframework.web.reactive.function.server.ServerResponse> accountRoutes(
+            UserService userService, ConversationService conversationService) {
+        return AccountRoutes.create(userService, conversationService);
     }
 }

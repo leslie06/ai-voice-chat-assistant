@@ -159,10 +159,12 @@ public class WebAutoConfiguration {
     @ConditionalOnMissingBean
     VoiceWebSocketHandler voiceWebSocketHandler(ConversationSessionFactory factory, ObjectMapper objectMapper,
                                                 WebProperties props, MusicProvider musicProvider,
-                                                java.util.function.Supplier<VoiceActivityDetector> vadDetectorFactory) {
+                                                java.util.function.Supplier<VoiceActivityDetector> vadDetectorFactory,
+                                                ObjectProvider<com.vca.orchestrator.auth.TokenAuthenticator> authenticator) {
+        // 账号系统(vca-store)在场时注入用户令牌校验器, WS 即用用户登录令牌鉴权; 否则回退共享 token。
         return new VoiceWebSocketHandler(factory, objectMapper, props.getVad().toConfig(), vadDetectorFactory,
                 musicProvider, props.getAuthToken(), props.getMaxSessionSeconds(), props.getMaxConnections(),
-                props.isS2sPersistent());
+                props.isS2sPersistent(), authenticator.getIfAvailable());
     }
 
     /** 把 WS 端点路径映射到 handler。order 取较高优先级, 先于注解控制器匹配。 */

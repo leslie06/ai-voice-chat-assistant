@@ -2,6 +2,9 @@ package com.vca.store;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
+import com.vca.store.mapper.AppUserMapper;
+import com.vca.store.mapper.ChatConversationMapper;
+import com.vca.store.mapper.ChatMessageMapper;
 import com.vca.store.mapper.ConversationTurnMapper;
 import com.vca.store.mapper.EvaluationMapper;
 import org.apache.ibatis.session.SqlSessionFactory;
@@ -31,6 +34,9 @@ final class MyBatisSupport {
             SqlSessionFactory factory = factoryBean.getObject();
             factory.getConfiguration().addMapper(ConversationTurnMapper.class);
             factory.getConfiguration().addMapper(EvaluationMapper.class);
+            factory.getConfiguration().addMapper(AppUserMapper.class);
+            factory.getConfiguration().addMapper(ChatConversationMapper.class);
+            factory.getConfiguration().addMapper(ChatMessageMapper.class);
             return factory;
         } catch (Exception e) {
             throw new IllegalStateException("构建对话存档 SqlSessionFactory 失败", e);

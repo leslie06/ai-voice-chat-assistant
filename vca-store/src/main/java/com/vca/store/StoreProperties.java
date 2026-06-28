@@ -27,6 +27,9 @@ public class StoreProperties {
     /** 异步落库队列容量。满了丢最旧, 保护语音热路径。 */
     private int queueCapacity = 1000;
 
+    /** 登录令牌 HMAC 签名密钥。生产务必经 env 设一个随机串; 改了它会让已签发令牌全部失效。 */
+    private String tokenSecret = "vca-default-secret-change-me";
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -73,5 +76,13 @@ public class StoreProperties {
 
     public void setQueueCapacity(int queueCapacity) {
         this.queueCapacity = queueCapacity;
+    }
+
+    public String getTokenSecret() {
+        return tokenSecret;
+    }
+
+    public void setTokenSecret(String tokenSecret) {
+        this.tokenSecret = tokenSecret;
     }
 }

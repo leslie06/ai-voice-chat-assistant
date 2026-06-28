@@ -52,7 +52,18 @@
       "Bash(mvn -q -pl vca-web -am compile)",
       "Bash(mvn -q -T1C install -DskipTests)",
       "Bash(mvn -q -pl vca-orchestrator,vca-web test)",
-      "Bash(mvn -pl vca-orchestrator,vca-web test)"
+      "Bash(mvn -pl vca-orchestrator,vca-web test)",
+      "Bash(mysql -h127.0.0.1 -P3306 -uroot -p123456 vca -e \"SHOW TABLES;\")",
+      "Bash(mysql -h127.0.0.1 -P3306 -uroot -p123456 vca -e \"DELETE FROM chat_message; DELETE FROM chat_conversation; DELETE FROM app_user;\")",
+      "Bash(mvn -q -pl vca-web,vca-store -am compile)",
+      "Bash(cd *)",
+      "Bash(mvn -pl vca-orchestrator,vca-web,vca-store test)",
+      "Bash(mysql -h127.0.0.1 -P3306 -uroot -p123456 vca -e \"DROP TABLE IF EXISTS app_user;\")",
+      "Bash(mysql -h127.0.0.1 -P3306 -uroot -p123456 vca -e \"DESCRIBE app_user;\")",
+      "Bash(mvn -pl vca-store,vca-web test)",
+      "Bash(mvn -pl vca-store test -Dtest=AliyunSmsSignatureTest)",
+      "Bash(awk '/^<script>/{f=1;next} /^<\\\\/script>/{f=0} f' vca-bootstrap/src/main/resources/static/index.html)",
+      "Bash(node --check /tmp/vf.js)"
     ]
   }
 }
