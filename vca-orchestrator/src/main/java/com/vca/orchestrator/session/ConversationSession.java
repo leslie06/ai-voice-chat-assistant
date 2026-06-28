@@ -20,12 +20,14 @@ import com.vca.domain.spi.LlmProvider;
 import com.vca.domain.spi.S2sProvider;
 import com.vca.domain.spi.S2sSession;
 import com.vca.domain.spi.TtsProvider;
+import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.recorder.ConversationRecorder;
 import com.vca.orchestrator.recorder.TurnRecord;
 import com.vca.orchestrator.pipeline.SentenceSplitter;
 import com.vca.orchestrator.skill.MusicIntent;
 import com.vca.orchestrator.skill.PlayMusicSkill;
+import com.vca.orchestrator.skill.RememberSkill;
 import com.vca.orchestrator.skill.Skill;
 import com.vca.orchestrator.skill.SkillRegistry;
 import com.vca.orchestrator.skill.SkillResult;
@@ -96,6 +98,10 @@ public class ConversationSession {
     private volatile TurnListener listener = TurnListener.NOOP;
     /** 对话存档端口(数据飞轮), 默认不落库; 异步、失败不影响对话 */
     private volatile ConversationRecorder recorder = ConversationRecorder.NOOP;
+    /** 长期记忆端口, 默认不记忆; 登录用户才有 userId */
+    private volatile MemoryStore memory = MemoryStore.NOOP;
+    /** 当前登录用户 id(账号系统启用且已登录时非空); 用于长期记忆按用户隔离 */
+    private volatile String userId;
     /** 本会话回合序号(落库用, 从 1 递增) */
     private final AtomicInteger turnSeq = new AtomicInteger();
     /**
@@ -163,6 +169,39 @@ public class ConversationSession {
     /** 设置回合事件回调(用于把 ASR/回复文本透传给前端) */
     public void setTurnListener(TurnListener listener) {
         this.listener = listener == null ? TurnListener.NOOP : listener;
+    }
+
+    /** 设置长期记忆端口与当前登录用户(账号系统启用且已登录时); 未设则不记忆。 */
+    public void setMemory(MemoryStore memory, String userId) {
+        this.memory = memory == null ? MemoryStore.NOOP : memory;
+        this.userId = userId;
+    }
+
+    /**
+     * 把该用户的长期记忆拼成一条 system 上下文(没有记忆/未登录则返回 null), 每回合注入,
+     * 让助手据此"记得"用户。条数已由 {@link MemoryStore#recall} 截断。
+     */
+    private String memoryContext() {
+        if (memory == MemoryStore.NOOP || userId == null) {
+            return null;
+        }
+        List<String> mems;
+        try {
+            mems = memory.recall(userId);
+        } catch (Exception e) {
+            log.debug("读取长期记忆失败(忽略): {}", e.toString());
+            return null;
+        }
+        if (mems == null || mems.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder("关于当前用户你已知道的(长期记忆, 自然地运用, 不要生硬复述):");
+        for (String m : mems) {
+            if (m != null && !m.isBlank()) {
+                sb.append("\n- ").append(m.strip());
+            }
+        }
+        return sb.toString();
     }
 
     /** 设置对话存档端口(数据飞轮); 不设则不落库。 */
@@ -356,6 +395,10 @@ public class ConversationSession {
                 // 时间/日期是廉价上下文, 直接给比靠模型调工具更可靠 —— 模型据此直接答对, 无需也无延迟。
                 List<Message> working = new ArrayList<>();
                 working.add(Message.system(currentTimeContext()));
+                String mem = memoryContext();
+                if (mem != null) {
+                    working.add(Message.system(mem));   // 长期记忆: 让助手记得用户(跨会话)
+                }
                 working.addAll(historySnapshot());
                 body = runLlmRound(working, 0, speak, reply, actionTurn, firstToken, firstAudio, startNanos);
             }
@@ -434,11 +477,9 @@ public class ConversationSession {
                                 stateMachine.tryTransition(SessionState.SPEAKING);
                             }
                         })
-                        .doOnComplete(() -> log.info("[端点诊断] speech流(TTS)完成, depth={}", depth))
                 : tokens.then(Mono.<AudioChunk>empty()).flux();   // 打字: 仅消费 token 做字幕, 不出音频
 
         return speech.concatWith(Flux.defer(() -> {
-            log.info("[端点诊断] speech后收尾: calls={}, roundTextLen={}, depth={}", calls.size(), roundText.length(), depth);
             if (calls.isEmpty()) {
                 if (roundText.length() > 0) {
                     reply.set(roundText.toString());   // 本轮无工具 → 这轮文本即最终答复
@@ -447,8 +488,7 @@ public class ConversationSession {
             }
             return executeToolsAndContinue(working, List.copyOf(calls), depth, speak,
                     reply, actionTurn, firstToken, firstAudio, startNanos);
-        })).doOnComplete(() -> log.info("[端点诊断] runLlmRound完成, depth={}", depth))
-                .doOnCancel(() -> log.info("[端点诊断] runLlmRound被取消, depth={}", depth));
+        }));
     }
 
     /**
@@ -510,7 +550,10 @@ public class ConversationSession {
         if (skill == null) {
             return Mono.just(SkillResult.feedback("未知工具: " + call.name()));
         }
-        Map<String, Object> args = parseArgs(call.arguments());
+        Map<String, Object> args = new java.util.HashMap<>(parseArgs(call.arguments()));
+        if (userId != null) {
+            args.put(RememberSkill.USER_ID_ARG, userId);   // 注入当前用户, 供长期记忆等需用户态的技能用
+        }
         return Mono.defer(() -> skill.execute(args))
                 .onErrorResume(e -> {
                     log.warn("工具 {} 执行失败: {}", call.name(), e.toString());
@@ -625,7 +668,8 @@ public class ConversationSession {
         AtomicBoolean thinking = new AtomicBoolean(false);
         AtomicBoolean speaking = new AtomicBoolean(false);
         // 回灌截至本轮开始前的历史(含 system + 之前的 user/assistant), 让端到端模型记住上文
-        return s2s.converse(userAudio, historySnapshot(), context.s2sConfig())
+        // 用 s2sConfigWithTime(): 与持久 S2S 一致地把当前时间 + 长期记忆注入人设
+        return s2s.converse(userAudio, historySnapshot(), s2sConfigWithTime())
                 .doOnNext(chunk -> {
                     if (thinking.compareAndSet(false, true)) {
                         stateMachine.tryTransition(SessionState.THINKING);
@@ -693,6 +737,10 @@ public class ConversationSession {
             return null;
         }
         String persona = (base.systemPrompt() == null ? "" : base.systemPrompt()) + "\n\n" + currentTimeContext();
+        String mem = memoryContext();
+        if (mem != null) {
+            persona = persona + "\n\n" + mem;   // 长期记忆注入端到端人设(seedHistory 会跳过 system, 故走人设)
+        }
         return new S2sConfig(base.vendor(), base.model(), base.voice(), persona, base.outputFormat());
     }
 

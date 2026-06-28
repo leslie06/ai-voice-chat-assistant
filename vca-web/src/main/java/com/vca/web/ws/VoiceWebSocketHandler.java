@@ -117,9 +117,12 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
     @Override
     public Mono<Void> handle(WebSocketSession session) {
         // 1) 鉴权: 启用账号系统则用用户登录令牌校验(统一一套登录); 否则回退共享 token。
+        // 校验通过时拿到 userId, 据此启用该用户的长期记忆(跨会话个性化)。
         String token = queryParam(session, "token");
+        String userId = null;
         if (authenticator != null) {
-            if (authenticator.authenticate(token) == null) {
+            userId = authenticator.authenticate(token);
+            if (userId == null) {
                 log.warn("WS 用户令牌无效, 拒绝连接: {}", session.getId());
                 return session.close(CloseStatus.POLICY_VIOLATION.withReason("invalid token"));
             }
@@ -179,7 +182,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                 pushJson(session, outbound, Map.of("type", "flush_playback"));
             }
         };
-        ConversationSession conversation = sessionFactory.create(session.getId(), listener);
+        ConversationSession conversation = sessionFactory.create(session.getId(), userId, listener);
         Connection conn = new Connection(session, conversation, outbound);
         connRef[0] = conn;   // 就位后 onAsrPartial 才能回灌 VAD
         log.debug("WS 连接建立: {}", session.getId());

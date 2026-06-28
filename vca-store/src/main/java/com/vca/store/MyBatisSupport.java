@@ -7,6 +7,7 @@ import com.vca.store.mapper.ChatConversationMapper;
 import com.vca.store.mapper.ChatMessageMapper;
 import com.vca.store.mapper.ConversationTurnMapper;
 import com.vca.store.mapper.EvaluationMapper;
+import com.vca.store.mapper.UserMemoryMapper;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.mybatis.spring.SqlSessionTemplate;
 
@@ -37,6 +38,7 @@ final class MyBatisSupport {
             factory.getConfiguration().addMapper(AppUserMapper.class);
             factory.getConfiguration().addMapper(ChatConversationMapper.class);
             factory.getConfiguration().addMapper(ChatMessageMapper.class);
+            factory.getConfiguration().addMapper(UserMemoryMapper.class);
             return factory;
         } catch (Exception e) {
             throw new IllegalStateException("构建对话存档 SqlSessionFactory 失败", e);

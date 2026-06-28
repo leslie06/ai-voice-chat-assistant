@@ -49,3 +49,13 @@ CREATE TABLE IF NOT EXISTS chat_message (
     PRIMARY KEY (id),
     KEY idx_msg_conv (conversation_id, id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '会话消息';
+
+-- 用户长期记忆(跨会话个性化): 模型经 remember 工具写入, 每次对话作为上下文回灌。
+CREATE TABLE IF NOT EXISTS user_memory (
+    id         BIGINT       NOT NULL AUTO_INCREMENT,
+    user_id    BIGINT       NOT NULL,
+    content    VARCHAR(512) NOT NULL,
+    created_at DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    KEY idx_mem_user (user_id, id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户长期记忆';

@@ -1,6 +1,7 @@
 package com.vca.store;
 
 import com.vca.orchestrator.auth.TokenAuthenticator;
+import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.recorder.ConversationRecorder;
 import com.vca.store.account.AccountRoutes;
 import com.vca.store.account.ConversationService;
@@ -18,6 +19,8 @@ import com.vca.store.mapper.ChatConversationMapper;
 import com.vca.store.mapper.ChatMessageMapper;
 import com.vca.store.mapper.ConversationTurnMapper;
 import com.vca.store.mapper.EvaluationMapper;
+import com.vca.store.mapper.UserMemoryMapper;
+import com.vca.store.memory.MyBatisMemoryStore;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.apache.ibatis.session.SqlSessionFactory;
@@ -154,6 +157,20 @@ public class StoreAutoConfiguration {
     ConversationService conversationService(ChatConversationMapper chatConversationMapper,
                                             ChatMessageMapper chatMessageMapper) {
         return new ConversationService(chatConversationMapper, chatMessageMapper);
+    }
+
+    // ---- 长期记忆(跨会话个性化): remember 工具写入, 每轮对话回灌上下文 ----
+
+    @Bean
+    @ConditionalOnMissingBean
+    UserMemoryMapper userMemoryMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, UserMemoryMapper.class);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(MemoryStore.class)
+    MemoryStore memoryStore(UserMemoryMapper userMemoryMapper) {
+        return new MyBatisMemoryStore(userMemoryMapper);
     }
 
     /** 邮件发送器: 配了 SMTP host 用真实发送, 否则回退打日志(配合 mail-dev-echo 联调)。 */

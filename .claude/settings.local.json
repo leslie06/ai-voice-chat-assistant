@@ -88,7 +88,11 @@
       "Bash(grep -v '^[0-9]*: *$')",
       "Bash(mvn -q -pl vca-orchestrator -am compile)",
       "Bash(mvn -q -pl vca-provider-tts-aliyun -am compile)",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(mvn -q -T1C compile)",
+      "Bash(mvn -q -T1C test-compile)",
+      "Bash(mvn -q -pl vca-orchestrator,vca-store test)",
+      "Bash(mvn -pl vca-orchestrator,vca-store test)"
     ]
   }
 }

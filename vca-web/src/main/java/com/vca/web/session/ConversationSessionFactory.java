@@ -7,6 +7,7 @@ import com.vca.domain.model.S2sConfig;
 import com.vca.domain.model.SessionContext;
 import com.vca.domain.model.TtsConfig;
 import com.vca.gateway.ProviderGateway;
+import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.pipeline.SentenceSplitter;
 import com.vca.orchestrator.recorder.ConversationRecorder;
@@ -28,23 +29,34 @@ public class ConversationSessionFactory {
     private final SkillRegistry skills;
     /** 对话存档端口(数据飞轮); 未启用落库时为 NOOP, 编排会话照常工作 */
     private final ConversationRecorder recorder;
+    /** 长期记忆端口(跨会话个性化); 未启用落库时为 NOOP */
+    private final MemoryStore memory;
     private final SentenceSplitter splitter = new SentenceSplitter();
 
     public ConversationSessionFactory(ProviderGateway gateway, WebProperties props, TurnMetrics metrics,
                                       SkillRegistry skills) {
-        this(gateway, props, metrics, skills, ConversationRecorder.NOOP);
+        this(gateway, props, metrics, skills, ConversationRecorder.NOOP, MemoryStore.NOOP);
     }
 
     public ConversationSessionFactory(ProviderGateway gateway, WebProperties props, TurnMetrics metrics,
-                                      SkillRegistry skills, ConversationRecorder recorder) {
+                                      SkillRegistry skills, ConversationRecorder recorder, MemoryStore memory) {
         this.gateway = gateway;
         this.props = props;
         this.metrics = metrics;
         this.skills = skills == null ? SkillRegistry.empty() : skills;
         this.recorder = recorder == null ? ConversationRecorder.NOOP : recorder;
+        this.memory = memory == null ? MemoryStore.NOOP : memory;
     }
 
     public ConversationSession create(String sessionId, TurnListener listener) {
+        return create(sessionId, null, listener);
+    }
+
+    /**
+     * 建一路会话。{@code userId} 非空时启用长期记忆(回灌该用户的跨会话记忆, 并允许 remember 工具写入);
+     * 为空(未登录/账号系统未启用)时记忆为 NOOP。
+     */
+    public ConversationSession create(String sessionId, String userId, TurnListener listener) {
         SessionContext ctx = combinedContext(sessionId);
 
         ConversationSession session = new ConversationSession(
@@ -52,6 +64,9 @@ public class ConversationSessionFactory {
                 props.getHistoryMaxMessages(), metrics, skills);
         session.setTurnListener(listener);
         session.setRecorder(recorder);
+        if (userId != null && !userId.isBlank()) {
+            session.setMemory(memory, userId);
+        }
         return session;
     }
 

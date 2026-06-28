@@ -7,9 +7,11 @@ import com.vca.gateway.ProviderGateway;
 import com.vca.web.music.ItunesMusicProvider;
 import com.vca.web.music.LocalMusicProvider;
 import com.vca.web.music.LocalMusicRoute;
+import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.recorder.ConversationRecorder;
 import com.vca.orchestrator.skill.PlayMusicSkill;
+import com.vca.orchestrator.skill.RememberSkill;
 import com.vca.orchestrator.skill.Skill;
 import com.vca.orchestrator.skill.SkillRegistry;
 import com.vca.web.skill.WeatherSkill;
@@ -92,10 +94,12 @@ public class WebAutoConfiguration {
     @ConditionalOnMissingBean
     ConversationSessionFactory conversationSessionFactory(ProviderGateway gateway, WebProperties props,
                                                           TurnMetrics turnMetrics, SkillRegistry skillRegistry,
-                                                          ObjectProvider<ConversationRecorder> recorder) {
-        // 落库模块(vca-store)在场且启用时注入其 recorder; 否则 NOOP(不落库, 对话照常)
+                                                          ObjectProvider<ConversationRecorder> recorder,
+                                                          ObjectProvider<MemoryStore> memory) {
+        // 落库模块(vca-store)在场且启用时注入其 recorder / 长期记忆; 否则 NOOP(不落库, 对话照常)
         return new ConversationSessionFactory(gateway, props, turnMetrics, skillRegistry,
-                recorder.getIfAvailable(() -> ConversationRecorder.NOOP));
+                recorder.getIfAvailable(() -> ConversationRecorder.NOOP),
+                memory.getIfAvailable(() -> MemoryStore.NOOP));
     }
 
     /**
@@ -116,6 +120,22 @@ public class WebAutoConfiguration {
     @ConditionalOnMissingBean
     PlayMusicSkill playMusicSkill() {
         return new PlayMusicSkill();
+    }
+
+    /**
+     * 记忆技能(动作型): 用户透露个人信息/偏好等值得长期记住的内容时, 模型调用它写入长期记忆。
+     * 仅当落库模块(vca-store)提供了真实 {@link MemoryStore} 时才注册 —— 否则返回 null, 不给模型下发
+     * 一个写进 NOOP 的工具。userId 由会话在调用时注入(见 ConversationSession#runSkill)。
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    RememberSkill rememberSkill(ObjectProvider<MemoryStore> memory) {
+        MemoryStore store = memory.getIfAvailable();
+        if (store == null) {
+            log.info("未启用长期记忆(无 MemoryStore), 跳过 remember 工具");
+            return null;
+        }
+        return new RememberSkill(store);
     }
 
     /**
