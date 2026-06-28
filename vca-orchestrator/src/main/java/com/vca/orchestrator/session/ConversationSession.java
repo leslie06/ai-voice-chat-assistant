@@ -434,9 +434,11 @@ public class ConversationSession {
                                 stateMachine.tryTransition(SessionState.SPEAKING);
                             }
                         })
+                        .doOnComplete(() -> log.info("[端点诊断] speech流(TTS)完成, depth={}", depth))
                 : tokens.then(Mono.<AudioChunk>empty()).flux();   // 打字: 仅消费 token 做字幕, 不出音频
 
         return speech.concatWith(Flux.defer(() -> {
+            log.info("[端点诊断] speech后收尾: calls={}, roundTextLen={}, depth={}", calls.size(), roundText.length(), depth);
             if (calls.isEmpty()) {
                 if (roundText.length() > 0) {
                     reply.set(roundText.toString());   // 本轮无工具 → 这轮文本即最终答复
@@ -445,7 +447,8 @@ public class ConversationSession {
             }
             return executeToolsAndContinue(working, List.copyOf(calls), depth, speak,
                     reply, actionTurn, firstToken, firstAudio, startNanos);
-        }));
+        })).doOnComplete(() -> log.info("[端点诊断] runLlmRound完成, depth={}", depth))
+                .doOnCancel(() -> log.info("[端点诊断] runLlmRound被取消, depth={}", depth));
     }
 
     /**

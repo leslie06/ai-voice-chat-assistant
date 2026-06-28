@@ -21,6 +21,7 @@ import reactor.core.publisher.FluxSink;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.Base64;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -86,6 +87,38 @@ public class QwenTtsProvider implements TtsProvider {
                 }
             };
 
+            // 兜底看门狗: 即便没收齐 response.done(协议事件名/时序异常也会发生), 也不能永久挂起。
+            // 文本流结束后, 音频静默超过 idleMs 即强制 finish() —— 既不截断在途音频, 又保证回合能收尾。
+            final long idleMs = 1500;
+            AtomicReference<Disposable> watchdog = new AtomicReference<>();
+            Runnable forceFinish = () -> {
+                if (textDone.get() && finishing.compareAndSet(false, true)) {
+                    log.warn("Qwen-TTS 静默期内未收齐 response.done(committed={}, done={}), 兜底收尾",
+                            committed.get(), responsesDone.get());
+                    QwenTtsRealtime c = clientRef.get();
+                    try {
+                        if (c != null) {
+                            c.finish();
+                        }
+                    } catch (Exception ignore) {
+                        // 忽略
+                    }
+                    safeClose(c);
+                    sink.complete();   // 直接收尾, 不依赖 onClose 回调(协议/SDK 可能不回调)
+                }
+            };
+            // 每次有新音频 / 文本流结束时重置计时: forceFinish 在"最后一帧音频后静默 idleMs"才触发(空闲超时)
+            Runnable armWatchdog = () -> {
+                if (!textDone.get() || finishing.get()) {
+                    return;
+                }
+                Disposable old = watchdog.getAndSet(
+                        Schedulers.parallel().schedule(forceFinish, idleMs, TimeUnit.MILLISECONDS));
+                if (old != null) {
+                    old.dispose();
+                }
+            };
+
             QwenTtsRealtimeParam param = QwenTtsRealtimeParam.builder()
                     .model(props.getModel())
                     .apikey(props.getApiKey())
@@ -110,6 +143,7 @@ public class QwenTtsProvider implements TtsProvider {
                                 }
                                 byte[] pcm = Base64.getDecoder().decode(b64);
                                 sink.next(new AudioChunk(pcm, AudioFormat.PCM, seq.getAndIncrement(), null, false));
+                                armWatchdog.run();   // 收到音频→重置空闲计时(文本已结束才真正起效)
                             }
                         } else if (EVT_RESPONSE_DONE.equals(type)) {
                             // 一句合成完毕; 凑齐全部 response 且文本流已结束才收尾, 避免截断末句
@@ -118,6 +152,8 @@ public class QwenTtsProvider implements TtsProvider {
                         } else if (type.contains("error") || type.contains("failed")) {
                             sink.error(ProviderException.retryable(VendorType.QWEN, Capability.TTS,
                                     "Qwen-TTS 事件错误: " + msg, null));
+                        } else if (!type.isEmpty()) {
+                            log.debug("Qwen-TTS 其它事件: {}", type);   // 诊断: 看服务端实际发什么"完成"事件
                         }
                     } catch (Exception e) {
                         sink.error(ProviderException.retryable(VendorType.QWEN, Capability.TTS,
@@ -170,10 +206,15 @@ public class QwenTtsProvider implements TtsProvider {
                     () -> {
                         textDone.set(true);
                         maybeFinish.run();   // 若末句已 done 则立即收尾, 否则等 response.done 触发
+                        armWatchdog.run();   // 同时起兜底空闲计时, 防 response.done 始终不来而永久挂起
                     }));
 
             // 下游取消(打断): 取消响应并关闭连接, 释放上游
             sink.onCancel(() -> {
+                Disposable w = watchdog.getAndSet(null);
+                if (w != null) {
+                    w.dispose();
+                }
                 Disposable d = textSub.get();
                 if (d != null) {
                     d.dispose();

@@ -81,7 +81,14 @@
       "Bash(mvn -q -pl vca-orchestrator test -Dtest=EndpointPolicyTest)",
       "Bash(mvn -pl vca-orchestrator test -Dtest=EndpointPolicyTest)",
       "Bash(perl -0pi -e 's/\\(new VadConfig\\\\\\(0\\\\.015, 150, 800, 0\\\\.020, 250, 400, 16000, false, \"\", 600, false\\)\\\\\\)/$1, false, 400, 1600\\)/g' vca-orchestrator/src/test/java/com/vca/orchestrator/HandsFreeVadTest.java)",
-      "Bash(mvn -pl vca-orchestrator test -Dtest=\"EndpointPolicyTest,HandsFreeVadTest\")"
+      "Bash(mvn -pl vca-orchestrator test -Dtest=\"EndpointPolicyTest,HandsFreeVadTest\")",
+      "Bash(sed -E 's/=\\(sk-|.{6}\\).*/=***/')",
+      "Bash(nc -z -G 3 127.0.0.1 7890)",
+      "Bash(awk '{print \"PID\",$2, $11, $12, $13}')",
+      "Bash(grep -v '^[0-9]*: *$')",
+      "Bash(mvn -q -pl vca-orchestrator -am compile)",
+      "Bash(mvn -q -pl vca-provider-tts-aliyun -am compile)",
+      "Bash(git checkout *)"
     ]
   }
 }
