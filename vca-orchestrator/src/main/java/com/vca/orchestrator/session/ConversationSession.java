@@ -206,18 +206,26 @@ public class ConversationSession {
     private String webSearchContext(String query) {
         if (!webSearchAuto || webSearch == WebSearchProvider.NOOP
                 || !WebSearchHeuristic.isTimeSensitive(query)) {
+            log.info("联网自动注入: 跳过(auto={}, provider={}, 时效命中={}), query={}",
+                    webSearchAuto, webSearch == WebSearchProvider.NOOP ? "NOOP" : "ON",
+                    WebSearchHeuristic.isTimeSensitive(query), query);
             return null;
         }
         List<WebSearchProvider.Result> hits;
         try {
             hits = webSearch.search(query, webSearchCount);
         } catch (Exception e) {
-            log.debug("联网搜索失败(忽略): {}", e.toString());
+            log.warn("联网搜索失败(忽略): {}", e.toString());
             return null;
         }
         if (hits == null || hits.isEmpty()) {
+            log.info("联网自动注入: 命中时效但博查无结果, query={}", query);
             return null;
         }
+        log.info("联网自动注入: 命中, 来源 {} 条, 已透传前端, query={}", hits.size(), query);
+        // 把来源透传给前端展示(在模型据此作答之前), 让用户看到答案出处
+        final List<WebSearchProvider.Result> sources = hits;
+        safeNotify(() -> listener.onWebSearchSources(sources));
         StringBuilder sb = new StringBuilder(
                 "以下是刚刚联网检索到的实时信息, 回答时<b>以此为准</b>(可注明来源/时间, 不要编造):");
         for (WebSearchProvider.Result r : hits) {
@@ -609,6 +617,14 @@ public class ConversationSession {
                 .concatMap(call -> runSkill(call).map(res -> new ToolOutcome(call, res)))
                 .collectList()
                 .flatMapMany(outcomes -> {
+                    // 联网搜索等技能带回的来源: 透传给前端展示(在模型据此作答之前)。先于 terminal 分支处理,
+                    // 避免同回合混有动作型工具时被提前 return 跳过。
+                    for (ToolOutcome o : outcomes) {
+                        List<WebSearchProvider.Result> src = o.result().sources();
+                        if (src != null && !src.isEmpty()) {
+                            safeNotify(() -> listener.onWebSearchSources(src));
+                        }
+                    }
                     for (ToolOutcome o : outcomes) {
                         SkillResult r = o.result();
                         if (r.terminal()) {
@@ -888,6 +904,10 @@ public class ConversationSession {
                 .subscribe(result -> {
                     if (result.actionType() != null) {
                         dispatchAction(result.actionType(), result.actionPayload());
+                    }
+                    List<WebSearchProvider.Result> src = result.sources();
+                    if (src != null && !src.isEmpty()) {
+                        safeNotify(() -> listener.onWebSearchSources(src));   // 联网来源透传前端展示
                     }
                     String output = result.content() == null || result.content().isBlank()
                             ? "已完成" : result.content();

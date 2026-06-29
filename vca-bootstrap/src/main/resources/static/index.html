@@ -85,6 +85,13 @@
     .cursor{display:inline-block;width:7px;height:1.05em;vertical-align:-2px;margin-left:1px;
       background:var(--text);animation:blink 1s steps(2,start) infinite;border-radius:1px;}
     @keyframes blink{to{opacity:0;}}
+    /* 联网来源: 附在机器人气泡下方的一块小列表 */
+    .sources{margin-top:10px;padding-top:8px;border-top:1px dashed rgba(0,0,0,.12);}
+    .sources-h{font-size:12px;color:var(--sub);margin-bottom:4px;font-weight:600;}
+    .source-item{display:block;font-size:12.5px;line-height:1.7;color:var(--user);
+      text-decoration:none;word-break:break-all;}
+    a.source-item:hover{text-decoration:underline;}
+    div.source-item{color:var(--sub);}
     .sys{text-align:center;color:var(--sub);font-size:12.5px;margin:10px 0;}
     .empty{color:var(--sub);text-align:center;margin-top:18vh;font-size:15px;line-height:2;}
     /* 底部输入区 */
@@ -450,10 +457,28 @@ function stopMusic(){ try{musicPlayer.pause()}catch(e){} }
 
 /* ---------- 流式回复状态 ---------- */
 let turnActive=false, botText='', botBubble=null;
+// 本轮联网来源(在回复前由后端 sources 事件下发); 回复落定时挂到气泡下方, 之后清空
+let pendingSources=null;
+// 把联网来源渲染成一块"🔗 联网来源"列表, 附到机器人气泡下方(链接新窗口打开)
+function renderSources(bubble, items){
+  if(!bubble || !items || !items.length) return;
+  const box=document.createElement('div'); box.className='sources';
+  const h=document.createElement('div'); h.className='sources-h'; h.textContent='🔗 联网来源'; box.appendChild(h);
+  items.forEach((s,i)=>{
+    const t=(s.title||s.url||'').trim(); if(!t) return;
+    const row=document.createElement(s.url?'a':'div'); row.className='source-item';
+    if(s.url){ row.href=s.url; row.target='_blank'; row.rel='noopener'; }
+    row.textContent=(i+1)+'. '+t+(s.date?(' · '+s.date):'');
+    box.appendChild(row);
+  });
+  bubble.appendChild(box);
+}
 function botStart(){ botBubble=addMsg('bot',''); botText=''; }
 function botAppend(delta){ const stick=atBottom(); botText+=delta;
   botBubble.innerHTML=md(botText)+'<span class="cursor"></span>'; if(stick) scroll(); }
 function botFinish(text){ if(text!=null) botText=text; const had=botBubble; if(botBubble) botBubble.innerHTML=md(botText);
+  if(botBubble && pendingSources){ renderSources(botBubble, pendingSources); }
+  pendingSources=null;
   if(had && botText && botText.trim()) pushHist({role:'bot', text:botText});
   botBubble=null; turnActive=false; bargeBtn.style.display='none'; }
 
@@ -699,7 +724,8 @@ function connect(){
         case 'reply_delta': if(!turnActive){ turnActive=true; acceptAudio=true; } if(!botBubble) botStart(); botAppend(m.text); D.last='delta'; break;
         case 'reply':      if(!botBubble) botStart(); botFinish(m.text); D.last='reply'; break;
         case 'turn_end':   botFinish(); D.last='turn_end'; break;
-        case 'interrupted':stopPlayback(); stopMusic(); acceptAudio=false; if(botBubble) botFinish();
+        case 'sources':    pendingSources=m.items||null; D.last='sources:'+(m.items?m.items.length:0); break;
+        case 'interrupted':stopPlayback(); stopMusic(); acceptAudio=false; pendingSources=null; if(botBubble) botFinish();
                            addSys('— 已打断 —'); D.last='interrupted'; break;
         case 'flush_playback': // 持久 S2S 全双工打断: 冲掉已缓冲/在播的音频止声, 但继续接收随后的新回复
                            stopPlayback(); acceptAudio=true; if(botBubble) botFinish(); D.last='flush'; break;

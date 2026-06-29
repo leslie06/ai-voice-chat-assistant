@@ -1,5 +1,8 @@
 package com.vca.orchestrator.skill;
 
+import com.vca.orchestrator.search.WebSearchProvider;
+
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -18,22 +21,29 @@ import java.util.Map;
  * @param content       数据型: 回灌模型的工具结果; 动作型: 直接念/显示的确认语
  * @param actionType    客户端动作类型(如 {@code "music"}); 仅动作型可非空
  * @param actionPayload 动作参数(如 {@code {action:"play", query:"晴天"}}); 随 actionType 一起下发
+ * @param sources       联网检索来源(仅 web_search 等技能填); 非空时编排层透传给接入层展示给用户, 不影响回灌内容
  */
 public record SkillResult(boolean terminal, String content,
-                          String actionType, Map<String, Object> actionPayload) {
+                          String actionType, Map<String, Object> actionPayload,
+                          List<WebSearchProvider.Result> sources) {
 
     /** 数据型: 把 {@code content} 作为工具结果回灌模型, 由模型组织自然语言回答。 */
     public static SkillResult feedback(String content) {
-        return new SkillResult(false, content, null, null);
+        return new SkillResult(false, content, null, null, null);
+    }
+
+    /** 数据型 + 来源: 内容回灌模型, 同时把 {@code sources} 透传给接入层展示给用户(如联网搜索)。 */
+    public static SkillResult feedbackWithSources(String content, List<WebSearchProvider.Result> sources) {
+        return new SkillResult(false, content, null, null, sources);
     }
 
     /** 动作型(纯确认): 直接念 {@code spokenReply} 并终结, 无客户端动作。 */
     public static SkillResult reply(String spokenReply) {
-        return new SkillResult(true, spokenReply, null, null);
+        return new SkillResult(true, spokenReply, null, null, null);
     }
 
     /** 动作型: 下发一个客户端动作并念 {@code spokenReply} 确认, 终结回合(不留对话历史)。 */
     public static SkillResult action(String spokenReply, String actionType, Map<String, Object> actionPayload) {
-        return new SkillResult(true, spokenReply, actionType, actionPayload);
+        return new SkillResult(true, spokenReply, actionType, actionPayload, null);
     }
 }

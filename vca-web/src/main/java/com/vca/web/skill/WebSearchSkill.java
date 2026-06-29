@@ -84,7 +84,8 @@ public final class WebSearchSkill implements Skill {
                             sb.append(" 来源: ").append(r.url().strip());
                         }
                     }
-                    return SkillResult.feedback(sb.toString());
+                    // 带上来源: 编排层据此透传给前端展示, 同时把文本回灌模型
+                    return SkillResult.feedbackWithSources(sb.toString(), hits);
                 })
                 .onErrorReturn(SkillResult.feedback("联网搜索出错了。"));
     }

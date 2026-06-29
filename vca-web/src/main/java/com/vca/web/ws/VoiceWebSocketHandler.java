@@ -70,6 +70,7 @@ import java.util.function.Supplier;
  *         {@code turn_end}, {@code interrupted}, {@code error},
  *         {@code {"type":"music","action":"play","title":...,"artist":...,"url":...,"cover":...}}
  *         点歌(前端用 &lt;audio&gt; 播放), 找不到时 {@code action:"notfound"},
+ *         {@code {"type":"sources","items":[{"title":...,"url":...,"date":...}]}} 联网检索来源(在本轮回复前下发),
  *         以及 {@code {"type":"state","value":...,"label":...}} 让前端显示当前状态。</li>
  *     </ul></li>
  * </ul>
@@ -164,6 +165,26 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             @Override
             public void onAssistantText(String fullText) {
                 pushJson(session, outbound, Map.of("type", "reply", "text", fullText));
+            }
+
+            @Override
+            public void onWebSearchSources(List<com.vca.orchestrator.search.WebSearchProvider.Result> sources) {
+                // 联网来源透传给前端展示(标题/链接/时间); 在本轮回复前到达, 前端挂到该轮气泡下方
+                List<Map<String, String>> items = new ArrayList<>();
+                for (var r : sources) {
+                    if (r == null || ((r.title() == null || r.title().isBlank())
+                            && (r.url() == null || r.url().isBlank()))) {
+                        continue;   // 标题与链接都空的条目无展示价值, 跳过
+                    }
+                    Map<String, String> it = new LinkedHashMap<>();
+                    it.put("title", r.title() == null ? "" : r.title().strip());
+                    it.put("url", r.url() == null ? "" : r.url().strip());
+                    it.put("date", r.date() == null ? "" : r.date().strip());
+                    items.add(it);
+                }
+                if (!items.isEmpty()) {
+                    pushJson(session, outbound, Map.of("type", "sources", "items", items));
+                }
             }
 
             @Override

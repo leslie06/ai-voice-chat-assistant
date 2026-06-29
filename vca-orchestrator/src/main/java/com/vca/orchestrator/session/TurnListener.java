@@ -1,5 +1,9 @@
 package com.vca.orchestrator.session;
 
+import com.vca.orchestrator.search.WebSearchProvider;
+
+import java.util.List;
+
 /**
  * 回合事件回调: 让接入层把识别结果/回复文本透传给前端做字幕。
  * 默认空实现, 不需要时无需关心。
@@ -23,6 +27,13 @@ public interface TurnListener {
 
     /** 本轮 LLM 完整回复文本(在回复结束时回调) */
     default void onAssistantText(String fullText) {
+    }
+
+    /**
+     * 本轮命中时效启发式、自动联网检索到结果时回调(在 LLM 据此作答<b>之前</b>): 让接入层把来源
+     * (标题/链接/时间)透传给前端展示, 用户能看到答案出处。无命中/未联网时不回调。
+     */
+    default void onWebSearchSources(List<WebSearchProvider.Result> sources) {
     }
 
     /**
