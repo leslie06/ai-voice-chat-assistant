@@ -17,6 +17,8 @@ import com.vca.domain.spi.LlmProvider;
 import com.vca.domain.spi.TtsProvider;
 import com.vca.orchestrator.agent.AgentPlan;
 import com.vca.orchestrator.agent.AgentPlanner;
+import com.vca.orchestrator.agent.AgentPrompts;
+import com.vca.orchestrator.agent.AgentReflection;
 import com.vca.orchestrator.agent.AgentTriage;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.pipeline.SentenceSplitter;
@@ -82,35 +84,27 @@ class AgentPlanningTest {
         assertThat(p.steps()).hasSize(6);
     }
 
-    // ---- 编排: 规划注入工具回合循环 ----
+    @Test
+    void parseReflectionHandlesDoneNextAndGarbage() {
+        assertThat(AgentReflection.parse("{\"done\":true}").done()).isTrue();
+
+        AgentReflection more = AgentReflection.parse("{\"done\":false,\"next\":\"再查一下汇率\"}");
+        assertThat(more.done()).isFalse();
+        assertThat(more.next()).isEqualTo("再查一下汇率");
+
+        // done=false 却没给 next、或根本解析不出 → 保守当作"足够", 不平白补步
+        assertThat(AgentReflection.parse("{\"done\":false}").done()).isTrue();
+        assertThat(AgentReflection.parse("说不清").done()).isTrue();
+    }
 
     @Test
-    void complexTurnPlansFirstThenInjectsPlanIntoToolRound() {
-        // 第1轮: 规划器收到的调用 → 返回计划 JSON; 第2轮: runLlmRound 据计划出最终答复
-        ScriptedLlm llm = new ScriptedLlm(List.of(
-                List.of(text("{\"steps\":[\"查询本周天气\",\"据天气推荐穿搭\"]}")),
-                List.of(text("本周多云转晴，建议带件薄外套。"))));
-        SkillRegistry skills = new SkillRegistry(List.of(dataSkill("get_weather", "x")));
-        ConversationSession s = session(llm, skills);
-        s.setAgentEnabled(true);
-        PlanCaptor cap = new PlanCaptor();
-        s.setTurnListener(cap);
-
-        StepVerifier.create(s.handleTextTurn("先查下本周天气然后再帮我推荐穿搭"))
-                .verifyComplete();
-
-        // 规划器先被调用一次(不带工具), 再是真正的工具回合(带工具)
-        assertThat(llm.seenTools.get(0)).isEmpty();
-        assertThat(llm.seenTools.get(1)).anyMatch(t -> t.name().equals("get_weather"));
-        // 第2轮(执行回合)的上下文里应注入了计划 system 消息
-        List<Message> execRound = llm.seenHistories.get(1);
-        assertThat(execRound).anyMatch(m -> m.role() == Message.Role.SYSTEM
-                && m.content().contains("查询本周天气") && m.content().contains("据天气推荐穿搭"));
-        // 计划经 listener 透传给前端
-        assertThat(cap.planSteps).containsExactly("查询本周天气", "据天气推荐穿搭");
-        // 最终答复正常产出
-        assertThat(cap.fullReplies).containsExactly("本周多云转晴，建议带件薄外套。");
+    void narrationUsesPositionAwareConnectives() {
+        assertThat(AgentPrompts.narration(0, 3, "查天气")).startsWith("好的，第一步，").contains("查天气");
+        assertThat(AgentPrompts.narration(1, 3, "找景点")).startsWith("接下来，");
+        assertThat(AgentPrompts.narration(2, 3, "排行程")).startsWith("最后，");
     }
+
+    // ---- 编排: 触发与退回 ----
 
     @Test
     void simpleTurnSkipsPlanningEvenWhenAgentEnabled() {
@@ -148,6 +142,91 @@ class AgentPlanningTest {
         assertThat(execRound).noneMatch(m -> m.role() == Message.Role.SYSTEM
                 && m.content().contains("分步计划"));
         assertThat(cap.fullReplies).containsExactly("骁龙和天玑各有侧重。");
+    }
+
+    // ---- 编排: 逐步执行 + 反思补步(P2) ----
+
+    @Test
+    void twoStepAgentExecutesSequentiallyThenSynthesizes() {
+        ScriptedLlm llm = new ScriptedLlm(List.of(
+                List.of(text("{\"steps\":[\"查A\",\"查B\"]}")),   // 0 规划
+                List.of(text("A的结果是甲")),                      // 1 第一步
+                List.of(text("B的结果是乙")),                      // 2 第二步
+                List.of(text("{\"done\":true}")),                  // 3 反思: 足够
+                List.of(text("综合来看，甲和乙。"))));              // 4 整合答复
+        SkillRegistry skills = new SkillRegistry(List.of(dataSkill("get_weather", "x")));
+        ConversationSession s = session(llm, skills);
+        s.setAgentEnabled(true);
+        PlanCaptor cap = new PlanCaptor();
+        s.setTurnListener(cap);
+
+        StepVerifier.create(s.handleTextTurn("帮我对比一下A和B")).verifyComplete();
+
+        // 计划 + 逐步进度透传
+        assertThat(cap.planSteps).containsExactly("查A", "查B");
+        assertThat(cap.stepIdx).containsExactly(0, 1);
+        // 共 5 次 LLM: 规划/步1/步2/反思/整合; 规划环节不下发工具(纯文本出计划)
+        assertThat(llm.seenHistories).hasSize(5);
+        assertThat(llm.seenTools.get(0)).isEmpty();
+        // 第二步的上下文里带上了第一步的结果(scratchpad 累进)
+        assertThat(llm.seenHistories.get(2)).anyMatch(m -> m.role() == Message.Role.SYSTEM
+                && m.content().contains("甲"));
+        // 整合环节看得到两步结果
+        assertThat(llm.seenHistories.get(4)).anyMatch(m -> m.role() == Message.Role.SYSTEM
+                && m.content().contains("甲") && m.content().contains("乙"));
+        // 最终答复正常落定; 历史里是普通的一轮 user→assistant
+        assertThat(cap.fullReplies).containsExactly("综合来看，甲和乙。");
+        List<Message> h = s.historyView();
+        assertThat(h).anyMatch(m -> m.role() == Message.Role.USER && m.content().equals("帮我对比一下A和B"));
+        assertThat(h).anyMatch(m -> m.role() == Message.Role.ASSISTANT && m.content().equals("综合来看，甲和乙。"));
+    }
+
+    @Test
+    void reflectionAddsBoundedExtraStep() {
+        ScriptedLlm llm = new ScriptedLlm(List.of(
+                List.of(text("{\"steps\":[\"查A\"]}")),                 // 0 规划(1 步)
+                List.of(text("甲")),                                    // 1 第一步
+                List.of(text("{\"done\":false,\"next\":\"再查C\"}")),   // 2 反思: 还差一步
+                List.of(text("丙")),                                    // 3 补做的额外步
+                List.of(text("{\"done\":true}")),                       // 4 反思: 足够
+                List.of(text("甲和丙。"))));                            // 5 整合
+        SkillRegistry skills = new SkillRegistry(List.of(dataSkill("get_weather", "x")));
+        ConversationSession s = session(llm, skills);
+        s.setAgentEnabled(true);
+        PlanCaptor cap = new PlanCaptor();
+        s.setTurnListener(cap);
+
+        StepVerifier.create(s.handleTextTurn("先查A然后再查别的")).verifyComplete();
+
+        // 计划 1 步 + 反思补 1 步 = 执行了 2 步(下标 0、1)
+        assertThat(cap.stepIdx).containsExactly(0, 1);
+        assertThat(llm.seenHistories).hasSize(6);
+        assertThat(cap.fullReplies).containsExactly("甲和丙。");
+    }
+
+    @Test
+    void reflectionExtraStepsAreCapped() {
+        // 反思每次都说"还差一步": 应被 MAX_EXTRA_AGENT_STEPS(2) 截住, 不会无限补步
+        ScriptedLlm llm = new ScriptedLlm(List.of(
+                List.of(text("{\"steps\":[\"s1\"]}")),                  // 0 规划
+                List.of(text("r1")),                                    // 1 第一步
+                List.of(text("{\"done\":false,\"next\":\"x1\"}")),      // 2 反思→补步
+                List.of(text("r2")),                                    // 3 额外步1
+                List.of(text("{\"done\":false,\"next\":\"x2\"}")),      // 4 反思→补步
+                List.of(text("r3")),                                    // 5 额外步2(到额度)
+                List.of(text("最终。"))));                              // 6 整合(不再反思)
+        SkillRegistry skills = new SkillRegistry(List.of(dataSkill("get_weather", "x")));
+        ConversationSession s = session(llm, skills);
+        s.setAgentEnabled(true);
+        PlanCaptor cap = new PlanCaptor();
+        s.setTurnListener(cap);
+
+        StepVerifier.create(s.handleTextTurn("帮我规划一个复杂的多步任务")).verifyComplete();
+
+        // 计划 1 步 + 最多补 2 步 = 执行 3 步; 反思只在每次补步前调, 第三次额度耗尽不再反思
+        assertThat(cap.stepIdx).containsExactly(0, 1, 2);
+        assertThat(llm.seenHistories).hasSize(7);
+        assertThat(cap.fullReplies).containsExactly("最终。");
     }
 
     // ---- 假厂商/技能(裁剪自 FunctionCallingTest) ----
@@ -254,6 +333,7 @@ class AgentPlanningTest {
 
     private static final class PlanCaptor implements TurnListener {
         final List<String> fullReplies = new ArrayList<>();
+        final List<Integer> stepIdx = new ArrayList<>();
         List<String> planSteps;
 
         @Override
@@ -264,6 +344,11 @@ class AgentPlanningTest {
         @Override
         public void onAgentPlan(List<String> steps) {
             planSteps = steps;
+        }
+
+        @Override
+        public void onAgentStep(int index, String description) {
+            stepIdx.add(index);
         }
     }
 }

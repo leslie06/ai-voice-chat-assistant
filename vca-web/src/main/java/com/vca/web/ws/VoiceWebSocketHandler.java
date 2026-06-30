@@ -202,6 +202,19 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                 // 持久 S2S 全双工打断: 服务端 VAD 判定用户开口 → 让前端立即冲掉播放缓冲、止住机器人当前回复
                 pushJson(session, outbound, Map.of("type", "flush_playback"));
             }
+
+            @Override
+            public void onAgentPlan(List<String> steps) {
+                // 多步 Agent 计划: 透传步骤列表给前端渲染进度条(各步初始为"待执行")
+                pushJson(session, outbound, Map.of("type", "agent_plan", "steps", steps));
+            }
+
+            @Override
+            public void onAgentStep(int index, String description) {
+                // Agent 开始执行某一步: 让前端把该步标为"进行中"
+                pushJson(session, outbound, Map.of(
+                        "type", "agent_step", "index", index, "description", description));
+            }
         };
         ConversationSession conversation = sessionFactory.create(session.getId(), userId, listener);
         Connection conn = new Connection(session, conversation, outbound);

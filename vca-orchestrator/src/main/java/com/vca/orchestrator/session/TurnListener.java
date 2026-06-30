@@ -60,4 +60,14 @@ public interface TurnListener {
      */
     default void onAgentPlan(List<String> steps) {
     }
+
+    /**
+     * Agent 开始执行某一步时回调(逐步推进): 让接入层在进度 UI 上把该步标为"进行中"。
+     * 仅 Agent 路径产生, 紧跟在 {@link #onAgentPlan} 之后按步序依次触发。
+     *
+     * @param index       步骤下标(从 0 起; 超出计划长度表示反思补做的额外步)
+     * @param description 这一步在做什么
+     */
+    default void onAgentStep(int index, String description) {
+    }
 }

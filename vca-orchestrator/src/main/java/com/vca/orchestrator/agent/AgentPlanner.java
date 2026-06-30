@@ -92,8 +92,8 @@ public final class AgentPlanner {
         }
     }
 
-    /** 从可能含多余文字/代码围栏的输出里截取第一个完整 JSON 对象或数组(按括号配平)。 */
-    private static String extractJson(String raw) {
+    /** 从可能含多余文字/代码围栏的输出里截取第一个完整 JSON 对象或数组(按括号配平)。包内共享(反思解析复用)。 */
+    static String extractJson(String raw) {
         int objStart = raw.indexOf('{');
         int arrStart = raw.indexOf('[');
         int start;

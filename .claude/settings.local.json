@@ -106,7 +106,8 @@
       "Bash(./mvnw -q -pl vca-domain,vca-orchestrator -am test)",
       "Bash(./mvnw -pl vca-domain,vca-orchestrator -am test)",
       "Bash(./mvnw -q package -DskipTests=false)",
-      "Bash(./mvnw package *)"
+      "Bash(./mvnw package *)",
+      "Bash(./mvnw -q -pl vca-domain,vca-orchestrator,vca-web -am test-compile)"
     ]
   }
 }

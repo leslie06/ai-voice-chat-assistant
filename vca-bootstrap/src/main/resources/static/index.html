@@ -93,6 +93,17 @@
     a.source-item:hover{text-decoration:underline;}
     div.source-item{color:var(--sub);}
     .sys{text-align:center;color:var(--sub);font-size:12.5px;margin:10px 0;}
+    /* 多步 Agent 进度卡片 */
+    .agent{margin:10px 0;padding:10px 12px;border:1px solid rgba(0,0,0,.10);border-radius:12px;
+      background:rgba(0,0,0,.02);max-width:560px;}
+    .agent-h{font-size:12.5px;color:var(--sub);font-weight:600;margin-bottom:6px;}
+    .agent-step{display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.7;color:var(--user);}
+    .agent-step .ic{flex:0 0 auto;width:16px;text-align:center;}
+    .agent-step.pending{color:var(--sub);}
+    .agent-step.active{color:var(--user);font-weight:600;}
+    .agent-step.done{color:var(--sub);}
+    .agent-step.active .ic{animation:spin 1s linear infinite;display:inline-block;}
+    @keyframes spin{to{transform:rotate(360deg);}}
     .empty{color:var(--sub);text-align:center;margin-top:18vh;font-size:15px;line-height:2;}
     /* 底部输入区 */
     footer{border-top:1px solid var(--line);background:var(--bg);padding:8px 0 12px;position:sticky;bottom:0;}
@@ -406,6 +417,39 @@ function addMsg(role, text){
 }
 function addSys(text){ dropEmpty();
   const d=document.createElement('div'); d.className='sys'; d.textContent=text; chat.appendChild(d); scroll(); }
+/* ---------- 多步 Agent 进度 ---------- */
+let agentBox=null, agentRows=[];
+// 计划下发: 渲染一张进度卡片, 各步初始为"待执行"。最终答复仍走普通气泡, 卡片留在其上方作执行轨迹。
+function agentPlan(steps){ dropEmpty();
+  if(!steps || !steps.length){ agentBox=null; agentRows=[]; return; }
+  const box=document.createElement('div'); box.className='agent';
+  const h=document.createElement('div'); h.className='agent-h'; h.textContent='🧭 执行计划（'+steps.length+' 步）'; box.appendChild(h);
+  agentRows=steps.map((s,i)=>{
+    const row=document.createElement('div'); row.className='agent-step pending';
+    const ic=document.createElement('span'); ic.className='ic'; ic.textContent='○';
+    const tx=document.createElement('span'); tx.textContent=(i+1)+'. '+s;
+    row.append(ic,tx); box.appendChild(row); return row;
+  });
+  chat.appendChild(box); agentBox=box; scroll();
+}
+// 某步开始: 把它标为"进行中", 之前的标为"已完成"。index 超出计划长度=反思补做的额外步, 动态追加一行。
+function agentStep(index, desc){
+  if(!agentBox) return;
+  agentRows.forEach((r,i)=>{ if(i<index){ r.className='agent-step done'; r.querySelector('.ic').textContent='✓'; } });
+  let row=agentRows[index];
+  if(!row){ // 反思补步: 计划外新增一行
+    row=document.createElement('div'); row.className='agent-step';
+    const ic=document.createElement('span'); ic.className='ic';
+    const tx=document.createElement('span'); tx.textContent='＋ '+(desc||'');
+    row.append(ic,tx); agentBox.appendChild(row); agentRows[index]=row;
+  }
+  row.className='agent-step active'; row.querySelector('.ic').textContent='◔'; scroll();
+}
+// 本轮收尾: 把仍在"进行中"的步骤标为完成(整合答复已产出)。
+function agentDone(){
+  agentRows.forEach(r=>{ if(r.classList.contains('active')){ r.className='agent-step done'; r.querySelector('.ic').textContent='✓'; } });
+  agentBox=null; agentRows=[];
+}
 // 点歌卡片: 渲染封面+歌名歌手+原生 <audio> 播放器, 在助手内直接播放。
 // iOS 关键: <audio> 元素的首次 play() 必须在用户手势内触发; 点歌是语音触发的, 故
 // 用<b>一个常驻、已在手势里解锁过的</b> musicPlayer 复用播放, 而不是每首新建元素(新元素未解锁→iOS 拒播)。
@@ -722,10 +766,12 @@ function connect(){
                            addMsg('user',m.text);
                            bargeBtn.style.display='inline'; D.last='asr'; break;
         case 'reply_delta': if(!turnActive){ turnActive=true; acceptAudio=true; } if(!botBubble) botStart(); botAppend(m.text); D.last='delta'; break;
-        case 'reply':      if(!botBubble) botStart(); botFinish(m.text); D.last='reply'; break;
-        case 'turn_end':   botFinish(); D.last='turn_end'; break;
+        case 'reply':      if(!botBubble) botStart(); botFinish(m.text); agentDone(); D.last='reply'; break;
+        case 'turn_end':   botFinish(); agentDone(); D.last='turn_end'; break;
         case 'sources':    pendingSources=m.items||null; D.last='sources:'+(m.items?m.items.length:0); break;
-        case 'interrupted':stopPlayback(); stopMusic(); acceptAudio=false; pendingSources=null; if(botBubble) botFinish();
+        case 'agent_plan': agentPlan(m.steps); D.last='agent_plan:'+((m.steps||[]).length); break;
+        case 'agent_step': agentStep(m.index, m.description); D.last='agent_step:'+m.index; break;
+        case 'interrupted':stopPlayback(); stopMusic(); acceptAudio=false; pendingSources=null; if(botBubble) botFinish(); agentDone();
                            addSys('— 已打断 —'); D.last='interrupted'; break;
         case 'flush_playback': // 持久 S2S 全双工打断: 冲掉已缓冲/在播的音频止声, 但继续接收随后的新回复
                            stopPlayback(); acceptAudio=true; if(botBubble) botFinish(); D.last='flush'; break;

@@ -20,7 +20,11 @@ import com.vca.domain.spi.LlmProvider;
 import com.vca.domain.spi.S2sProvider;
 import com.vca.domain.spi.S2sSession;
 import com.vca.domain.spi.TtsProvider;
+import com.vca.orchestrator.agent.AgentPlan;
 import com.vca.orchestrator.agent.AgentPlanner;
+import com.vca.orchestrator.agent.AgentPrompts;
+import com.vca.orchestrator.agent.AgentReflection;
+import com.vca.orchestrator.agent.AgentStep;
 import com.vca.orchestrator.agent.AgentTriage;
 import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
@@ -78,6 +82,12 @@ public class ConversationSession {
 
     /** 单回合内 LLM↔工具的最大往返轮数, 防止模型反复调工具不收口导致死循环。 */
     private static final int MAX_TOOL_ROUNDS = 4;
+
+    /** Agent 逐步执行: 计划步骤最多执行这么多步(规划器已 cap 6, 这里再兜一道)。 */
+    private static final int MAX_AGENT_STEPS = 6;
+
+    /** Agent 反思后最多再补做这么多额外步(有界重规划, 防模型自我无限延长)。 */
+    private static final int MAX_EXTRA_AGENT_STEPS = 2;
 
     private static final TypeReference<Map<String, Object>> ARGS_TYPE = new TypeReference<>() {
     };
@@ -523,18 +533,19 @@ public class ConversationSession {
                     working.add(Message.system(web));
                 }
                 working.addAll(historySnapshot());
-                // 多步 Agent: 命中复杂任务先让模型出一份分步计划, 注入工作列表引导工具回合循环逐步执行;
+                // 多步 Agent: 命中复杂任务先让模型出一份分步计划, 再逐步执行(步骤间口播进度)+反思补步+整合答复;
                 // 未开启/未命中/规划为空都按原路直接进 runLlmRound(零额外延迟)。
                 if (agentEnabled && !skills.isEmpty() && AgentTriage.isComplex(userText)) {
-                    body = planner.plan(llm, working, activeLlmConfig)
+                    final List<Message> base = working;
+                    body = planner.plan(llm, base, activeLlmConfig)
                             .flatMapMany(plan -> {
-                                if (!plan.isEmpty()) {
-                                    log.info("Agent 规划: {} 步, session={}", plan.steps().size(), context.sessionId());
-                                    working.add(Message.system(plan.toContextMessage()));
-                                    safeNotify(() -> listener.onAgentPlan(plan.descriptions()));
+                                if (plan.isEmpty()) {
+                                    return runLlmRound(base, 0, speak, reply, actionTurn,
+                                            firstToken, firstAudio, startNanos);
                                 }
-                                return runLlmRound(working, 0, speak, reply, actionTurn,
-                                        firstToken, firstAudio, startNanos);
+                                log.info("Agent 规划: {} 步, session={}", plan.steps().size(), context.sessionId());
+                                safeNotify(() -> listener.onAgentPlan(plan.descriptions()));
+                                return runAgent(base, plan, speak, reply, firstToken, firstAudio, startNanos);
                             });
                 } else {
                     body = runLlmRound(working, 0, speak, reply, actionTurn, firstToken, firstAudio, startNanos);
@@ -687,6 +698,133 @@ public class ConversationSession {
                     return runLlmRound(working, depth + 1, speak, reply, actionTurn,
                             firstToken, firstAudio, startNanos);
                 });
+    }
+
+    /**
+     * 多步 Agent 执行(P2): 按计划<b>逐步推进</b> → 反思补步(有界) → 整合最终答复。每步独立一次 LLM(可调工具),
+     * 结果累进 scratchpad 供后续步骤与整合引用; 步骤间口播过渡语(语音回合)让用户听到进度、不至于静默假死。
+     * 整条流挂在 {@link #finishTurn} 的 {@code takeUntilOther} 下, 用户打断即整体取消。最终答复由整合环节
+     * 经 {@code reply} 落历史(动作不在此终结), 故 Agent 回合在历史里就是普通的 user→assistant 一轮。
+     */
+    private Flux<AudioChunk> runAgent(List<Message> base, AgentPlan plan, boolean speak,
+                                     AtomicReference<String> reply,
+                                     AtomicBoolean firstToken, AtomicBoolean firstAudio, long startNanos) {
+        List<AgentStep> steps = plan.steps();
+        int planned = Math.min(steps.size(), MAX_AGENT_STEPS);
+        List<String> scratchpad = Collections.synchronizedList(new ArrayList<>());
+
+        Flux<AudioChunk> plannedFlux = Flux.empty();
+        for (int i = 0; i < planned; i++) {
+            final int idx = i;
+            final AgentStep step = steps.get(i);
+            plannedFlux = plannedFlux.concatWith(Flux.defer(() ->
+                    runAgentStep(base, idx, planned, step.description(), scratchpad, speak)));
+        }
+
+        // 反思补步(有界): 计划跑完后自检是否还差关键一步, 命中则补做, 最多 MAX_EXTRA_AGENT_STEPS 步。
+        Flux<AudioChunk> reflectFlux = Flux.defer(() ->
+                runAgentReflection(base, planned, scratchpad, speak, 0));
+
+        // 整合: 据各步结果给用户最终口语答复(走普通 speaking 回合, 设 reply 落历史)。
+        Flux<AudioChunk> synthFlux = Flux.defer(() -> {
+            List<Message> sw = new ArrayList<>(base);
+            sw.add(Message.system(AgentPrompts.synthesisInstruction(scratchpad)));
+            return runLlmRound(sw, 0, speak, reply, new AtomicBoolean(false), firstToken, firstAudio, startNanos);
+        });
+
+        return plannedFlux.concatWith(reflectFlux).concatWith(synthFlux);
+    }
+
+    /**
+     * 执行 Agent 的一步: 透传进度(onAgentStep)+ 语音回合口播过渡语 → 据当前步指令跑一次工具回合(静默, 不出音频)
+     * → 把这一步结论累进 scratchpad。{@code index} 从 0 起; {@code total} 用于口播连接词("第一步/接下来/最后")。
+     */
+    private Flux<AudioChunk> runAgentStep(List<Message> base, int index, int total, String description,
+                                         List<String> scratchpad, boolean speak) {
+        safeNotify(() -> listener.onAgentStep(index, description));
+        Flux<AudioChunk> narration = !speak ? Flux.empty() : Flux.defer(() -> {
+            stateMachine.tryTransition(SessionState.SPEAKING);
+            return tts.synthesize(Flux.just(AgentPrompts.narration(index, total, description)), activeTtsConfig);
+        });
+        Mono<Void> exec = Mono.defer(() -> {
+            List<Message> sw = new ArrayList<>(base);
+            sw.add(Message.system(AgentPrompts.stepInstruction(
+                    index + 1, total, description, new ArrayList<>(scratchpad))));
+            return agentLlmRound(sw, 0)
+                    .doOnNext(res -> scratchpad.add(AgentPrompts.scratchpadEntry(index + 1, description, res)))
+                    .then();
+        });
+        return narration.concatWith(exec.thenMany(Flux.empty()));
+    }
+
+    /** Agent 反思: 自检 scratchpad 是否足够; 不足且未超额度则补做一步再递归自检, 否则结束(交给整合)。 */
+    private Flux<AudioChunk> runAgentReflection(List<Message> base, int nextIndex, List<String> scratchpad,
+                                                boolean speak, int extraDone) {
+        if (extraDone >= MAX_EXTRA_AGENT_STEPS) {
+            return Flux.empty();
+        }
+        List<Message> rw = new ArrayList<>(base);
+        rw.add(Message.system(AgentPrompts.reflectInstruction(new ArrayList<>(scratchpad))));
+        return collectText(llm.chat(rw, activeLlmConfig, List.of()))
+                .map(AgentReflection::parse)
+                .flatMapMany(r -> {
+                    if (r.done()) {
+                        return Flux.<AudioChunk>empty();
+                    }
+                    int idx = nextIndex + extraDone;
+                    log.info("Agent 反思补步 #{}: {}, session={}", extraDone + 1, r.next(), context.sessionId());
+                    return runAgentStep(base, idx, idx + 1, r.next(), scratchpad, speak)
+                            .concatWith(Flux.defer(() ->
+                                    runAgentReflection(base, nextIndex, scratchpad, speak, extraDone + 1)));
+                });
+    }
+
+    /**
+     * Agent 的一轮工具回合(返回这一步的文本结论, 不出音频)。与 {@link #runLlmRound} 的差异: 不流式送 TTS、
+     * 不区分动作/数据终结 —— 动作型工具照常下发动作、但结果一律当数据回灌, 让 Agent 继续推进而非中途终结。
+     * 工具往返上限同 {@link #MAX_TOOL_ROUNDS}。
+     */
+    private Mono<String> agentLlmRound(List<Message> working, int depth) {
+        if (depth >= MAX_TOOL_ROUNDS) {
+            return Mono.just("");
+        }
+        List<ToolCall> calls = Collections.synchronizedList(new ArrayList<>());
+        StringBuilder text = new StringBuilder();
+        return llm.chat(working, activeLlmConfig, skills.toolSpecs())
+                .doOnNext(ev -> {
+                    if (ev instanceof LlmEvent.TextDelta td) {
+                        text.append(td.text());
+                    } else if (ev instanceof LlmEvent.ToolCalls tc) {
+                        calls.addAll(tc.calls());
+                    }
+                })
+                .then(Mono.defer(() -> {
+                    if (calls.isEmpty()) {
+                        return Mono.just(text.toString());
+                    }
+                    working.add(Message.assistantToolCalls(List.copyOf(calls)));
+                    return Flux.fromIterable(calls)
+                            .concatMap(call -> runSkill(call).map(res -> new ToolOutcome(call, res)))
+                            .doOnNext(o -> {
+                                List<WebSearchProvider.Result> src = o.result().sources();
+                                if (src != null && !src.isEmpty()) {
+                                    safeNotify(() -> listener.onWebSearchSources(src));
+                                }
+                                if (o.result().terminal() && o.result().actionType() != null) {
+                                    dispatchAction(o.result().actionType(), o.result().actionPayload());
+                                }
+                                working.add(Message.tool(o.call().id(), o.result().content()));
+                            })
+                            .then(Mono.defer(() -> agentLlmRound(working, depth + 1)));
+                }));
+    }
+
+    /** 收集一条 LLM 事件流里的全部文本(忽略工具事件), 用于反思等只取文本的轻量调用。 */
+    private Mono<String> collectText(Flux<LlmEvent> events) {
+        return events.filter(ev -> ev instanceof LlmEvent.TextDelta)
+                .map(ev -> ((LlmEvent.TextDelta) ev).text())
+                .collect(StringBuilder::new, StringBuilder::append)
+                .map(StringBuilder::toString);
     }
 
     /** 执行一次工具调用: 找技能 → 解析参数 → 执行; 未知工具/执行异常都兜成一条回灌结果, 不打断回合。 */
