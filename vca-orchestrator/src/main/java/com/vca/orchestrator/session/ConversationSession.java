@@ -24,6 +24,7 @@ import com.vca.orchestrator.agent.AgentPlan;
 import com.vca.orchestrator.agent.AgentPlanner;
 import com.vca.orchestrator.agent.AgentPrompts;
 import com.vca.orchestrator.agent.AgentReflection;
+import com.vca.orchestrator.agent.AgentRun;
 import com.vca.orchestrator.agent.AgentStep;
 import com.vca.orchestrator.agent.AgentTriage;
 import com.vca.orchestrator.knowledge.KnowledgeStore;
@@ -88,6 +89,12 @@ public class ConversationSession {
 
     /** Agent 反思后最多再补做这么多额外步(有界重规划, 防模型自我无限延长)。 */
     private static final int MAX_EXTRA_AGENT_STEPS = 2;
+
+    /** Agent 单回合墙钟预算(ms): 超时即停止再开新步, 用已收集信息直接整合答复(绝不空手而归/卡死)。 */
+    private static final long AGENT_DEADLINE_MS = 30_000;
+
+    /** Agent 单回合工具调用总数预算: 跨所有步骤累计, 用尽后不再执行工具, 让模型用已有信息作答。 */
+    private static final int MAX_AGENT_TOOL_CALLS = 12;
 
     private static final TypeReference<Map<String, Object>> ARGS_TYPE = new TypeReference<>() {
     };
@@ -339,13 +346,18 @@ public class ConversationSession {
      * 时直接返回; 提交本身只入队、不阻塞; 任何异常就地吞掉, 绝不影响正在进行的对话。
      */
     private void recordTurn(String userText, String assistantText, String mode, String outcome, Long totalMs) {
+        recordTurn(userText, assistantText, mode, outcome, totalMs, null, null);
+    }
+
+    private void recordTurn(String userText, String assistantText, String mode, String outcome, Long totalMs,
+                            Integer agentSteps, Integer agentReplans) {
         ConversationRecorder r = recorder;
         if (r == ConversationRecorder.NOOP) {
             return;
         }
         try {
             r.recordTurn(new TurnRecord(context.sessionId(), turnSeq.incrementAndGet(),
-                    mode, userText, assistantText, Instant.now(), totalMs, outcome));
+                    mode, userText, assistantText, Instant.now(), totalMs, outcome, agentSteps, agentReplans));
         } catch (Exception e) {
             log.debug("对话落库提交失败(忽略, 不影响对话): {}", e.toString());
         }
@@ -502,6 +514,8 @@ public class ConversationSession {
             // 本回合是否触发了"动作型"工具(点歌等)。动作是副作用而非对话内容: 触发后本轮用户/助手都不进历史,
             // 否则模型会从历史里 few-shot 出"音乐请求→直接出确认文字"而跳过工具调用(已实测复现)。
             AtomicBoolean actionTurn = new AtomicBoolean(false);
+            // 多步 Agent 运行态(预算+统计); 仅 agent 分支创建, 收尾时据它落 agentSteps/agentReplans
+            AtomicReference<AgentRun> agentRunRef = new AtomicReference<>();
 
             Message userMsg = Message.user(userText);
             appendHistory(userMsg);
@@ -545,7 +559,11 @@ public class ConversationSession {
                                 }
                                 log.info("Agent 规划: {} 步, session={}", plan.steps().size(), context.sessionId());
                                 safeNotify(() -> listener.onAgentPlan(plan.descriptions()));
-                                return runAgent(base, plan, speak, reply, firstToken, firstAudio, startNanos);
+                                AgentRun run = new AgentRun(
+                                        System.nanoTime() + Duration.ofMillis(AGENT_DEADLINE_MS).toNanos(),
+                                        MAX_AGENT_TOOL_CALLS);
+                                agentRunRef.set(run);
+                                return runAgent(base, plan, run, speak, reply, firstToken, firstAudio, startNanos);
                             });
                 } else {
                     body = runLlmRound(working, 0, speak, reply, actionTurn, firstToken, firstAudio, startNanos);
@@ -568,8 +586,12 @@ public class ConversationSession {
                         Duration total = elapsed(startNanos);
                         metrics.recordTurnTotal(total);
                         metrics.countTurn(speak ? "voice" : "text", outcomeOf(sig));
-                        // 落库: 动作型回合(点歌)reply 为空, 仍存用户那句作为档案
-                        recordTurn(userText, reply.get(), mode.name(), outcomeOf(sig), total.toMillis());
+                        // 落库: 动作型回合(点歌)reply 为空, 仍存用户那句作为档案; agent 回合附带步数/反思补步数
+                        AgentRun run = agentRunRef.get();
+                        Integer aSteps = run == null ? null : run.stepsExecuted();
+                        Integer aReplans = run == null ? null : run.replans();
+                        recordTurn(userText, reply.get(), mode.name(), outcomeOf(sig),
+                                total.toMillis(), aSteps, aReplans);
                     });
         });
     }
@@ -706,7 +728,7 @@ public class ConversationSession {
      * 整条流挂在 {@link #finishTurn} 的 {@code takeUntilOther} 下, 用户打断即整体取消。最终答复由整合环节
      * 经 {@code reply} 落历史(动作不在此终结), 故 Agent 回合在历史里就是普通的 user→assistant 一轮。
      */
-    private Flux<AudioChunk> runAgent(List<Message> base, AgentPlan plan, boolean speak,
+    private Flux<AudioChunk> runAgent(List<Message> base, AgentPlan plan, AgentRun run, boolean speak,
                                      AtomicReference<String> reply,
                                      AtomicBoolean firstToken, AtomicBoolean firstAudio, long startNanos) {
         List<AgentStep> steps = plan.steps();
@@ -717,13 +739,20 @@ public class ConversationSession {
         for (int i = 0; i < planned; i++) {
             final int idx = i;
             final AgentStep step = steps.get(i);
-            plannedFlux = plannedFlux.concatWith(Flux.defer(() ->
-                    runAgentStep(base, idx, planned, step.description(), scratchpad, speak)));
+            // 墙钟预算: 超时则跳过剩余步骤, 直接用已收集信息整合(绝不空手而归/卡死)
+            plannedFlux = plannedFlux.concatWith(Flux.defer(() -> {
+                if (run.outOfTime()) {
+                    run.markCapped();
+                    log.warn("Agent 墙钟超时, 跳过剩余步骤直接整合, session={}", context.sessionId());
+                    return Flux.<AudioChunk>empty();
+                }
+                return runAgentStep(base, idx, planned, step.description(), scratchpad, run, speak);
+            }));
         }
 
         // 反思补步(有界): 计划跑完后自检是否还差关键一步, 命中则补做, 最多 MAX_EXTRA_AGENT_STEPS 步。
         Flux<AudioChunk> reflectFlux = Flux.defer(() ->
-                runAgentReflection(base, planned, scratchpad, speak, 0));
+                runAgentReflection(base, planned, scratchpad, run, speak, 0));
 
         // 整合: 据各步结果给用户最终口语答复(走普通 speaking 回合, 设 reply 落历史)。
         Flux<AudioChunk> synthFlux = Flux.defer(() -> {
@@ -740,7 +769,8 @@ public class ConversationSession {
      * → 把这一步结论累进 scratchpad。{@code index} 从 0 起; {@code total} 用于口播连接词("第一步/接下来/最后")。
      */
     private Flux<AudioChunk> runAgentStep(List<Message> base, int index, int total, String description,
-                                         List<String> scratchpad, boolean speak) {
+                                         List<String> scratchpad, AgentRun run, boolean speak) {
+        run.stepStarted();
         safeNotify(() -> listener.onAgentStep(index, description));
         Flux<AudioChunk> narration = !speak ? Flux.empty() : Flux.defer(() -> {
             stateMachine.tryTransition(SessionState.SPEAKING);
@@ -750,17 +780,17 @@ public class ConversationSession {
             List<Message> sw = new ArrayList<>(base);
             sw.add(Message.system(AgentPrompts.stepInstruction(
                     index + 1, total, description, new ArrayList<>(scratchpad))));
-            return agentLlmRound(sw, 0)
+            return agentLlmRound(sw, 0, run)
                     .doOnNext(res -> scratchpad.add(AgentPrompts.scratchpadEntry(index + 1, description, res)))
                     .then();
         });
         return narration.concatWith(exec.thenMany(Flux.empty()));
     }
 
-    /** Agent 反思: 自检 scratchpad 是否足够; 不足且未超额度则补做一步再递归自检, 否则结束(交给整合)。 */
+    /** Agent 反思: 自检 scratchpad 是否足够; 不足且未超额度/未超时则补做一步再递归自检, 否则结束(交给整合)。 */
     private Flux<AudioChunk> runAgentReflection(List<Message> base, int nextIndex, List<String> scratchpad,
-                                                boolean speak, int extraDone) {
-        if (extraDone >= MAX_EXTRA_AGENT_STEPS) {
+                                                AgentRun run, boolean speak, int extraDone) {
+        if (extraDone >= MAX_EXTRA_AGENT_STEPS || run.outOfTime()) {
             return Flux.empty();
         }
         List<Message> rw = new ArrayList<>(base);
@@ -771,11 +801,12 @@ public class ConversationSession {
                     if (r.done()) {
                         return Flux.<AudioChunk>empty();
                     }
+                    run.replanned();
                     int idx = nextIndex + extraDone;
                     log.info("Agent 反思补步 #{}: {}, session={}", extraDone + 1, r.next(), context.sessionId());
-                    return runAgentStep(base, idx, idx + 1, r.next(), scratchpad, speak)
+                    return runAgentStep(base, idx, idx + 1, r.next(), scratchpad, run, speak)
                             .concatWith(Flux.defer(() ->
-                                    runAgentReflection(base, nextIndex, scratchpad, speak, extraDone + 1)));
+                                    runAgentReflection(base, nextIndex, scratchpad, run, speak, extraDone + 1)));
                 });
     }
 
@@ -784,7 +815,7 @@ public class ConversationSession {
      * 不区分动作/数据终结 —— 动作型工具照常下发动作、但结果一律当数据回灌, 让 Agent 继续推进而非中途终结。
      * 工具往返上限同 {@link #MAX_TOOL_ROUNDS}。
      */
-    private Mono<String> agentLlmRound(List<Message> working, int depth) {
+    private Mono<String> agentLlmRound(List<Message> working, int depth, AgentRun run) {
         if (depth >= MAX_TOOL_ROUNDS) {
             return Mono.just("");
         }
@@ -802,6 +833,11 @@ public class ConversationSession {
                     if (calls.isEmpty()) {
                         return Mono.just(text.toString());
                     }
+                    // 工具调用总数预算: 额度不够本轮的工具就不执行了, 返回已有文本让模型用现有信息收尾
+                    if (!run.tryUseToolCalls(calls.size())) {
+                        log.warn("Agent 工具调用额度用尽, 跳过本步剩余工具, session={}", context.sessionId());
+                        return Mono.just(text.toString());
+                    }
                     working.add(Message.assistantToolCalls(List.copyOf(calls)));
                     return Flux.fromIterable(calls)
                             .concatMap(call -> runSkill(call).map(res -> new ToolOutcome(call, res)))
@@ -815,7 +851,7 @@ public class ConversationSession {
                                 }
                                 working.add(Message.tool(o.call().id(), o.result().content()));
                             })
-                            .then(Mono.defer(() -> agentLlmRound(working, depth + 1)));
+                            .then(Mono.defer(() -> agentLlmRound(working, depth + 1, run)));
                 }));
     }
 

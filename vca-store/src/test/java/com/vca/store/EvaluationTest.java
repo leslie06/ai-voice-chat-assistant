@@ -34,6 +34,8 @@ class EvaluationTest {
                       assistant_text TEXT,
                       total_ms BIGINT,
                       outcome VARCHAR(16),
+                      agent_steps INT,
+                      agent_replans INT,
                       created_at TIMESTAMP NOT NULL
                     )""");
         }
@@ -106,6 +108,37 @@ class EvaluationTest {
         assertThat(r.emptyReplyRate()).isCloseTo(1.0 / 6, within(1e-4));
         // 疑似误打断率: 2 个 interrupted 里 1 个极短 = 1/2
         assertThat(r.suspectedFalseBargeRate()).isCloseTo(0.5, within(1e-4));
+        // 这批数据无 Agent 回合
+        assertThat(r.agent().agentTurns()).isZero();
+        assertThat(r.agent().agentTurnRate()).isZero();
+    }
+
+    @Test
+    void agentMetricsAreAggregated() throws Exception {
+        SqlSessionFactory factory = MyBatisSupport.sqlSessionFactory(h2("evalagent"));
+        ConversationTurnMapper writer = MyBatisSupport.mapper(factory, ConversationTurnMapper.class);
+        EvaluationMapper reader = MyBatisSupport.mapper(factory, EvaluationMapper.class);
+
+        // 2 个普通回合 + 2 个 Agent 回合(步数 3/4, 反思补步 0/1)
+        writer.insert(row("s1", 1, "pipeline", "普通回复一", 100L, "complete"));
+        writer.insert(row("s1", 2, "pipeline", "普通回复二", 200L, "complete"));
+        writer.insert(agentRow("s2", 1, "据计划完成的整合答复", 3, 0));
+        writer.insert(agentRow("s2", 2, "更复杂任务的整合答复", 4, 1));
+
+        EvaluationReport.AgentStat a = new ConversationEvaluator(reader).report(null).agent();
+
+        assertThat(a.agentTurns()).isEqualTo(2);
+        assertThat(a.agentTurnRate()).isCloseTo(2.0 / 4, within(1e-4));   // 4 回合里 2 个走 Agent
+        assertThat(a.avgSteps()).isCloseTo((3 + 4) / 2.0, within(1e-4));  // 平均步数 3.5
+        assertThat(a.avgReplans()).isCloseTo((0 + 1) / 2.0, within(1e-4)); // 平均反思补步 0.5
+    }
+
+    private static ConversationTurn agentRow(String session, int idx, String assistant,
+                                             int steps, int replans) {
+        ConversationTurn t = row(session, idx, "pipeline", assistant, 800L, "complete");
+        t.setAgentSteps(steps);
+        t.setAgentReplans(replans);
+        return t;
     }
 
     @Test

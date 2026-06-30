@@ -64,4 +64,18 @@ public interface EvaluationMapper {
             WHERE created_at >= #{since} AND outcome = 'interrupted'
               AND (assistant_text IS NULL OR CHAR_LENGTH(assistant_text) < #{minChars})""")
     long shortInterruptedTurns(@Param("since") LocalDateTime since, @Param("minChars") int minChars);
+
+    /** 多步 Agent 回合数(agent_steps 非空即 Agent 回合)。 */
+    @Select("SELECT COUNT(*) FROM conversation_turn WHERE created_at >= #{since} AND agent_steps IS NOT NULL")
+    long agentTurns(@Param("since") LocalDateTime since);
+
+    /** Agent 回合的总执行步数(均值在 Java 算, 避免方言差异)。 */
+    @Select("SELECT COALESCE(SUM(agent_steps), 0) FROM conversation_turn "
+            + "WHERE created_at >= #{since} AND agent_steps IS NOT NULL")
+    long agentStepsSum(@Param("since") LocalDateTime since);
+
+    /** Agent 回合的总反思补步数。 */
+    @Select("SELECT COALESCE(SUM(agent_replans), 0) FROM conversation_turn "
+            + "WHERE created_at >= #{since} AND agent_replans IS NOT NULL")
+    long agentReplansSum(@Param("since") LocalDateTime since);
 }

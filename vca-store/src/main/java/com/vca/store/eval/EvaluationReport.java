@@ -25,10 +25,19 @@ public record EvaluationReport(
         List<OutcomeStat> byOutcome,
         LatencyStat latency,
         double emptyReplyRate,
-        double suspectedFalseBargeRate) {
+        double suspectedFalseBargeRate,
+        AgentStat agent) {
 
     /** 按链路(pipeline/s2s/s2s-persistent)的回合数与失败率/打断率。 */
     public record ModeStat(String mode, long total, double errorRate, double interruptRate) {
+    }
+
+    /**
+     * 多步 Agent 使用情况(P3): agent 回合占比 + 平均步数/反思补步数。
+     * {@code agentTurnRate} 看复杂任务被路由进 Agent 的频度; {@code avgSteps}/{@code avgReplans} 看规划粒度
+     * 与重规划频率 —— 平均补步数偏高说明初始规划常不到位。
+     */
+    public record AgentStat(long agentTurns, double agentTurnRate, double avgSteps, double avgReplans) {
     }
 
     /** 按结局(complete/interrupted/error)的回合数。 */

@@ -40,6 +40,12 @@ public class ConversationTurn {
     /** 回合结局: complete / interrupted / error。 */
     private String outcome;
 
+    /** 多步 Agent 实际执行步数(计划步+反思补步); 非 Agent 回合为 null。 */
+    private Integer agentSteps;
+
+    /** 多步 Agent 反思补做的额外步数; 非 Agent 回合为 null。 */
+    private Integer agentReplans;
+
     /** 落库时刻。 */
     private LocalDateTime createdAt;
 
@@ -105,6 +111,22 @@ public class ConversationTurn {
 
     public void setOutcome(String outcome) {
         this.outcome = outcome;
+    }
+
+    public Integer getAgentSteps() {
+        return agentSteps;
+    }
+
+    public void setAgentSteps(Integer agentSteps) {
+        this.agentSteps = agentSteps;
+    }
+
+    public Integer getAgentReplans() {
+        return agentReplans;
+    }
+
+    public void setAgentReplans(Integer agentReplans) {
+        this.agentReplans = agentReplans;
     }
 
     public LocalDateTime getCreatedAt() {

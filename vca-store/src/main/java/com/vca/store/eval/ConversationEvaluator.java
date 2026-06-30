@@ -56,8 +56,15 @@ public class ConversationEvaluator {
         long interrupted = mapper.interruptedTurns(from);
         double falseBargeRate = rate(mapper.shortInterruptedTurns(from, SHORT_REPLY_CHARS), interrupted);
 
+        long agentTurns = mapper.agentTurns(from);
+        EvaluationReport.AgentStat agent = new EvaluationReport.AgentStat(
+                agentTurns,
+                rate(agentTurns, totalTurns),
+                avg(mapper.agentStepsSum(from), agentTurns),
+                avg(mapper.agentReplansSum(from), agentTurns));
+
         return new EvaluationReport(Instant.now(), since, totalTurns, totalSessions,
-                byMode, byOutcome, latency, emptyReplyRate, falseBargeRate);
+                byMode, byOutcome, latency, emptyReplyRate, falseBargeRate, agent);
     }
 
     /** 比率, 保留 4 位小数; 分母为 0 返回 0。 */
@@ -66,6 +73,14 @@ public class ConversationEvaluator {
             return 0.0;
         }
         return Math.round((double) numerator / denominator * 10000.0) / 10000.0;
+    }
+
+    /** 均值, 保留 2 位小数; 分母为 0 返回 0。 */
+    static double avg(long sum, long count) {
+        if (count <= 0) {
+            return 0.0;
+        }
+        return Math.round((double) sum / count * 100.0) / 100.0;
     }
 
     /** 在 Java 侧算 p50/p95(最近秩法)与均值, 避开 MySQL 8 没有的 PERCENTILE 函数。 */

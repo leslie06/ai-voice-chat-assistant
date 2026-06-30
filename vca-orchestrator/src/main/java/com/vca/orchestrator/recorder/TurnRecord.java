@@ -11,6 +11,8 @@ import java.time.Instant;
  *   <li>只记文本与回合元数据, <b>不记音频</b>(音频体量大, 留作 WER 阶段再以对象存储引用补);</li>
  *   <li>{@code totalMs} 可空 —— 仅三段式/文本回合有逐轮计时, S2S(每轮/持久)路径无单轮起止点;</li>
  *   <li>逐轮延迟 SLO(首 token/首音频)仍在 Micrometer/Prometheus 聚合, 此处不重复存。</li>
+ *   <li>{@code agentSteps}/{@code agentReplans} 仅多步 Agent 回合非空, 普通回合为 {@code null} ——
+ *       据此可在评测里切出"agent 回合占比 / 平均步数 / 平均反思补步数"。</li>
  * </ul>
  *
  * @param sessionId     会话 id(同一条 WebSocket 长连一个)
@@ -21,6 +23,8 @@ import java.time.Instant;
  * @param at            回合落库时刻
  * @param totalMs       整轮耗时(毫秒), 可空
  * @param outcome       回合结局: {@code complete} / {@code interrupted} / {@code error}
+ * @param agentSteps    多步 Agent 实际执行的步数(计划步+反思补步); 非 Agent 回合为 {@code null}
+ * @param agentReplans  多步 Agent 反思补做的额外步数; 非 Agent 回合为 {@code null}
  */
 public record TurnRecord(
         String sessionId,
@@ -30,5 +34,13 @@ public record TurnRecord(
         String assistantText,
         Instant at,
         Long totalMs,
-        String outcome) {
+        String outcome,
+        Integer agentSteps,
+        Integer agentReplans) {
+
+    /** 普通(非 Agent)回合: agent 统计字段留空。 */
+    public static TurnRecord plain(String sessionId, int turnIndex, String mode, String userText,
+                                   String assistantText, Instant at, Long totalMs, String outcome) {
+        return new TurnRecord(sessionId, turnIndex, mode, userText, assistantText, at, totalMs, outcome, null, null);
+    }
 }

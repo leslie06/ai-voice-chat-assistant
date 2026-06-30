@@ -19,7 +19,10 @@ import com.vca.orchestrator.agent.AgentPlan;
 import com.vca.orchestrator.agent.AgentPlanner;
 import com.vca.orchestrator.agent.AgentPrompts;
 import com.vca.orchestrator.agent.AgentReflection;
+import com.vca.orchestrator.agent.AgentRun;
 import com.vca.orchestrator.agent.AgentTriage;
+import com.vca.orchestrator.recorder.ConversationRecorder;
+import com.vca.orchestrator.recorder.TurnRecord;
 import com.vca.orchestrator.metrics.TurnMetrics;
 import com.vca.orchestrator.pipeline.SentenceSplitter;
 import com.vca.orchestrator.session.ConversationSession;
@@ -104,6 +107,24 @@ class AgentPlanningTest {
         assertThat(AgentPrompts.narration(2, 3, "排行程")).startsWith("最后，");
     }
 
+    @Test
+    void agentRunEnforcesBudgetsAndCountsStats() {
+        AgentRun run = new AgentRun(System.nanoTime() + java.time.Duration.ofSeconds(60).toNanos(), 3);
+        assertThat(run.outOfTime()).isFalse();
+        assertThat(run.tryUseToolCalls(2)).isTrue();    // 额度 3→1
+        assertThat(run.tryUseToolCalls(2)).isFalse();   // 不够 2, 不扣, 标记 capped
+        assertThat(run.capped()).isTrue();
+        assertThat(run.tryUseToolCalls(1)).isTrue();    // 1→0
+        run.stepStarted();
+        run.stepStarted();
+        run.replanned();
+        assertThat(run.stepsExecuted()).isEqualTo(2);
+        assertThat(run.replans()).isEqualTo(1);
+
+        // 截止时刻已过 → 立即超时
+        assertThat(new AgentRun(System.nanoTime() - 1, 5).outOfTime()).isTrue();
+    }
+
     // ---- 编排: 触发与退回 ----
 
     @Test
@@ -159,8 +180,15 @@ class AgentPlanningTest {
         s.setAgentEnabled(true);
         PlanCaptor cap = new PlanCaptor();
         s.setTurnListener(cap);
+        CapturingRecorder rec = new CapturingRecorder();
+        s.setRecorder(rec);
 
         StepVerifier.create(s.handleTextTurn("帮我对比一下A和B")).verifyComplete();
+
+        // 落库带上 agent 统计: 执行 2 步、无反思补步
+        assertThat(rec.records).hasSize(1);
+        assertThat(rec.records.get(0).agentSteps()).isEqualTo(2);
+        assertThat(rec.records.get(0).agentReplans()).isEqualTo(0);
 
         // 计划 + 逐步进度透传
         assertThat(cap.planSteps).containsExactly("查A", "查B");
@@ -196,12 +224,18 @@ class AgentPlanningTest {
         PlanCaptor cap = new PlanCaptor();
         s.setTurnListener(cap);
 
+        CapturingRecorder rec = new CapturingRecorder();
+        s.setRecorder(rec);
+
         StepVerifier.create(s.handleTextTurn("先查A然后再查别的")).verifyComplete();
 
         // 计划 1 步 + 反思补 1 步 = 执行了 2 步(下标 0、1)
         assertThat(cap.stepIdx).containsExactly(0, 1);
         assertThat(llm.seenHistories).hasSize(6);
         assertThat(cap.fullReplies).containsExactly("甲和丙。");
+        // 落库统计: 2 步, 其中 1 步是反思补做
+        assertThat(rec.records.get(0).agentSteps()).isEqualTo(2);
+        assertThat(rec.records.get(0).agentReplans()).isEqualTo(1);
     }
 
     @Test
@@ -349,6 +383,16 @@ class AgentPlanningTest {
         @Override
         public void onAgentStep(int index, String description) {
             stepIdx.add(index);
+        }
+    }
+
+    /** 捕获落库的 TurnRecord, 验证 agent 统计字段。 */
+    private static final class CapturingRecorder implements ConversationRecorder {
+        final List<TurnRecord> records = new ArrayList<>();
+
+        @Override
+        public void recordTurn(TurnRecord record) {
+            records.add(record);
         }
     }
 }

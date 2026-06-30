@@ -37,6 +37,8 @@ class MyBatisConversationRecorderTest {
                       assistant_text TEXT,
                       total_ms BIGINT,
                       outcome VARCHAR(16),
+                      agent_steps INT,
+                      agent_replans INT,
                       created_at TIMESTAMP NOT NULL
                     )""");
         }
@@ -53,8 +55,8 @@ class MyBatisConversationRecorderTest {
         ConversationTurnMapper m = mapper(h2("rec"));
         MyBatisConversationRecorder recorder = new MyBatisConversationRecorder(m, 100);
 
-        recorder.recordTurn(new TurnRecord("s-1", 1, "pipeline", "你好", "你也好", Instant.now(), 320L, "complete"));
-        recorder.recordTurn(new TurnRecord("s-1", 2, "s2s", "几点了", "下午三点", Instant.now(), null, "complete"));
+        recorder.recordTurn(TurnRecord.plain("s-1", 1, "pipeline", "你好", "你也好", Instant.now(), 320L, "complete"));
+        recorder.recordTurn(TurnRecord.plain("s-1", 2, "s2s", "几点了", "下午三点", Instant.now(), null, "complete"));
         recorder.close();   // 优雅排空: 关闭后队列里的都应已落库
 
         List<ConversationTurn> rows = m.selectList(null);

@@ -87,6 +87,9 @@ public class StoreAutoConfiguration {
     /** 幂等列迁移: 给老库补上升级后新增的列(向量化记忆的 embedding 列)。 */
     private void migrate(HikariDataSource ds) {
         addColumnIfMissing(ds, "user_memory", "embedding", "BLOB NULL");
+        // 多步 Agent 指标(P3): 给已存在的 conversation_turn 补列
+        addColumnIfMissing(ds, "conversation_turn", "agent_steps", "INT NULL");
+        addColumnIfMissing(ds, "conversation_turn", "agent_replans", "INT NULL");
     }
 
     private void addColumnIfMissing(HikariDataSource ds, String table, String column, String ddl) {

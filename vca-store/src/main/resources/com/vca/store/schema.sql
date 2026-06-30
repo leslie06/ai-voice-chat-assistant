@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS conversation_turn (
     assistant_text TEXT         COMMENT '机器人本轮回复',
     total_ms       BIGINT       COMMENT '整轮耗时(ms), 可空: S2S 路径无逐轮计时',
     outcome        VARCHAR(16)  COMMENT 'complete | interrupted | error',
+    agent_steps    INT          COMMENT '多步 Agent 执行步数(计划+反思补步); 非 Agent 回合为 NULL',
+    agent_replans  INT          COMMENT '多步 Agent 反思补做的额外步数; 非 Agent 回合为 NULL',
     created_at     DATETIME     NOT NULL,
     PRIMARY KEY (id),
     KEY idx_turn_session (session_id, turn_index),   -- 按会话回溯整段对话

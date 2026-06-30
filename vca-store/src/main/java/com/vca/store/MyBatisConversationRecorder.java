@@ -99,6 +99,8 @@ public class MyBatisConversationRecorder implements ConversationRecorder, AutoCl
         e.setAssistantText(r.assistantText());
         e.setTotalMs(r.totalMs());
         e.setOutcome(r.outcome());
+        e.setAgentSteps(r.agentSteps());
+        e.setAgentReplans(r.agentReplans());
         e.setCreatedAt(LocalDateTime.ofInstant(r.at(), ZoneId.systemDefault()));
         return e;
     }
