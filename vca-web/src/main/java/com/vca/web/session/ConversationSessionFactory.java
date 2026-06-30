@@ -76,6 +76,8 @@ public class ConversationSessionFactory {
         session.setRecorder(recorder);
         // 联网搜索不分用户(实时信息非个人数据), 无条件启用
         session.setWebSearch(webSearch, props.isWebSearchAuto(), props.getWebSearchCount());
+        // 多步 Agent 规划: 命中复杂回合先规划再执行(需配合工具, 故技能为空时该开关在会话内自然失效)
+        session.setAgentEnabled(props.isAgentEnabled());
         if (userId != null && !userId.isBlank()) {
             session.setMemory(memory, userId);
             session.setKnowledge(knowledge);   // RAG 自动注入按同一登录用户隔离

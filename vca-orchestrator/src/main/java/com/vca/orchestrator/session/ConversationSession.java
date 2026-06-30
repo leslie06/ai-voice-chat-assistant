@@ -20,6 +20,8 @@ import com.vca.domain.spi.LlmProvider;
 import com.vca.domain.spi.S2sProvider;
 import com.vca.domain.spi.S2sSession;
 import com.vca.domain.spi.TtsProvider;
+import com.vca.orchestrator.agent.AgentPlanner;
+import com.vca.orchestrator.agent.AgentTriage;
 import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.search.WebSearchHeuristic;
@@ -90,6 +92,8 @@ public class ConversationSession {
     private final MusicIntent musicIntent = new MusicIntent();
     /** function-calling 技能目录; 空时退回普通文本对话(不下发 tools)。 */
     private final SkillRegistry skills;
+    /** 多步任务规划器(无状态); 仅 {@link #agentEnabled} 且命中 {@link AgentTriage} 的复杂回合才用。 */
+    private final AgentPlanner planner = new AgentPlanner();
 
     private final ConversationStateMachine stateMachine = new ConversationStateMachine();
     private final List<Message> history = new ArrayList<>();
@@ -110,6 +114,11 @@ public class ConversationSession {
     /** 自动注入式联网搜索开关与每次取的条数(由接入层配置注入)。 */
     private volatile boolean webSearchAuto = true;
     private volatile int webSearchCount = 5;
+    /**
+     * 多步 Agent 规划开关(默认关)。开启后, 命中 {@link AgentTriage} 的复杂回合会先让模型出一份分步计划,
+     * 注入工具回合循环引导逐步执行; 未命中的回合按原路零延迟走。规划失败静默退回普通回合。
+     */
+    private volatile boolean agentEnabled = false;
     /** 当前登录用户 id(账号系统启用且已登录时非空); 用于长期记忆/知识库按用户隔离 */
     private volatile String userId;
     /** 本会话回合序号(落库用, 从 1 递增) */
@@ -197,6 +206,11 @@ public class ConversationSession {
         this.webSearch = webSearch == null ? WebSearchProvider.NOOP : webSearch;
         this.webSearchAuto = auto;
         this.webSearchCount = count > 0 ? count : 5;
+    }
+
+    /** 开/关多步 Agent 规划路径; 未设默认关(所有回合按原路走)。 */
+    public void setAgentEnabled(boolean enabled) {
+        this.agentEnabled = enabled;
     }
 
     /**
@@ -509,7 +523,22 @@ public class ConversationSession {
                     working.add(Message.system(web));
                 }
                 working.addAll(historySnapshot());
-                body = runLlmRound(working, 0, speak, reply, actionTurn, firstToken, firstAudio, startNanos);
+                // 多步 Agent: 命中复杂任务先让模型出一份分步计划, 注入工作列表引导工具回合循环逐步执行;
+                // 未开启/未命中/规划为空都按原路直接进 runLlmRound(零额外延迟)。
+                if (agentEnabled && !skills.isEmpty() && AgentTriage.isComplex(userText)) {
+                    body = planner.plan(llm, working, activeLlmConfig)
+                            .flatMapMany(plan -> {
+                                if (!plan.isEmpty()) {
+                                    log.info("Agent 规划: {} 步, session={}", plan.steps().size(), context.sessionId());
+                                    working.add(Message.system(plan.toContextMessage()));
+                                    safeNotify(() -> listener.onAgentPlan(plan.descriptions()));
+                                }
+                                return runLlmRound(working, 0, speak, reply, actionTurn,
+                                        firstToken, firstAudio, startNanos);
+                            });
+                } else {
+                    body = runLlmRound(working, 0, speak, reply, actionTurn, firstToken, firstAudio, startNanos);
+                }
             }
 
             return body

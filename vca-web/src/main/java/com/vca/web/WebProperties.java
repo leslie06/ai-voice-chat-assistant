@@ -46,6 +46,13 @@ public class WebProperties {
      */
     private boolean toolsEnabled = true;
 
+    /**
+     * 多步 Agent 规划(P1)总开关, 默认关。开则命中多步意图({@link com.vca.orchestrator.agent.AgentTriage})的
+     * 复杂回合先让模型出一份分步计划, 注入工具回合循环引导逐步执行; 未命中的回合按原路零延迟走。
+     * 依赖 {@link #toolsEnabled}(规划需配合工具才有意义); 仅作用于走 LLM 的回合, 端到端 s2s 语音不读它。
+     */
+    private boolean agentEnabled = false;
+
 //    private String systemPrompt = "You are a voice assistant. Always reply in English, "
 //            + "in a short, conversational, spoken style. Avoid long paragraphs and lists. "
 //            + "Only answer the user's current sentence; do not restate, repeat or continue "
@@ -192,6 +199,14 @@ public class WebProperties {
 
     public void setToolsEnabled(boolean toolsEnabled) {
         this.toolsEnabled = toolsEnabled;
+    }
+
+    public boolean isAgentEnabled() {
+        return agentEnabled;
+    }
+
+    public void setAgentEnabled(boolean agentEnabled) {
+        this.agentEnabled = agentEnabled;
     }
 
     public String getSystemPrompt() {

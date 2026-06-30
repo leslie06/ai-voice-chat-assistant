@@ -102,7 +102,11 @@
       "Bash(echo \"已后台启动 run.sh, 包装进程 PID=$!（打包+启动需约 10-40s）\")",
       "Bash(curl -s -m 10 http://localhost:8080/)",
       "Bash(curl -s -m 10 -o /dev/null -w \"GET /api/auth/me -> %{http_code}\\\\n\" http://localhost:8080/api/auth/me)",
-      "Bash(curl -s -m 10 -o /dev/null -w \"POST /api/auth/login -> %{http_code}\\\\n\" -X POST http://localhost:8080/api/auth/login -H 'Content-Type: application/json' -d '{}')"
+      "Bash(curl -s -m 10 -o /dev/null -w \"POST /api/auth/login -> %{http_code}\\\\n\" -X POST http://localhost:8080/api/auth/login -H 'Content-Type: application/json' -d '{}')",
+      "Bash(./mvnw -q -pl vca-domain,vca-orchestrator -am test)",
+      "Bash(./mvnw -pl vca-domain,vca-orchestrator -am test)",
+      "Bash(./mvnw -q package -DskipTests=false)",
+      "Bash(./mvnw package *)"
     ]
   }
 }

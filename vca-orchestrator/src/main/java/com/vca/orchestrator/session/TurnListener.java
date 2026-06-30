@@ -51,4 +51,13 @@ public interface TurnListener {
      */
     default void onUserSpeechStarted() {
     }
+
+    /**
+     * 本轮命中多步任务、已生成执行计划时回调(在模型据此逐步执行<b>之前</b>): 让接入层把步骤透传给前端展示进度。
+     * 仅 Agent 路径(命中 {@link com.vca.orchestrator.agent.AgentTriage} 且规划出非空步骤)产生。
+     *
+     * @param steps 计划的有序步骤描述
+     */
+    default void onAgentPlan(List<String> steps) {
+    }
 }
