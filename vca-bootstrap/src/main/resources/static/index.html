@@ -121,6 +121,10 @@
     .send{flex:none;width:34px;height:34px;border-radius:50%;border:none;background:var(--text);color:#fff;
       font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
     .send:disabled{background:#c9c9cf;cursor:default;}
+    /* 视觉多模态: 聊天里的图片消息 + 摄像头小窗预览 */
+    .bubble img.att{display:block;max-width:220px;max-height:220px;border-radius:10px;}
+    .campreview{position:fixed;right:14px;bottom:92px;width:128px;border-radius:10px;z-index:60;
+      border:1px solid var(--line);box-shadow:0 4px 16px rgba(0,0,0,.18);background:#000;}
     /* 调试面板 */
     details.dbg{max-width:760px;margin:6px auto 0;padding:0 16px;font-size:12px;color:var(--sub);}
     details.dbg pre{background:#1c1c1e;color:#9fe870;padding:8px;border-radius:8px;white-space:pre-wrap;overflow:auto;}
@@ -194,6 +198,9 @@
     <div class="composer">
       <button class="voicebtn" id="handsfree" title="免提对话">🎙</button>
       <button class="voicebtn talk" id="talk" title="按住说话">🎤</button>
+      <button class="voicebtn" id="attach" title="发图片提问（随下一句生效）">📷</button>
+      <button class="voicebtn" id="cam" title="摄像头·边看边聊（端到端免提时生效）">📹</button>
+      <input type="file" id="imgFile" accept="image/*" hidden>
       <div class="inputbox">
         <textarea id="text" rows="1" placeholder="发消息…" autocomplete="off"></textarea>
         <button class="send" id="send" title="发送">➤</button>
@@ -778,7 +785,10 @@ function connect(){
         case 'error':      stopPlayback(); stopMusic(); acceptAudio=false; botFinish(); addSys('⚠ '+m.message); D.last='error'; break;
         case 'music':      if(m.action==='play') addMusic(m); else addSys('🎵 没找到《'+(m.query||'')+'》');
                            D.last='music:'+(m.action||''); break;
-        case 'state':      D.state=m.label||m.value; hint.textContent=m.label||''; D.last='state:'+m.value; break;
+        case 'state':      D.state=m.label||m.value; hint.textContent=m.label||''; D.last='state:'+m.value;
+                           // 三段式免提开口: 摄像头开着就抓一帧随本句发出(赶在 ASR final 前送达即可附加成功)
+                           if(m.value==='speak'&&engineSel.value!=='s2s') maybeAttachCamFrame();
+                           break;
         case 'chunk':      D.last='chunk:'+(m.text||''); break; // 字幕由 reply_delta 负责, 此处仅调试
       }
       paint();
@@ -862,7 +872,9 @@ async function startTalk(){ if(hfBtn.classList.contains('on')) return;
   if(!canUse()){ openAuth('login'); return; }
   unlockMedia();   // 手势内解锁 <audio>(iOS), 让随后语音点歌能自动出声
   try{ await ensureMic(); }catch(e){ addSys('⚠ 麦克风: '+e.message); return; }
-  announceMic(); send({type:'ptt',value:'start'}); talking=true; streaming=true; talkBtn.classList.add('rec'); }
+  announceMic(); send({type:'ptt',value:'start'}); talking=true; streaming=true; talkBtn.classList.add('rec');
+  if(engineSel.value!=='s2s') maybeAttachCamFrame();   // 三段式按住说话: 摄像头开着就带上当前画面
+}
 function endTalk(){ if(!talking) return; talking=false; streaming=false; talkBtn.classList.remove('rec'); send({type:'ptt',value:'stop'}); }
 talkBtn.addEventListener('pointerdown',e=>{e.preventDefault();startTalk();});
 talkBtn.addEventListener('pointerup',endTalk); talkBtn.addEventListener('pointerleave',endTalk);
@@ -888,6 +900,7 @@ async function sendText(){ const t=ta.value.trim(); if(!t) return;
   await ensureAudio();
   // 文本输入: 本地直接回显, 后端不再 echo; 自行进入"回合中"以便渲染流式回复
   addMsg('user',t); turnActive=true; acceptAudio=true; bargeBtn.style.display='inline';
+  maybeAttachCamFrame();   // 摄像头开着: 自动带上当前画面(先于 text 送达, 后端附加到本回合)
   send({type:'text',text:t}); ta.value=''; ta.style.height='auto'; }
 document.getElementById('send').onclick=sendText;
 ta.addEventListener('input',()=>{ ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,120)+'px'; });
@@ -897,6 +910,94 @@ ta.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){ e.preventDefault(); sendText(); }
 });
 bargeBtn.onclick=()=>send({type:'barge_in'});
+
+/* ---------- 视觉多模态: 图片附件 + 摄像头边看边聊 ---------- */
+// 发图: 选图/拍照 → canvas 压缩(长边≤1280 JPEG) → WS {type:"image"} 发后端暂存,
+// 随用户下一句(打字或说话)一起进大模型; 持久 S2S 长连在跑时同时直推一帧给端到端模型。
+const attachBtn=document.getElementById('attach'), imgFile=document.getElementById('imgFile');
+attachBtn.onclick=()=>{ if(!canUse()){ openAuth('login'); return; } imgFile.click(); };
+imgFile.onchange=async()=>{
+  const f=imgFile.files&&imgFile.files[0]; imgFile.value=''; if(!f) return;
+  try{
+    const dataUrl=await toJpegDataUrl(f,1280);
+    send({type:'image',data:dataUrl.slice(dataUrl.indexOf(',')+1),mime:'image/jpeg'});
+    addImageMsg(dataUrl);
+    addSys('— 图片已发送，直接说或打你的问题 —'); D.last='image_sent'; paint();
+  }catch(e){ addSys('⚠ 图片处理失败: '+(e&&e.message||e)); }
+};
+// 读文件 → 等比压到长边 maxSide 的 JPEG data URL(降流量; HEIC 等浏览器可解码格式也统一转 JPEG)
+function toJpegDataUrl(file,maxSide){
+  return new Promise((res,rej)=>{
+    const img=new Image();
+    img.onload=()=>{
+      const sc=Math.min(1,maxSide/Math.max(img.width,img.height));
+      const w=Math.max(1,Math.round(img.width*sc)), h=Math.max(1,Math.round(img.height*sc));
+      const c=document.createElement('canvas'); c.width=w; c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      URL.revokeObjectURL(img.src); res(c.toDataURL('image/jpeg',0.85));
+    };
+    img.onerror=()=>{ URL.revokeObjectURL(img.src); rej(new Error('无法读取图片')); };
+    img.src=URL.createObjectURL(file);
+  });
+}
+// 图片消息气泡(不入 localStorage 历史: base64 太大, 刷新后图片消息不恢复)
+function addImageMsg(dataUrl){
+  dropEmpty();
+  const m=document.createElement('div'); m.className='msg user';
+  const av=document.createElement('div'); av.className='avatar'; av.textContent='🙂';
+  const b=document.createElement('div'); b.className='bubble';
+  const im=document.createElement('img'); im.src=dataUrl; im.className='att'; im.alt='图片';
+  b.appendChild(im); m.append(b,av); chat.appendChild(m); scroll();
+}
+// 摄像头"边看边聊": 端到端免提(持久 S2S)时每秒抓一帧(长边≤640 JPEG)直推, 模型结合画面作答;
+// 其它状态不传帧(后端无长连也会丢弃)。再点一次关闭。
+const camBtn=document.getElementById('cam');
+let camStream=null, camTimer=null, camVideo=null, camCanvas=null;
+camBtn.onclick=async()=>{
+  if(camStream){ stopCam(); return; }
+  if(!canUse()){ openAuth('login'); return; }
+  try{ camStream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:640},height:{ideal:480}}}); }
+  catch(e){ addSys('⚠ 摄像头: '+(e&&e.message||e)); return; }
+  camVideo=document.createElement('video');
+  camVideo.muted=true; camVideo.playsInline=true; camVideo.setAttribute('playsinline','');
+  camVideo.className='campreview'; camVideo.srcObject=camStream;
+  document.body.appendChild(camVideo);
+  try{ await camVideo.play(); }catch(e){}
+  camCanvas=document.createElement('canvas');
+  camTimer=setInterval(()=>{
+    if(!ws||ws.readyState!==1||!hfBtn.classList.contains('on')||engineSel.value!=='s2s') return;
+    const b64=captureCamFrame(640,0.7);
+    if(b64) send({type:'video_frame',data:b64});
+  },1000);
+  camBtn.classList.add('on');
+  addSys(engineSel.value==='s2s'
+    ? '— 摄像头已开启：开 🎙 免提直接问"你看到了什么"；打字提问也会自动带上当前画面 —'
+    : '— 摄像头已开启：说话或打字提问时，会自动带上当前画面 —');
+};
+// 抓当前摄像头一帧, 压成 JPEG base64(不带 data URL 前缀); 摄像头未就绪返回 null
+function captureCamFrame(maxSide,quality){
+  if(!camVideo||!camVideo.videoWidth||!camCanvas) return null;
+  const sc=Math.min(1,maxSide/Math.max(camVideo.videoWidth,camVideo.videoHeight));
+  camCanvas.width=Math.max(1,Math.round(camVideo.videoWidth*sc));
+  camCanvas.height=Math.max(1,Math.round(camVideo.videoHeight*sc));
+  camCanvas.getContext('2d').drawImage(camVideo,0,0,camCanvas.width,camCanvas.height);
+  const dataUrl=camCanvas.toDataURL('image/jpeg',quality);
+  return dataUrl.slice(dataUrl.indexOf(',')+1);
+}
+// 非"端到端免提"(那条路已在持续传帧)的提问, 摄像头开着就自动抓一帧随本句发出:
+// 打字回合在 sendText 里调; 三段式语音回合在开口(state=speak/ptt)时调, 赶在 ASR 出结果前送达。
+function maybeAttachCamFrame(){
+  if(!camStream) return;
+  if(hfBtn.classList.contains('on')&&engineSel.value==='s2s') return;   // 持久 S2S 已在传帧
+  const b64=captureCamFrame(1024,0.8);
+  if(b64){ send({type:'image',data:b64,mime:'image/jpeg'}); D.last='cam_frame_attached'; }
+}
+function stopCam(){
+  if(camTimer){ clearInterval(camTimer); camTimer=null; }
+  if(camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream=null; }
+  if(camVideo){ camVideo.remove(); camVideo=null; }
+  camCanvas=null; camBtn.classList.remove('on'); addSys('— 摄像头已关闭 —');
+}
 
 /* ---------- 模型选择(三段式下语音+打字都用; 端到端下仅作用于打字) ---------- */
 const modelSel=document.getElementById('model');

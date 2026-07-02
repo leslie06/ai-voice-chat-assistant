@@ -53,6 +53,14 @@ public class WebProperties {
      */
     private boolean agentEnabled = false;
 
+    /**
+     * 视觉模型(多模态)。回合上下文里出现图片时, 该回合自动改用这里配置的厂商+模型
+     * (需支持 OpenAI 兼容的 image_url 多模态 content, 如 DashScope 的 qwen-vl-plus / qwen-vl-max)。
+     * {@code visionModel} 留空 = 不切换, 带图回合直接用当前对话模型(需其本身支持视觉, 否则报错)。
+     */
+    private VendorType visionVendor = VendorType.QWEN;
+    private String visionModel = "";
+
 //    private String systemPrompt = "You are a voice assistant. Always reply in English, "
 //            + "in a short, conversational, spoken style. Avoid long paragraphs and lists. "
 //            + "Only answer the user's current sentence; do not restate, repeat or continue "
@@ -207,6 +215,22 @@ public class WebProperties {
 
     public void setAgentEnabled(boolean agentEnabled) {
         this.agentEnabled = agentEnabled;
+    }
+
+    public VendorType getVisionVendor() {
+        return visionVendor;
+    }
+
+    public void setVisionVendor(VendorType visionVendor) {
+        this.visionVendor = visionVendor;
+    }
+
+    public String getVisionModel() {
+        return visionModel;
+    }
+
+    public void setVisionModel(String visionModel) {
+        this.visionModel = visionModel;
     }
 
     public String getSystemPrompt() {

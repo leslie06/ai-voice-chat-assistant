@@ -55,6 +55,10 @@ vca:
     # 多步 Agent 规划(P1): 命中多步意图的复杂回合先让模型出分步计划, 注入工具回合循环引导逐步执行;
     # 普通/单步回合零额外延迟按原路走。需配合工具(tools-enabled), 仅走 LLM 的回合生效; 默认关。
     agent-enabled: ${VCA_AGENT_ENABLED:true}
+    # 视觉模型(多模态): 回合上下文含图片时该轮自动改用它(需支持 OpenAI 兼容 image_url 输入)。
+    # 走 DashScope 的 qwen 客户端(复用 DASHSCOPE_API_KEY)。留空=不切换(带图回合用当前对话模型)。
+    vision-vendor: qwen
+    vision-model: ${VCA_VISION_MODEL:qwen-vl-plus}
     # 提示词(人设/语气/约束)。pipeline 与 s2s 共用; s2s 下每回合作为 Qwen-Omni 的
     # response.create.instructions 下发。长提示词写在文件末尾的 prompts: 段(块标量 | , 免转义),
     # 这里只引用它; 换人设=改那段, 或把引用指向别的 key。也可用 VCA_SYSTEM_PROMPT 整段覆盖。

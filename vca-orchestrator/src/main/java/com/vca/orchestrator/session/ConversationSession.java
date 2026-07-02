@@ -138,6 +138,17 @@ public class ConversationSession {
     private volatile boolean agentEnabled = false;
     /** 当前登录用户 id(账号系统启用且已登录时非空); 用于长期记忆/知识库按用户隔离 */
     private volatile String userId;
+    /**
+     * 待附加图片(data URL): 前端发图后暂存于此, 由<b>下一个</b>走 LLM 的回合(打字/三段式语音)取走,
+     * 作为该轮用户消息的图片。取走即清空; 一图一轮。
+     */
+    private final AtomicReference<String> pendingImage = new AtomicReference<>();
+    /**
+     * 视觉模型(多模态): 回合上下文含图片时该轮自动改用它(需支持 OpenAI 兼容 image_url)。
+     * {@code visionModel} 为空 = 不切换, 带图回合沿用当前对话模型。
+     */
+    private volatile VendorType visionVendor;
+    private volatile String visionModel;
     /** 本会话回合序号(落库用, 从 1 递增) */
     private final AtomicInteger turnSeq = new AtomicInteger();
     /**
@@ -228,6 +239,33 @@ public class ConversationSession {
     /** 开/关多步 Agent 规划路径; 未设默认关(所有回合按原路走)。 */
     public void setAgentEnabled(boolean enabled) {
         this.agentEnabled = enabled;
+    }
+
+    /** 设置视觉模型(多模态); {@code model} 为空则带图回合不切换模型。 */
+    public void setVisionModel(VendorType vendor, String model) {
+        this.visionVendor = vendor;
+        this.visionModel = model == null || model.isBlank() ? null : model;
+    }
+
+    /**
+     * 附加一张图片(data URL)到<b>下一个</b>走 LLM 的回合(打字/三段式语音均可)。
+     * 前端发图即调; 覆盖式暂存(连发多张取最后一张), 回合取走即清。
+     */
+    public void attachImage(String imageDataUrl) {
+        if (imageDataUrl != null && !imageDataUrl.isBlank()) {
+            pendingImage.set(imageDataUrl);
+        }
+    }
+
+    /** 带图回合的 LLM 配置: 配置了视觉模型则切换厂商+模型(沿用人设/采样参数), 否则原配置。 */
+    private LlmConfig llmConfigFor(boolean vision) {
+        LlmConfig base = activeLlmConfig;
+        if (!vision || visionModel == null || base == null) {
+            return base;
+        }
+        return new LlmConfig(
+                visionVendor != null ? visionVendor : base.vendor(),
+                visionModel, base.systemPrompt(), base.temperature(), base.maxTokens());
     }
 
     /**
@@ -517,7 +555,10 @@ public class ConversationSession {
             // 多步 Agent 运行态(预算+统计); 仅 agent 分支创建, 收尾时据它落 agentSteps/agentReplans
             AtomicReference<AgentRun> agentRunRef = new AtomicReference<>();
 
-            Message userMsg = Message.user(userText);
+            // 取走待附加图片(有则本轮为带图回合); 点歌快路径不吃图, 留给下一个 LLM 回合
+            Optional<String> song = musicIntent.parsePlay(userText);
+            String image = song.isPresent() ? null : pendingImage.getAndSet(null);
+            Message userMsg = Message.user(userText, image);
             appendHistory(userMsg);
             if (notifyAsr) {
                 safeNotify(() -> listener.onAsrFinal(userText));
@@ -525,7 +566,6 @@ public class ConversationSession {
 
             Flux<AudioChunk> body;
             // 正则点歌快路径: 明确点歌零延迟直达, 不经 LLM/工具往返(模糊表达才由模型调 play_music 技能)
-            Optional<String> song = musicIntent.parsePlay(userText);
             if (song.isPresent()) {
                 body = musicTurn(song.get(), speak, actionTurn);
             } else {
@@ -547,14 +587,24 @@ public class ConversationSession {
                     working.add(Message.system(web));
                 }
                 working.addAll(historySnapshot());
+                // 视觉多模态: 只要上下文窗口内还有图片(本轮新图或此前几轮的图, 支持追问), 本轮就切视觉模型;
+                // 图片随历史滑窗滑出后自然回到普通文本模型。
+                boolean vision = working.stream().anyMatch(Message::hasImage);
+                LlmConfig turnCfg = llmConfigFor(vision);
+                if (vision) {
+                    log.info("带图回合: 改用视觉模型 vendor={}, model={}, session={}",
+                            turnCfg == null ? "-" : turnCfg.vendor(),
+                            turnCfg == null ? "-" : turnCfg.model(), context.sessionId());
+                }
                 // 多步 Agent: 命中复杂任务先让模型出一份分步计划, 再逐步执行(步骤间口播进度)+反思补步+整合答复;
-                // 未开启/未命中/规划为空都按原路直接进 runLlmRound(零额外延迟)。
-                if (agentEnabled && !skills.isEmpty() && AgentTriage.isComplex(userText)) {
+                // 未开启/未命中/规划为空都按原路直接进 runLlmRound(零额外延迟)。带图回合不走 Agent
+                // (规划/反思用的常规模型读不了图, 视觉多步任务留作后续)。
+                if (!vision && agentEnabled && !skills.isEmpty() && AgentTriage.isComplex(userText)) {
                     final List<Message> base = working;
                     body = planner.plan(llm, base, activeLlmConfig)
                             .flatMapMany(plan -> {
                                 if (plan.isEmpty()) {
-                                    return runLlmRound(base, 0, speak, reply, actionTurn,
+                                    return runLlmRound(base, 0, turnCfg, speak, reply, actionTurn,
                                             firstToken, firstAudio, startNanos);
                                 }
                                 log.info("Agent 规划: {} 步, session={}", plan.steps().size(), context.sessionId());
@@ -566,7 +616,8 @@ public class ConversationSession {
                                 return runAgent(base, plan, run, speak, reply, firstToken, firstAudio, startNanos);
                             });
                 } else {
-                    body = runLlmRound(working, 0, speak, reply, actionTurn, firstToken, firstAudio, startNanos);
+                    body = runLlmRound(working, 0, turnCfg, speak, reply, actionTurn,
+                            firstToken, firstAudio, startNanos);
                 }
             }
 
@@ -606,7 +657,7 @@ public class ConversationSession {
      * 工具回合(round 1)通常无文本, 故乐观地把本轮文本接进 TTS 不会误播; 真正的口语答复出现在
      * 工具执行后的下一轮。{@code depth} 超过 {@link #MAX_TOOL_ROUNDS} 即兜底终止。
      */
-    private Flux<AudioChunk> runLlmRound(List<Message> working, int depth, boolean speak,
+    private Flux<AudioChunk> runLlmRound(List<Message> working, int depth, LlmConfig cfg, boolean speak,
                                          AtomicReference<String> reply, AtomicBoolean actionTurn,
                                          AtomicBoolean firstToken, AtomicBoolean firstAudio, long startNanos) {
         if (depth >= MAX_TOOL_ROUNDS) {
@@ -620,13 +671,13 @@ public class ConversationSession {
             log.info("本回合下发工具 {} 个给模型, session={}", skills.toolSpecs().size(), context.sessionId());
         }
         // LLM 事件流: 文本增量累计成本轮文本并实时回传字幕; 工具调用收集起来留到流末处理。
-        Flux<String> tokens = llm.chat(working, activeLlmConfig, skills.toolSpecs())
+        Flux<String> tokens = llm.chat(working, cfg, skills.toolSpecs())
                 .concatMap(ev -> {
                     if (ev instanceof LlmEvent.TextDelta td && !td.text().isEmpty()) {
                         if (firstToken.compareAndSet(false, true)) {
                             Duration ttft = elapsed(startNanos);
                             metrics.recordLlmFirstToken(ttft);
-                            logLlmFirstToken(speak ? "voice" : "text", activeLlmConfig, ttft);
+                            logLlmFirstToken(speak ? "voice" : "text", cfg, ttft);
                         }
                         roundText.append(td.text());
                         safeNotify(() -> listener.onAssistantDelta(td.text()));
@@ -657,7 +708,7 @@ public class ConversationSession {
                 }
                 return Flux.empty();
             }
-            return executeToolsAndContinue(working, List.copyOf(calls), depth, speak,
+            return executeToolsAndContinue(working, List.copyOf(calls), depth, cfg, speak,
                     reply, actionTurn, firstToken, firstAudio, startNanos);
         }));
     }
@@ -671,7 +722,7 @@ public class ConversationSession {
      * </ul>
      */
     private Flux<AudioChunk> executeToolsAndContinue(List<Message> working, List<ToolCall> calls, int depth,
-                                                     boolean speak, AtomicReference<String> reply,
+                                                     LlmConfig cfg, boolean speak, AtomicReference<String> reply,
                                                      AtomicBoolean actionTurn, AtomicBoolean firstToken,
                                                      AtomicBoolean firstAudio, long startNanos) {
         working.add(Message.assistantToolCalls(calls));
@@ -717,7 +768,7 @@ public class ConversationSession {
                     for (ToolOutcome o : outcomes) {
                         working.add(Message.tool(o.call().id(), o.result().content()));
                     }
-                    return runLlmRound(working, depth + 1, speak, reply, actionTurn,
+                    return runLlmRound(working, depth + 1, cfg, speak, reply, actionTurn,
                             firstToken, firstAudio, startNanos);
                 });
     }
@@ -758,7 +809,8 @@ public class ConversationSession {
         Flux<AudioChunk> synthFlux = Flux.defer(() -> {
             List<Message> sw = new ArrayList<>(base);
             sw.add(Message.system(AgentPrompts.synthesisInstruction(scratchpad)));
-            return runLlmRound(sw, 0, speak, reply, new AtomicBoolean(false), firstToken, firstAudio, startNanos);
+            return runLlmRound(sw, 0, activeLlmConfig, speak, reply, new AtomicBoolean(false),
+                    firstToken, firstAudio, startNanos);
         });
 
         return plannedFlux.concatWith(reflectFlux).concatWith(synthFlux);

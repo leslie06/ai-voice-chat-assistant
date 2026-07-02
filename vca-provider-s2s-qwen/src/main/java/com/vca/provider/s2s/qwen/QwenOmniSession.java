@@ -81,6 +81,8 @@ public class QwenOmniSession implements S2sSession {
     private final AtomicBoolean closed = new AtomicBoolean();
     /** 诊断: 首帧上行是否已记日志 */
     private final AtomicBoolean firstAudioLogged = new AtomicBoolean();
+    /** 诊断: 首帧视觉上行是否已记日志 */
+    private final AtomicBoolean firstVideoLogged = new AtomicBoolean();
     /** 诊断: 已记过日志的服务端事件类型(每类只记首次), 用于定位"说话没反应"卡在哪一步 */
     private final java.util.Set<String> loggedTypes = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
@@ -165,6 +167,29 @@ public class QwenOmniSession implements S2sSession {
             }
         } else if (pending.size() < MAX_PENDING_FRAMES) {
             pending.add(b64);   // 建连尚未就绪, 先缓冲
+        }
+    }
+
+    /**
+     * 推一帧视觉图像(base64 JPEG) → DashScope {@code input_image_buffer.append}(SDK {@code appendVideo}),
+     * 让 Omni "边看边聊": 模型在下一次回复时结合最近的画面作答。帧是即时性的, 未就绪/已关直接丢弃。
+     */
+    @Override
+    public void pushVideoFrame(String jpegBase64) {
+        if (closed.get() || jpegBase64 == null || jpegBase64.isBlank()) {
+            return;
+        }
+        OmniRealtimeConversation c = conv;
+        if (!ready || c == null) {
+            return;   // 视觉帧过时即无用, 不像音频那样缓冲补发
+        }
+        try {
+            c.appendVideo(jpegBase64);
+            if (firstVideoLogged.compareAndSet(false, true)) {
+                log.info("Qwen-Omni 持久会话: 已开始上行视觉帧(边看边聊)");
+            }
+        } catch (Exception e) {
+            log.warn("appendVideo 失败: {}", e.toString());
         }
     }
 

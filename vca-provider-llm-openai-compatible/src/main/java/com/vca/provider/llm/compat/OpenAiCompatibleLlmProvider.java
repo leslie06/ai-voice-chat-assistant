@@ -206,13 +206,23 @@ public class OpenAiCompatibleLlmProvider implements LlmProvider {
         return body;
     }
 
-    /** 把一条历史消息转成 OpenAI messages 元素, 含 tool 结果与 assistant 工具调用两种特殊形态。 */
+    /** 把一条历史消息转成 OpenAI messages 元素, 含 tool 结果、assistant 工具调用与带图用户消息三种特殊形态。 */
     private static Map<String, Object> messageOf(Message m) {
         Map<String, Object> mm = new LinkedHashMap<>(3);
         mm.put("role", roleOf(m.role()));
         if (m.role() == Message.Role.TOOL) {
             mm.put("tool_call_id", m.toolCallId());
             mm.put("content", m.content() == null ? "" : m.content());
+            return mm;
+        }
+        if (m.hasImage()) {
+            // 视觉多模态: content 变数组 [{image_url},{text}](OpenAI 兼容格式, 需目标模型支持视觉)
+            List<Map<String, Object>> parts = new ArrayList<>(2);
+            parts.add(Map.of("type", "image_url", "image_url", Map.of("url", m.imageUrl())));
+            if (m.content() != null && !m.content().isBlank()) {
+                parts.add(Map.of("type", "text", "text", m.content()));
+            }
+            mm.put("content", parts);
             return mm;
         }
         if (m.hasToolCalls()) {

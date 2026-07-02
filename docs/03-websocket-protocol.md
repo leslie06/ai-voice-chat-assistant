@@ -26,6 +26,8 @@ binaryType = 'arraybuffer'
 | `{"type":"ptt","value":"stop"}` | 按住说话·松开 | 提交本轮 |
 | `{"type":"text","text":"你好"}` | 文本输入 | 直接作为一轮注入，**绕过 ASR** |
 | `{"type":"barge_in"}` | 手动打断 | 取消当前回合，停播 |
+| `{"type":"image","data":"<b64>","mime":"image/jpeg"}` | 发图提问（视觉多模态） | 持久 S2S 在跑→直推一帧给端到端模型；否则暂存，附加到下一个 LLM 回合并自动切视觉模型（见 [09](./09-vision-multimodal.md)） |
+| `{"type":"video_frame","data":"<b64>"}` | 摄像头抓帧（边看边聊，1 fps） | 直推持久 S2S 长连（`input_image_buffer.append`）；无长连丢弃 |
 
 ---
 

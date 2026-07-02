@@ -31,6 +31,11 @@ public final class S2sLiveSession {
         session.pushAudio(frame);
     }
 
+    /** 持续上行: 推一帧视觉图像(base64 JPEG), 端到端模型"边看边聊"; 不支持视觉的厂商为空操作。 */
+    public void pushVideoFrame(String jpegBase64) {
+        session.pushVideoFrame(jpegBase64);
+    }
+
     /** 主动打断(手动按钮): 截断机器人当前回复。 */
     public void cancelResponse() {
         session.cancelResponse();

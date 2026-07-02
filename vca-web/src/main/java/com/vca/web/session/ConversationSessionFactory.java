@@ -78,6 +78,8 @@ public class ConversationSessionFactory {
         session.setWebSearch(webSearch, props.isWebSearchAuto(), props.getWebSearchCount());
         // 多步 Agent 规划: 命中复杂回合先规划再执行(需配合工具, 故技能为空时该开关在会话内自然失效)
         session.setAgentEnabled(props.isAgentEnabled());
+        // 视觉模型: 带图回合自动切换(留空则沿用当前对话模型, 需其自身支持视觉)
+        session.setVisionModel(props.getVisionVendor(), props.getVisionModel());
         if (userId != null && !userId.isBlank()) {
             session.setMemory(memory, userId);
             session.setKnowledge(knowledge);   // RAG 自动注入按同一登录用户隔离

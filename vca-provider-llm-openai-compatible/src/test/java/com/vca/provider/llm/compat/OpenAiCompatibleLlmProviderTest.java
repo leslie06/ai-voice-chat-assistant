@@ -165,6 +165,31 @@ class OpenAiCompatibleLlmProviderTest {
         assertThat(body).contains("\"tool_choice\":\"auto\"");
     }
 
+    @Test
+    void buildsMultimodalContentForImageMessage() throws Exception {
+        OpenAiCompatibleLlmProperties.Client props = client(VendorType.QWEN, "Qwen");
+        OpenAiCompatibleLlmProvider provider = provider("qwen", props);
+
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream;charset=UTF-8")
+                .setBody("data: [DONE]\n\n"));
+
+        StepVerifier.create(provider.chatStream(
+                        List.of(Message.user("图里有什么", "data:image/jpeg;base64,QUJD"),
+                                Message.assistant("一只猫"),
+                                Message.user("什么品种")),
+                        LlmConfig.defaults(VendorType.QWEN, "qwen-vl-plus")))
+                .verifyComplete();
+
+        String body = server.takeRequest().getBody().readUtf8();
+        // 带图消息: content 为多模态数组(image_url + text; Map.of 键序不定, 只断言各片段)
+        assertThat(body).contains("\"url\":\"data:image/jpeg;base64,QUJD\"");
+        assertThat(body).contains("\"type\":\"image_url\"");
+        assertThat(body).contains("\"text\":\"图里有什么\"");
+        // 纯文本消息不受影响: content 仍是字符串
+        assertThat(body).contains("\"content\":\"什么品种\"");
+    }
+
     private OpenAiCompatibleLlmProvider provider(String clientId, OpenAiCompatibleLlmProperties.Client props) {
         WebClient webClient = WebClient.builder().baseUrl(props.getBaseUrl()).build();
         return new OpenAiCompatibleLlmProvider(clientId, webClient, new ObjectMapper(), props);

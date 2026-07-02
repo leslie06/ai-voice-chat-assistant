@@ -30,6 +30,14 @@ public interface S2sSession {
     Flux<S2sEvent> events();
 
     /**
+     * 持续上行: 推一帧视觉图像(base64 JPEG, 不带 data URL 前缀), 让端到端模型"边看边聊"
+     * (摄像头/屏幕帧或用户发的图片)。帧是即时性的: 连接未就绪时直接丢弃, 不缓冲。
+     * 默认空实现(不支持视觉的厂商)。
+     */
+    default void pushVideoFrame(String jpegBase64) {
+    }
+
+    /**
      * 主动打断(手动按钮): 截断机器人当前回复。服务端 VAD 触发的打断由实现内部处理,
      * 并经 {@code events()} 发 {@link S2sEvent.UserSpeechStarted} 通知, 无需调用方再调本方法。
      */

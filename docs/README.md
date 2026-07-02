@@ -15,6 +15,8 @@ VCA（Voice Chat Assistant）是一个**实时、可打断**的语音对话系�
 | [05 · 部署指南](./05-deployment.md) | 打包、配置项、Profile、反向代理、**云服务器一步步公网部署（手机可用）**、Docker、多副本、可观测 |
 | [06 · 音乐播放原理](./06-music-playback.md) | **大模型是怎么"放歌"的**：意图识别（关键词 / function-calling）、音源 SPI（本地整首 / iTunes 试听 / 为何 QQ 不行）、前端双音轨播放 |
 | [07 · 端到端 S2S 全双工](./07-s2s-fullduplex.md) | **持久 S2S 全双工**：前端入口→后端调用链（激活/上行/下行/打断四条链）、服务端 VAD、新 SPI（`S2sSession`/`S2sEvent`）、与每轮 S2S 的区别、关键文件索引 |
+| [08 · 数据飞轮](./08-data-flywheel.md) | 对话落库（MySQL + MyBatis-Plus）、零标注评测查询 `/eval/report`、Agent 指标 |
+| [09 · 视觉多模态](./09-vision-multimodal.md) | **发图提问**（视觉 LLM 自动路由）与**摄像头边看边聊**（持久 S2S 视频帧）：链路、SPI 变更、配置与验证清单 |
 
 ## 一句话技术栈
 

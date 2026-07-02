@@ -315,6 +315,8 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         /** 文本消息排队: 当前轮未结束时新输入入队, 本轮结束后按序处理, 避免丢消息/答错问题。 */
         private final java.util.Deque<String> pendingText = new java.util.ArrayDeque<>();
         private static final int MAX_PENDING_TEXT = 16;
+        /** 单张图片 base64 上限(≈6MB 原图), 防异常客户端灌爆内存; 前端正常压缩后远小于此。 */
+        private static final int MAX_IMAGE_BASE64_CHARS = 8 * 1024 * 1024;
 
         Connection(WebSocketSession session, ConversationSession conversation,
                    Sinks.Many<WebSocketMessage> outbound) {
@@ -394,6 +396,8 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                 case "engine" -> onEngine(str(msg.get("value")));
                 case "barge_in" -> manualBarge();
                 case "load_history" -> onLoadHistory(msg.get("messages"));
+                case "image" -> onImage(str(msg.get("data")), str(msg.get("mime")));
+                case "video_frame" -> onVideoFrame(str(msg.get("data")));
                 default -> log.debug("未知控制消息: {}", json);
             }
         }
@@ -425,6 +429,38 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             conversation.loadHistory(history);
             stopLive();
             log.debug("切换会话: 回灌历史 {} 条", history.size());
+        }
+
+        /**
+         * 用户发图(视觉多模态)。持久 S2S 长连在跑: 直推一帧给端到端模型(边看边聊, 接着说"看看这张图"即可),
+         * 不再暂存 —— 避免过期图片在之后某个打字回合意外复活。否则: 拼成 data URL 附加给<b>下一个</b>
+         * LLM 回合(打字/三段式语音带图提问)。前端已压缩(长边 ≤1280 JPEG); 这里再兜一道大小上限。
+         */
+        private void onImage(String base64, String mime) {
+            if (base64 == null || base64.isBlank()) {
+                return;
+            }
+            if (base64.length() > MAX_IMAGE_BASE64_CHARS) {
+                log.warn("图片过大({} chars), 已拒绝, session={}", base64.length(), session.getId());
+                emitJson(Map.of("type", "error", "message", "图片过大，请换小一点的图"));
+                return;
+            }
+            if (live != null) {
+                live.pushVideoFrame(base64);
+                log.info("收到图片({} KB), 已直推持久 S2S, session={}", base64.length() / 1024, session.getId());
+                return;
+            }
+            String m = (mime == null || mime.isBlank()) ? "image/jpeg" : mime;
+            conversation.attachImage("data:" + m + ";base64," + base64);
+            log.info("收到图片附件({} KB), 待下一回合使用, session={}", base64.length() / 1024, session.getId());
+        }
+
+        /** 摄像头连续帧(仅持久 S2S 边看边聊用): 直推长连, 无长连时丢弃(不暂存, 帧过时即无用)。 */
+        private void onVideoFrame(String base64) {
+            if (live != null && base64 != null && !base64.isBlank()
+                    && base64.length() <= MAX_IMAGE_BASE64_CHARS) {
+                live.pushVideoFrame(base64);
+            }
         }
 
         private void onMode(String value) {

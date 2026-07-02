@@ -40,8 +40,10 @@ import org.springframework.web.reactive.HandlerMapping;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import org.springframework.web.reactive.handler.SimpleUrlHandlerMapping;
+import org.springframework.web.reactive.config.WebFluxConfigurer;
 import org.springframework.web.reactive.socket.WebSocketHandler;
-import org.springframework.web.reactive.socket.server.support.WebSocketHandlerAdapter;
+import org.springframework.web.reactive.socket.server.support.HandshakeWebSocketService;
+import org.springframework.web.reactive.socket.server.upgrade.ReactorNettyRequestUpgradeStrategy;
 
 import java.util.Map;
 
@@ -247,10 +249,27 @@ public class WebAutoConfiguration {
         return mapping;
     }
 
+    /**
+     * 放宽 WS 单帧上限(Reactor Netty 默认 64KB): 视觉多模态的图片经 JSON 文本帧上行, 压缩后仍常有
+     * 几百 KB —— 默认值下服务端直接回 1009 掐断连接(前端表现为"发大图静默失败、小图正常")。
+     * 上限与 {@code VoiceWebSocketHandler.MAX_IMAGE_BASE64_CHARS}(8M chars)对齐并留出 JSON 包装余量。
+     *
+     * <p><b>Spring 7 注意</b>: {@code WebFluxConfigurationSupport} 自带 {@code webFluxWebSocketHandlerAdapter}
+     * bean, 自定义 {@code WebSocketHandlerAdapter} @Bean 会与之并存且不被使用(实测 64KB 仍生效)——
+     * 官方定制口是 {@link WebFluxConfigurer#getWebSocketService()}; 帧上限经 WebsocketServerSpec.Builder
+     * 供给(旧 setMaxFramePayloadLength 已移除)。
+     */
     @Bean
-    @ConditionalOnMissingBean
-    WebSocketHandlerAdapter webSocketHandlerAdapter() {
-        return new WebSocketHandlerAdapter();
+    WebFluxConfigurer webSocketFrameSizeConfigurer() {
+        return new WebFluxConfigurer() {
+            @Override
+            public org.springframework.web.reactive.socket.server.WebSocketService getWebSocketService() {
+                ReactorNettyRequestUpgradeStrategy strategy = new ReactorNettyRequestUpgradeStrategy(
+                        () -> reactor.netty.http.server.WebsocketServerSpec.builder()
+                                .maxFramePayloadLength(12 * 1024 * 1024));
+                return new HandshakeWebSocketService(strategy);
+            }
+        };
     }
 
     /** 兜底 ObjectMapper(若宿主未提供) */
