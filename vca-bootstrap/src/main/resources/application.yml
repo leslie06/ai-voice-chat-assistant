@@ -162,6 +162,7 @@ vca:
         - { vendor: deepseek, model: deepseek-v4-flash, max-concurrency: 50 }  # 真实 DeepSeek
         - { vendor: qwen,     model: qwen3.7-plus,      max-concurrency: 50 }  # 通义千问(文本); 前端可切具体模型
         - { vendor: moonshot, model: kimi-k2.6,          max-concurrency: 50 }  # Kimi/Moonshot; 走 OpenAI 兼容私有网关
+        - { vendor: zhipu,    model: glm-5.1,            max-concurrency: 50 }  # 智谱 GLM; 同上走公司内网网关
     tts:
       candidates:
         - { vendor: aliyun, voice: longxiaochun, max-concurrency: 100 }
@@ -220,6 +221,24 @@ vca:
             extra-body:
               chat_template_kwargs:
                 thinking: false
+          glm:
+            # 智谱 GLM-5.1, 与 Kimi 同一个公司内网 OpenAI 兼容网关(默认复用 KIMI_API_KEY, 也可单独
+            # 设 GLM_API_KEY)。有 key 即启用; 显式 GLM_ENABLED=false 可关。
+            enabled: ${GLM_ENABLED:false}
+            vendor: zhipu
+            name: GLM
+            base-url: ${GLM_BASE_URL:http://192.168.9.215:13000/v1}
+            default-model: ${GLM_MODEL:glm-5.1}
+            keys: ${GLM_API_KEY:${KIMI_API_KEY:}}
+            # 对齐网关 curl 示例: 只发 model/messages/stream/chat_template_kwargs。
+            max-tokens-field:
+            include-temperature: false
+            # 思考模式默认关: 语音场景要秒回, GLM 思考会先吐一大段 reasoning 再出正文(实测慢十几秒)。
+            # 注意本网关认的开关是 chat_template_kwargs.enable_thinking(实测 thinking:false 不生效,
+            # reasoning 照跑; enable_thinking:false 才是 reasoning_tokens=0)。想开思考设 GLM_THINKING=true。
+            extra-body:
+              chat_template_kwargs:
+                enable_thinking: ${GLM_THINKING:false}
     asr:
       aliyun:
         # 真实阿里云 ASR: ALIYUN_ASR_ENABLED=true + DASHSCOPE_API_KEY=sk-...

@@ -43,6 +43,11 @@ public class OpenAiCompatibleLlmAutoConfiguration {
         return providerIfEnabled("kimi", props, env);
     }
 
+    @Bean
+    LlmProvider glmOpenAiCompatibleLlmProvider(OpenAiCompatibleLlmProperties props, Environment env) {
+        return providerIfEnabled("glm", props, env);
+    }
+
     private LlmProvider providerIfEnabled(String clientId, OpenAiCompatibleLlmProperties props, Environment env) {
         OpenAiCompatibleLlmProperties.Client client = props.getClients().get(clientId);
         if (client == null) {
@@ -73,6 +78,7 @@ public class OpenAiCompatibleLlmAutoConfiguration {
             case "deepseek" -> "DEEPSEEK_ENABLED";
             case "qwen" -> "QWEN_LLM_ENABLED";
             case "kimi" -> "KIMI_ENABLED";
+            case "glm" -> "GLM_ENABLED";
             default -> null;
         };
         return key != null && "false".equalsIgnoreCase(env.getProperty(key));
