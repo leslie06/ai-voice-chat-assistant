@@ -92,7 +92,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
     private final String authToken;
     /** 用户登录令牌校验器; 非空表示账号系统启用 —— 此时 WS 用<b>用户令牌</b>鉴权, 忽略共享 token。 */
     private final com.vca.orchestrator.auth.TokenAuthenticator authenticator;
-    /** 双轨录音旁路；未开启时为 NOOP。 */
+    /** 原始双轨 + 完整对话录音旁路；未开启时为 NOOP。 */
     private final AudioRecordingService audioRecordingService;
     /** 单会话最长存活秒数; <=0=不限。 */
     private final int maxSessionSeconds;
@@ -687,6 +687,8 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
 
         private void emitFrame(byte[] pcm16le) {
             if (turnSink != null) {
+                // 这里是经过 VAD/降采样、实际送入 ASR 的有效用户语音；用于生成按回合排列的 conversation.wav。
+                recording.appendConversationUserAudio(pcm16le, vadConfig.targetSampleRate());
                 turnSink.tryEmitNext(AudioFrame.of(pcm16le, seq.getAndIncrement(), System.currentTimeMillis()));
             }
         }

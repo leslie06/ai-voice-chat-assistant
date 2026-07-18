@@ -9,6 +9,7 @@ import com.aliyun.oss.model.PartETag;
 import com.aliyun.oss.model.PutObjectRequest;
 import com.aliyun.oss.model.UploadPartRequest;
 import com.vca.orchestrator.recorder.AudioRecordingService;
+import com.vca.orchestrator.vad.PcmAudio;
 import com.vca.store.entity.ChatConversation;
 import com.vca.store.entity.ConversationRecording;
 import com.vca.store.mapper.ChatConversationMapper;
@@ -37,7 +38,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 阿里云 OSS 双轨录音。音频仅在内存中按分片缓冲，直接上传 OSS，不创建服务器临时文件。
+ * 阿里云 OSS 录音：用户原始音轨、客服原始音轨、按回合排列的完整对话音轨。
+ * 音频仅在内存中按分片缓冲，直接上传 OSS，不创建服务器临时文件。
  *
  * <p>WAV 头包含最终数据长度，通话结束前无法确定。因此每条音轨把首个分片留在内存，后续分片边录边传；
  * 结束时生成 WAV 头并上传为 part 1，再按 Part Number 由 OSS 合并为完整 WAV。
@@ -103,7 +105,9 @@ public class OssAudioRecordingService implements AudioRecordingService, AutoClos
         return p.isEmpty() ? "recordings" : p;
     }
 
-    private record AudioPart(boolean user, byte[] data, int sampleRate) { }
+    private enum Track { USER_RAW, USER_DIALOGUE, ASSISTANT }
+
+    private record AudioPart(Track track, byte[] data, int sampleRate) { }
 
     private final class OssSession implements Session {
         private final String id = UUID.randomUUID().toString();
@@ -150,19 +154,24 @@ public class OssAudioRecordingService implements AudioRecordingService, AutoClos
 
         @Override
         public void appendUserAudio(byte[] pcm16le, int sampleRate) {
-            append(true, pcm16le, sampleRate);
+            append(Track.USER_RAW, pcm16le, sampleRate);
+        }
+
+        @Override
+        public void appendConversationUserAudio(byte[] pcm16le, int sampleRate) {
+            append(Track.USER_DIALOGUE, pcm16le, sampleRate);
         }
 
         @Override
         public void appendAssistantAudio(byte[] pcm16le, int sampleRate) {
-            append(false, pcm16le, sampleRate <= 0 ? 24_000 : sampleRate);
+            append(Track.ASSISTANT, pcm16le, sampleRate <= 0 ? 24_000 : sampleRate);
         }
 
-        private void append(boolean user, byte[] data, int sampleRate) {
+        private void append(Track track, byte[] data, int sampleRate) {
             if (!accepting.get() || data == null || data.length == 0 || sampleRate <= 0) return;
             ensureStarted();
             if (!accepting.get() || !started.get()) return;
-            if (!queue.offer(new AudioPart(user, Arrays.copyOf(data, data.length), sampleRate))) {
+            if (!queue.offer(new AudioPart(track, Arrays.copyOf(data, data.length), sampleRate))) {
                 long n = dropped.incrementAndGet();
                 if (n == 1 || n % 100 == 0) {
                     log.warn("OSS 录音队列已满, recording={}, 累计丢弃 {} 个音频块", id, n);
@@ -191,14 +200,22 @@ public class OssAudioRecordingService implements AudioRecordingService, AutoClos
             String baseKey = prefix + "/" + day + "/" + userId + "/" + id + "/";
             OssWavWriter user = new OssWavWriter(oss, bucket, baseKey + "user.wav", partSize, 48_000);
             OssWavWriter assistant = new OssWavWriter(oss, bucket, baseKey + "assistant.wav", partSize, 24_000);
+            DialogueWriter dialogue = new DialogueWriter(
+                    new OssWavWriter(oss, bucket, baseKey + "conversation.wav", partSize, 24_000));
             String status = "complete";
             insertMetadata(baseKey);
             try {
                 while (accepting.get() || !queue.isEmpty()) {
                     AudioPart part = queue.poll(250, TimeUnit.MILLISECONDS);
                     if (part == null) continue;
-                    if (part.user()) user.write(part.data(), part.sampleRate());
-                    else assistant.write(part.data(), part.sampleRate());
+                    switch (part.track()) {
+                        case USER_RAW -> user.write(part.data(), part.sampleRate());
+                        case USER_DIALOGUE -> dialogue.writeUser(part.data(), part.sampleRate());
+                        case ASSISTANT -> {
+                            assistant.write(part.data(), part.sampleRate());
+                            dialogue.writeAssistant(part.data(), part.sampleRate());
+                        }
+                    }
                 }
                 if (dropped.get() > 0) status = "partial";
             } catch (InterruptedException e) {
@@ -210,7 +227,8 @@ public class OssAudioRecordingService implements AudioRecordingService, AutoClos
             } finally {
                 status = finishWriter(user, status);
                 status = finishWriter(assistant, status);
-                updateMetadata(baseKey, user, assistant, status);
+                status = finishWriter(dialogue.writer(), status);
+                updateMetadata(baseKey, user, assistant, dialogue.writer(), status);
                 active.remove(id);
                 log.info("OSS 语音录音结束: recording={}, status={}, oss://{}/{}", id, status, bucket, baseKey);
             }
@@ -237,14 +255,16 @@ public class OssAudioRecordingService implements AudioRecordingService, AutoClos
             }
         }
 
-        private void updateMetadata(String baseKey, OssWavWriter user, OssWavWriter assistant, String status) {
+        private void updateMetadata(String baseKey, OssWavWriter user, OssWavWriter assistant,
+                                    OssWavWriter dialogue, String status) {
             ConversationRecording row = baseRow(baseKey);
             row.setConversationId(conversationId);
             row.setUserSampleRate(rateOrNull(user));
             row.setAssistantSampleRate(rateOrNull(assistant));
             row.setUserBytes(user.dataBytes());
             row.setAssistantBytes(assistant.dataBytes());
-            row.setDurationMs(Math.max(duration(user), duration(assistant)));
+            row.setConversationBytes(dialogue.dataBytes());
+            row.setDurationMs(Math.max(duration(dialogue), Math.max(duration(user), duration(assistant))));
             row.setStatus(status);
             row.setEndedAt(LocalDateTime.now());
             try {
@@ -275,7 +295,50 @@ public class OssAudioRecordingService implements AudioRecordingService, AutoClos
             // 兼容第一版本字段名：user_file/assistant_file 现在保存的是 OSS Object Key，不是服务器路径。
             row.setUserFile(baseKey + "user.wav");
             row.setAssistantFile(baseKey + "assistant.wav");
+            row.setConversationFile(baseKey + "conversation.wav");
             return row;
+        }
+    }
+
+    /** 把用户/客服音频按到达顺序串成一条 24kHz 单声道对话，双方切换时插入自然停顿。 */
+    static final class DialogueWriter {
+        private static final int OUTPUT_RATE = 24_000;
+        private enum Side { USER, ASSISTANT }
+
+        private final OssWavWriter writer;
+        private Side lastSide;
+
+        DialogueWriter(OssWavWriter writer) {
+            this.writer = writer;
+        }
+
+        OssWavWriter writer() {
+            return writer;
+        }
+
+        void writeUser(byte[] pcm16le, int sampleRate) throws IOException {
+            write(Side.USER, normalize(pcm16le, sampleRate));
+        }
+
+        void writeAssistant(byte[] pcm16le, int sampleRate) throws IOException {
+            write(Side.ASSISTANT, normalize(pcm16le, sampleRate));
+        }
+
+        private void write(Side side, byte[] pcm24k) throws IOException {
+            if (lastSide != null && lastSide != side) {
+                int silenceMs = side == Side.ASSISTANT ? 300 : 500;
+                writer.write(new byte[OUTPUT_RATE * 2 * silenceMs / 1000], OUTPUT_RATE);
+            }
+            writer.write(pcm24k, OUTPUT_RATE);
+            lastSide = side;
+        }
+
+        private byte[] normalize(byte[] pcm16le, int sampleRate) {
+            if (sampleRate == OUTPUT_RATE) {
+                return pcm16le;
+            }
+            return PcmAudio.encodeLe(PcmAudio.resample(
+                    PcmAudio.decodeLe(pcm16le), sampleRate, OUTPUT_RATE));
         }
     }
 

@@ -6,7 +6,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 
 import java.time.LocalDateTime;
 
-/** 本地双轨录音元数据，对应 {@code conversation_recording}。 */
+/** OSS 原始双轨与完整对话录音元数据，对应 {@code conversation_recording}。 */
 @TableName("conversation_recording")
 public class ConversationRecording {
 
@@ -18,10 +18,12 @@ public class ConversationRecording {
     private String ossBucket;
     private String userFile;
     private String assistantFile;
+    private String conversationFile;
     private Integer userSampleRate;
     private Integer assistantSampleRate;
     private Long userBytes;
     private Long assistantBytes;
+    private Long conversationBytes;
     private Long durationMs;
     private String status;
     private LocalDateTime startedAt;
@@ -41,6 +43,8 @@ public class ConversationRecording {
     public void setUserFile(String userFile) { this.userFile = userFile; }
     public String getAssistantFile() { return assistantFile; }
     public void setAssistantFile(String assistantFile) { this.assistantFile = assistantFile; }
+    public String getConversationFile() { return conversationFile; }
+    public void setConversationFile(String conversationFile) { this.conversationFile = conversationFile; }
     public Integer getUserSampleRate() { return userSampleRate; }
     public void setUserSampleRate(Integer userSampleRate) { this.userSampleRate = userSampleRate; }
     public Integer getAssistantSampleRate() { return assistantSampleRate; }
@@ -49,6 +53,8 @@ public class ConversationRecording {
     public void setUserBytes(Long userBytes) { this.userBytes = userBytes; }
     public Long getAssistantBytes() { return assistantBytes; }
     public void setAssistantBytes(Long assistantBytes) { this.assistantBytes = assistantBytes; }
+    public Long getConversationBytes() { return conversationBytes; }
+    public void setConversationBytes(Long conversationBytes) { this.conversationBytes = conversationBytes; }
     public Long getDurationMs() { return durationMs; }
     public void setDurationMs(Long durationMs) { this.durationMs = durationMs; }
     public String getStatus() { return status; }

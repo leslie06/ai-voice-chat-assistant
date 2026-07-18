@@ -2,6 +2,7 @@ package com.vca.store;
 
 import com.aliyun.oss.OSS;
 import com.aliyun.oss.model.InitiateMultipartUploadResult;
+import com.aliyun.oss.model.PutObjectRequest;
 import com.aliyun.oss.model.UploadPartRequest;
 import com.aliyun.oss.model.UploadPartResult;
 import org.junit.jupiter.api.Test;
@@ -73,6 +74,33 @@ class OssAudioRecordingServiceTest {
         assertThat(complete).hasSize(44 + pcm.length);
         assertThat(java.util.Arrays.copyOfRange(complete, 44, complete.length)).isEqualTo(pcm);
         assertThat(ByteBuffer.wrap(complete).order(ByteOrder.LITTLE_ENDIAN).getInt(40)).isEqualTo(pcm.length);
+    }
+
+    @Test
+    void buildsDialogueInUserAssistantOrderWithSilence() throws Exception {
+        Map<String, byte[]> objects = new TreeMap<>();
+        OSS oss = (OSS) Proxy.newProxyInstance(OSS.class.getClassLoader(), new Class<?>[]{OSS.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("putObject") && args[0] instanceof PutObjectRequest request) {
+                        try (InputStream in = request.getInputStream()) {
+                            objects.put(request.getKey(), in.readAllBytes());
+                        }
+                    }
+                    return defaultValue(method.getReturnType());
+                });
+        OssAudioRecordingService.OssWavWriter wav = new OssAudioRecordingService.OssWavWriter(
+                oss, "bucket", "conversation.wav", 100 * 1024, 24_000);
+        OssAudioRecordingService.DialogueWriter dialogue = new OssAudioRecordingService.DialogueWriter(wav);
+
+        dialogue.writeUser(new byte[16_000 / 10 * 2], 16_000);       // 用户 100ms，重采样到 24k
+        dialogue.writeAssistant(new byte[24_000 / 10 * 2], 24_000);  // 先插 300ms，再写客服 100ms
+        wav.close();
+
+        byte[] object = objects.get("conversation.wav");
+        int expectedPcmBytes = (2_400 + 7_200 + 2_400) * 2;
+        assertThat(object).hasSize(44 + expectedPcmBytes);
+        assertThat(ByteBuffer.wrap(object).order(ByteOrder.LITTLE_ENDIAN).getInt(24)).isEqualTo(24_000);
+        assertThat(ByteBuffer.wrap(object).order(ByteOrder.LITTLE_ENDIAN).getInt(40)).isEqualTo(expectedPcmBytes);
     }
 
     private static Object defaultValue(Class<?> type) {

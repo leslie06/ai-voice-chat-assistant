@@ -94,6 +94,9 @@ public class StoreAutoConfiguration {
         addColumnIfMissing(ds, "conversation_turn", "agent_replans", "INT NULL");
         addColumnIfMissing(ds, "app_user", "register_ip", "VARCHAR(45) NULL COMMENT '注册 IP'");
         addColumnIfMissing(ds, "conversation_recording", "oss_bucket", "VARCHAR(128) NULL COMMENT 'OSS Bucket'");
+        addColumnIfMissing(ds, "conversation_recording", "conversation_file",
+                "VARCHAR(512) NULL COMMENT '按回合合并的完整对话 OSS Object Key'");
+        addColumnIfMissing(ds, "conversation_recording", "conversation_bytes", "BIGINT NOT NULL DEFAULT 0");
     }
 
     private void addColumnIfMissing(HikariDataSource ds, String table, String column, String ddl) {
@@ -145,7 +148,7 @@ public class StoreAutoConfiguration {
         return MyBatisSupport.mapper(conversationSqlSessionFactory, ConversationRecordingMapper.class);
     }
 
-    /** 本地双轨 WAV 录音。只有显式开启时才注册，关闭时接入层自动使用 NOOP。 */
+    /** OSS 原始双轨 + 完整对话 WAV。只有显式开启时才注册，关闭时接入层自动使用 NOOP。 */
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean(AudioRecordingService.class)
     @ConditionalOnProperty(prefix = "vca.store", name = "audio-recording-enabled", havingValue = "true")

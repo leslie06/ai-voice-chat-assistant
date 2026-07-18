@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS chat_message (
     KEY idx_msg_conv (conversation_id, id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '会话消息';
 
--- 一次 WebSocket 语音通话的双轨录音。音频直接上传 OSS，MySQL 只保存 Bucket、Object Key 与状态。
+-- 一次 WebSocket 语音通话的原始双轨 + 完整对话录音。音频直接上传 OSS。
 CREATE TABLE IF NOT EXISTS conversation_recording (
     id                    VARCHAR(36)  NOT NULL,
     user_id               BIGINT       NOT NULL,
@@ -62,10 +62,12 @@ CREATE TABLE IF NOT EXISTS conversation_recording (
     oss_bucket            VARCHAR(128) NOT NULL,
     user_file             VARCHAR(512) NOT NULL COMMENT '用户音轨 OSS Object Key',
     assistant_file        VARCHAR(512) NOT NULL COMMENT '客服音轨 OSS Object Key',
+    conversation_file     VARCHAR(512) COMMENT '按回合合并的完整对话 OSS Object Key',
     user_sample_rate      INT,
     assistant_sample_rate INT,
     user_bytes            BIGINT       NOT NULL DEFAULT 0,
     assistant_bytes       BIGINT       NOT NULL DEFAULT 0,
+    conversation_bytes    BIGINT       NOT NULL DEFAULT 0,
     duration_ms           BIGINT       NOT NULL DEFAULT 0,
     status                VARCHAR(16)  NOT NULL COMMENT 'recording | complete | partial | error',
     started_at            DATETIME     NOT NULL,
@@ -74,7 +76,7 @@ CREATE TABLE IF NOT EXISTS conversation_recording (
     KEY idx_recording_user (user_id, started_at),
     KEY idx_recording_conv (conversation_id, started_at),
     KEY idx_recording_session (session_id)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '语音通话双轨录音元数据';
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '语音通话录音元数据';
 
 -- 用户长期记忆(跨会话个性化): 模型经 remember 工具写入, 每次对话作为上下文回灌。
 CREATE TABLE IF NOT EXISTS user_memory (

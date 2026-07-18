@@ -126,7 +126,7 @@ vca:
     username: ${VCA_STORE_USERNAME:root}
     password: ${VCA_STORE_PASSWORD:}
     queue-capacity: ${VCA_STORE_QUEUE_CAPACITY:1000}
-    # OSS 双轨录音（用户/客服各一个 WAV），不在服务器落临时文件。取得用户同意后再显式开启。
+    # OSS 录音（用户/客服原始双轨 + 按回合排列的 conversation.wav），不落服务器磁盘。
     audio-recording-enabled: ${VCA_AUDIO_RECORDING_ENABLED:false}
     audio-recording-queue-capacity: ${VCA_AUDIO_RECORDING_QUEUE_CAPACITY:2048}
     # 北京地域公网: https://oss-cn-beijing.aliyuncs.com；同地域 ECS 可改用 oss-cn-beijing-internal。
