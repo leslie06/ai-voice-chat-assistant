@@ -2,6 +2,7 @@ package com.vca.web.ws;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vca.domain.enums.VendorType;
+import com.vca.domain.enums.AudioFormat;
 import com.vca.domain.model.AudioChunk;
 import com.vca.domain.model.AudioFrame;
 import com.vca.domain.model.Message;
@@ -9,6 +10,7 @@ import com.vca.domain.model.MusicTrack;
 import com.vca.domain.model.SessionContext;
 import com.vca.domain.spi.MusicProvider;
 import com.vca.orchestrator.session.ConversationSession;
+import com.vca.orchestrator.recorder.AudioRecordingService;
 import com.vca.orchestrator.session.S2sLiveSession;
 import com.vca.orchestrator.session.TurnListener;
 import com.vca.orchestrator.vad.HandsFreeVad;
@@ -90,6 +92,8 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
     private final String authToken;
     /** 用户登录令牌校验器; 非空表示账号系统启用 —— 此时 WS 用<b>用户令牌</b>鉴权, 忽略共享 token。 */
     private final com.vca.orchestrator.auth.TokenAuthenticator authenticator;
+    /** 双轨录音旁路；未开启时为 NOOP。 */
+    private final AudioRecordingService audioRecordingService;
     /** 单会话最长存活秒数; <=0=不限。 */
     private final int maxSessionSeconds;
     /** 同时在线连接上限; <=0=不限。 */
@@ -102,7 +106,8 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
     public VoiceWebSocketHandler(ConversationSessionFactory sessionFactory, ObjectMapper mapper, VadConfig vadConfig,
                                  Supplier<VoiceActivityDetector> vadDetectorFactory, MusicProvider musicProvider,
                                  String authToken, int maxSessionSeconds, int maxConnections, boolean s2sPersistent,
-                                 com.vca.orchestrator.auth.TokenAuthenticator authenticator) {
+                                 com.vca.orchestrator.auth.TokenAuthenticator authenticator,
+                                 AudioRecordingService audioRecordingService) {
         this.sessionFactory = sessionFactory;
         this.mapper = mapper;
         this.vadConfig = vadConfig;
@@ -113,6 +118,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         this.maxConnections = maxConnections;
         this.s2sPersistent = s2sPersistent;
         this.authenticator = authenticator;
+        this.audioRecordingService = audioRecordingService == null ? AudioRecordingService.NOOP : audioRecordingService;
     }
 
     @Override
@@ -217,7 +223,8 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             }
         };
         ConversationSession conversation = sessionFactory.create(session.getId(), userId, listener);
-        Connection conn = new Connection(session, conversation, outbound);
+        AudioRecordingService.Session recording = audioRecordingService.start(userId, session.getId());
+        Connection conn = new Connection(session, conversation, outbound, recording, userId);
         connRef[0] = conn;   // 就位后 onAsrPartial 才能回灌 VAD
         log.debug("WS 连接建立: {}", session.getId());
 
@@ -291,6 +298,9 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         private final WebSocketSession session;
         private final ConversationSession conversation;
         private final Sinks.Many<WebSocketMessage> outbound;
+        private volatile AudioRecordingService.Session recording;
+        private final String userId;
+        private Long recordingConversationId;
         private final HandsFreeVad vad;
 
         private volatile Mode mode = Mode.IDLE;
@@ -319,10 +329,12 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         private static final int MAX_IMAGE_BASE64_CHARS = 8 * 1024 * 1024;
 
         Connection(WebSocketSession session, ConversationSession conversation,
-                   Sinks.Many<WebSocketMessage> outbound) {
+                   Sinks.Many<WebSocketMessage> outbound, AudioRecordingService.Session recording, String userId) {
             this.session = session;
             this.conversation = conversation;
             this.outbound = outbound;
+            this.recording = recording;
+            this.userId = userId;
             // VAD 决策回调接到回合管理。回调在持有 this 锁的上下文里被同步调用。
             // 每连接一个 detector 实例(Silero 的 RNN 状态不可跨会话共享)。
             this.vad = new HandsFreeVad(vadConfig, new HandsFreeVad.Listener() {
@@ -366,6 +378,10 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
 
         /** 上行音频: 免提持久 S2S 直推长连; 否则免提交给本地 VAD; 按住说话直接降采样后喂本轮; 空闲丢弃。 */
         private synchronized void onAudio(byte[] data) {
+            // 只录用户主动开启的免提/PTT；IDLE 下浏览器残留的麦克风帧不保存。
+            if (mode != Mode.IDLE) {
+                recording.appendUserAudio(data, inputSampleRate);
+            }
             switch (mode) {
                 case HANDSFREE -> {
                     if (live != null) {
@@ -395,7 +411,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                 case "voice" -> conversation.selectVoice(parseVendor(str(msg.get("vendor"))), str(msg.get("value")));
                 case "engine" -> onEngine(str(msg.get("value")));
                 case "barge_in" -> manualBarge();
-                case "load_history" -> onLoadHistory(msg.get("messages"));
+                case "load_history" -> onLoadHistory(msg.get("conversationId"), msg.get("messages"));
                 case "image" -> onImage(str(msg.get("data")), str(msg.get("mime")));
                 case "video_frame" -> onVideoFrame(str(msg.get("data")));
                 default -> log.debug("未知控制消息: {}", json);
@@ -407,7 +423,8 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
          * 之后回合据此续聊。{@code messages} 形如 {@code [{role:"user"|"bot", text:"…"}]}。
          * 持久 S2S 需关掉当前长连, 下一句开免提时按新上下文重开; 三段式无 live 时 stopLive 为空操作。
          */
-        private void onLoadHistory(Object raw) {
+        private void onLoadHistory(Object rawConversationId, Object raw) {
+            rotateRecording(longOrNull(rawConversationId));
             List<Message> history = new ArrayList<>();
             if (raw instanceof List<?> list) {
                 for (Object o : list) {
@@ -429,6 +446,18 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             conversation.loadHistory(history);
             stopLive();
             log.debug("切换会话: 回灌历史 {} 条", history.size());
+        }
+
+        /** 同一条 WS 切换业务会话时切一份新录音，绝不让一个文件跨两个 conversation_id。 */
+        private void rotateRecording(Long conversationId) {
+            if (java.util.Objects.equals(recordingConversationId, conversationId)) {
+                recording.setConversationId(conversationId);
+                return;
+            }
+            recording.close();
+            recording = audioRecordingService.start(userId, session.getId());
+            recording.setConversationId(conversationId);
+            recordingConversationId = conversationId;
         }
 
         /**
@@ -770,6 +799,12 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                 // 从首块的 max(now, 上次预计) 累加, 使打断窗口覆盖整段前端播放, 而非只覆盖后端下发那一小段。
                 long now = System.currentTimeMillis();
                 playbackEndsAtMs = Math.max(now, playbackEndsAtMs) + chunk.size() / 48L;
+                if (chunk.format() == AudioFormat.PCM) {
+                    recording.appendAssistantAudio(chunk.data(), 24_000);
+                } else {
+                    log.warn("下行音频不是 PCM, 跳过 WAV 录音: format={}, session={}",
+                            chunk.format(), session.getId());
+                }
                 outbound.tryEmitNext(session.binaryMessage(factory -> factory.wrap(chunk.data())));
             }
             if (chunk.text() != null) {
@@ -810,6 +845,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             stopLive();
             vad.stop();
             conversation.close();
+            recording.close();
             outbound.tryEmitComplete();
             log.debug("WS 连接关闭: {}", session.getId());
         }
@@ -841,6 +877,18 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                 return Integer.parseInt(str(o));
             } catch (NumberFormatException e) {
                 return fallback;
+            }
+        }
+
+        private Long longOrNull(Object o) {
+            if (o instanceof Number n) {
+                return n.longValue();
+            }
+            try {
+                String value = str(o);
+                return value.isBlank() ? null : Long.parseLong(value);
+            } catch (NumberFormatException e) {
+                return null;
             }
         }
     }

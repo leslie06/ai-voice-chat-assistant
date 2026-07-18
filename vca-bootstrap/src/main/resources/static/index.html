@@ -572,7 +572,8 @@ function pushHist(rec){ pushMsg(rec); }   // 兼容旧名
 /* 向后端 WS 回灌当前会话文本历史(音乐不算上下文) */
 function historyForBackend(){ return (activeMsgs||[])
   .filter(m=>m.role==='user'||m.role==='bot').map(m=>({role:m.role,text:m.content})); }
-function sendHistory(){ send({type:'load_history',messages:authed()?historyForBackend():[]}); }
+function sendHistory(){ send({type:'load_history',conversationId:authed()?activeId:null,
+  messages:authed()?historyForBackend():[]}); }
 
 async function refreshConvs(){ const r=await api('GET','/api/conversations'); if(r.ok){ convs=r.data||[]; renderConvList(); } }
 async function openConv(id){

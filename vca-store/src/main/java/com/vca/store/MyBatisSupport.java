@@ -6,6 +6,7 @@ import com.vca.store.mapper.AppUserMapper;
 import com.vca.store.mapper.ChatConversationMapper;
 import com.vca.store.mapper.ChatMessageMapper;
 import com.vca.store.mapper.ConversationTurnMapper;
+import com.vca.store.mapper.ConversationRecordingMapper;
 import com.vca.store.mapper.EvaluationMapper;
 import com.vca.store.mapper.KnowledgeChunkMapper;
 import com.vca.store.mapper.KnowledgeDocMapper;
@@ -36,6 +37,7 @@ final class MyBatisSupport {
         try {
             SqlSessionFactory factory = factoryBean.getObject();
             factory.getConfiguration().addMapper(ConversationTurnMapper.class);
+            factory.getConfiguration().addMapper(ConversationRecordingMapper.class);
             factory.getConfiguration().addMapper(EvaluationMapper.class);
             factory.getConfiguration().addMapper(AppUserMapper.class);
             factory.getConfiguration().addMapper(ChatConversationMapper.class);

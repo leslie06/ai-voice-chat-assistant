@@ -126,6 +126,16 @@ vca:
     username: ${VCA_STORE_USERNAME:root}
     password: ${VCA_STORE_PASSWORD:}
     queue-capacity: ${VCA_STORE_QUEUE_CAPACITY:1000}
+    # OSS 双轨录音（用户/客服各一个 WAV），不在服务器落临时文件。取得用户同意后再显式开启。
+    audio-recording-enabled: ${VCA_AUDIO_RECORDING_ENABLED:false}
+    audio-recording-queue-capacity: ${VCA_AUDIO_RECORDING_QUEUE_CAPACITY:2048}
+    # 北京地域公网: https://oss-cn-beijing.aliyuncs.com；同地域 ECS 可改用 oss-cn-beijing-internal。
+    oss-endpoint: ${VCA_OSS_ENDPOINT:}
+    oss-bucket: ${VCA_OSS_BUCKET:}
+    oss-access-key-id: ${VCA_OSS_ACCESS_KEY_ID:}
+    oss-access-key-secret: ${VCA_OSS_ACCESS_KEY_SECRET:}
+    oss-prefix: ${VCA_OSS_PREFIX:recordings}
+    oss-part-size-bytes: ${VCA_OSS_PART_SIZE_BYTES:5242880}
     # 登录令牌签名密钥: 生产务必经 VCA_STORE_TOKEN_SECRET 设一个随机串; 改了会让已登录用户全部失效。
     token-secret: ${VCA_STORE_TOKEN_SECRET:vca-default-secret-change-me}
     # 找回/修改密码邮件。dev-echo=true 时把重置令牌回显给前端(便于无邮件时联调); 配好 SMTP 后建议设 false。

@@ -4,6 +4,7 @@ import com.vca.orchestrator.auth.TokenAuthenticator;
 import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.recorder.ConversationRecorder;
+import com.vca.orchestrator.recorder.AudioRecordingService;
 import com.vca.store.account.AccountRoutes;
 import com.vca.store.account.ConversationService;
 import com.vca.store.account.EmailSender;
@@ -24,6 +25,7 @@ import com.vca.store.knowledge.KnowledgeRoutes;
 import com.vca.store.knowledge.KnowledgeService;
 import com.vca.store.knowledge.MyBatisKnowledgeStore;
 import com.vca.store.mapper.ConversationTurnMapper;
+import com.vca.store.mapper.ConversationRecordingMapper;
 import com.vca.store.mapper.EvaluationMapper;
 import com.vca.store.mapper.KnowledgeChunkMapper;
 import com.vca.store.mapper.KnowledgeDocMapper;
@@ -91,6 +93,7 @@ public class StoreAutoConfiguration {
         addColumnIfMissing(ds, "conversation_turn", "agent_steps", "INT NULL");
         addColumnIfMissing(ds, "conversation_turn", "agent_replans", "INT NULL");
         addColumnIfMissing(ds, "app_user", "register_ip", "VARCHAR(45) NULL COMMENT '注册 IP'");
+        addColumnIfMissing(ds, "conversation_recording", "oss_bucket", "VARCHAR(128) NULL COMMENT 'OSS Bucket'");
     }
 
     private void addColumnIfMissing(HikariDataSource ds, String table, String column, String ddl) {
@@ -134,6 +137,37 @@ public class StoreAutoConfiguration {
     MyBatisConversationRecorder conversationRecorder(ConversationTurnMapper conversationTurnMapper,
                                                      StoreProperties props) {
         return new MyBatisConversationRecorder(conversationTurnMapper, props.getQueueCapacity());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    ConversationRecordingMapper conversationRecordingMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, ConversationRecordingMapper.class);
+    }
+
+    /** 本地双轨 WAV 录音。只有显式开启时才注册，关闭时接入层自动使用 NOOP。 */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean(AudioRecordingService.class)
+    @ConditionalOnProperty(prefix = "vca.store", name = "audio-recording-enabled", havingValue = "true")
+    OssAudioRecordingService audioRecordingService(StoreProperties props,
+                                                     ConversationRecordingMapper conversationRecordingMapper,
+                                                     ChatConversationMapper chatConversationMapper) {
+        requireText(props.getOssEndpoint(), "VCA_OSS_ENDPOINT");
+        requireText(props.getOssBucket(), "VCA_OSS_BUCKET");
+        requireText(props.getOssAccessKeyId(), "VCA_OSS_ACCESS_KEY_ID");
+        requireText(props.getOssAccessKeySecret(), "VCA_OSS_ACCESS_KEY_SECRET");
+        com.aliyun.oss.OSS client = new com.aliyun.oss.OSSClientBuilder().build(
+                props.getOssEndpoint(), props.getOssAccessKeyId(), props.getOssAccessKeySecret());
+        log.info("语音双轨录音已启用: oss://{}/{}", props.getOssBucket(), props.getOssPrefix());
+        return new OssAudioRecordingService(client, props.getOssBucket(), props.getOssPrefix(),
+                props.getOssPartSizeBytes(), props.getAudioRecordingQueueCapacity(),
+                conversationRecordingMapper, chatConversationMapper);
+    }
+
+    private static void requireText(String value, String envName) {
+        if (!StringUtils.hasText(value)) {
+            throw new IllegalStateException("启用 OSS 录音时必须配置 " + envName);
+        }
     }
 
     // ---- 评测查询(P2-A): 只读, 暴露 GET /eval/report ----

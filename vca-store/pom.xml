@@ -22,6 +22,7 @@
 		     mybatis-spring 2.1.2 仅适配 Spring 5, 必须覆盖成 4.0.0(其要求 mybatis 3.5.19) -->
 		<mybatis-spring.version>4.0.0</mybatis-spring.version>
 		<mybatis.version>3.5.19</mybatis.version>
+		<aliyun-oss.version>3.18.5</aliyun-oss.version>
 	</properties>
 
 	<dependencies>
@@ -90,6 +91,12 @@
 			<groupId>com.mysql</groupId>
 			<artifactId>mysql-connector-j</artifactId>
 			<scope>runtime</scope>
+		</dependency>
+		<!-- 录音直接分片上传阿里云 OSS，不在应用服务器落临时文件。 -->
+		<dependency>
+			<groupId>com.aliyun.oss</groupId>
+			<artifactId>aliyun-sdk-oss</artifactId>
+			<version>${aliyun-oss.version}</version>
 		</dependency>
 		<!-- RAG 知识库: 解析上传的 PDF 文本(txt/md 零依赖直接读); bouncycastle 等为可选, 不传递 -->
 		<dependency>

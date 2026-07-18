@@ -27,6 +27,22 @@ public class StoreProperties {
     /** 异步落库队列容量。满了丢最旧, 保护语音热路径。 */
     private int queueCapacity = 1000;
 
+    /** 是否录制登录用户的语音通话；默认关闭，部署时需在取得用户同意后显式开启。 */
+    private boolean audioRecordingEnabled = false;
+
+    /** 每条通话的音频块队列容量；满时丢新块并把录音标为 partial，不阻塞通话。 */
+    private int audioRecordingQueueCapacity = 2048;
+
+    /** OSS Endpoint，例如 https://oss-cn-hangzhou.aliyuncs.com；同地域 ECS 可填写内网 Endpoint。 */
+    private String ossEndpoint;
+    private String ossBucket;
+    private String ossAccessKeyId;
+    private String ossAccessKeySecret;
+    /** Object Key 前缀，不以 / 开头。 */
+    private String ossPrefix = "recordings";
+    /** OSS 分片大小。首分片需留在内存到通话结束以补 WAV 头，默认 5MB。 */
+    private int ossPartSizeBytes = 5 * 1024 * 1024;
+
     /** 登录令牌 HMAC 签名密钥。生产务必经 env 设一个随机串; 改了它会让已签发令牌全部失效。 */
     private String tokenSecret = "vca-default-secret-change-me";
 
@@ -113,6 +129,35 @@ public class StoreProperties {
     public void setQueueCapacity(int queueCapacity) {
         this.queueCapacity = queueCapacity;
     }
+
+    public boolean isAudioRecordingEnabled() {
+        return audioRecordingEnabled;
+    }
+
+    public void setAudioRecordingEnabled(boolean audioRecordingEnabled) {
+        this.audioRecordingEnabled = audioRecordingEnabled;
+    }
+
+    public int getAudioRecordingQueueCapacity() {
+        return audioRecordingQueueCapacity;
+    }
+
+    public void setAudioRecordingQueueCapacity(int audioRecordingQueueCapacity) {
+        this.audioRecordingQueueCapacity = audioRecordingQueueCapacity;
+    }
+
+    public String getOssEndpoint() { return ossEndpoint; }
+    public void setOssEndpoint(String ossEndpoint) { this.ossEndpoint = ossEndpoint; }
+    public String getOssBucket() { return ossBucket; }
+    public void setOssBucket(String ossBucket) { this.ossBucket = ossBucket; }
+    public String getOssAccessKeyId() { return ossAccessKeyId; }
+    public void setOssAccessKeyId(String ossAccessKeyId) { this.ossAccessKeyId = ossAccessKeyId; }
+    public String getOssAccessKeySecret() { return ossAccessKeySecret; }
+    public void setOssAccessKeySecret(String ossAccessKeySecret) { this.ossAccessKeySecret = ossAccessKeySecret; }
+    public String getOssPrefix() { return ossPrefix; }
+    public void setOssPrefix(String ossPrefix) { this.ossPrefix = ossPrefix; }
+    public int getOssPartSizeBytes() { return ossPartSizeBytes; }
+    public void setOssPartSizeBytes(int ossPartSizeBytes) { this.ossPartSizeBytes = ossPartSizeBytes; }
 
     public String getTokenSecret() {
         return tokenSecret;

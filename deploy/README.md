@@ -23,6 +23,20 @@ caddy run --config deploy/Caddyfile        # 生产用 `caddy start` 或做成 s
 ```
 手机打开 `https://你的域名`。
 
+如需把用户与 AI 客服的双轨 WAV 直接保存到阿里云 OSS，在 `/etc/vca.env` 增加：
+```bash
+VCA_STORE_ENABLED=true
+VCA_AUDIO_RECORDING_ENABLED=true
+VCA_OSS_ENDPOINT=https://oss-cn-beijing.aliyuncs.com
+VCA_OSS_BUCKET=你的私有Bucket
+VCA_OSS_ACCESS_KEY_ID=RAM用户AccessKeyId
+VCA_OSS_ACCESS_KEY_SECRET=RAM用户AccessKeySecret
+VCA_OSS_PREFIX=recordings
+```
+应用使用内存缓冲和 OSS Multipart Upload，服务器不创建临时录音文件。Bucket 应设为私有，RAM 用户只授予
+该 Bucket 前缀所需的 `oss:PutObject`、`oss:AbortMultipartUpload` 权限。MySQL 的
+`conversation_recording` 表保存 Bucket、Object Key 和录音状态。
+
 ### B2. Docker（一键，app + Caddy 一起拉起）
 ```bash
 # 改好 Caddyfile 域名(并把 localhost:8080 改成 vca:8080)，建 deploy/.env 填 key：
