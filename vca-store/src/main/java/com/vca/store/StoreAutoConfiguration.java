@@ -90,6 +90,7 @@ public class StoreAutoConfiguration {
         // 多步 Agent 指标(P3): 给已存在的 conversation_turn 补列
         addColumnIfMissing(ds, "conversation_turn", "agent_steps", "INT NULL");
         addColumnIfMissing(ds, "conversation_turn", "agent_replans", "INT NULL");
+        addColumnIfMissing(ds, "app_user", "register_ip", "VARCHAR(45) NULL COMMENT '注册 IP'");
     }
 
     private void addColumnIfMissing(HikariDataSource ds, String table, String column, String ddl) {

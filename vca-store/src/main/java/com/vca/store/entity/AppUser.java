@@ -14,6 +14,7 @@ public class AppUser {
     private Long id;
     private String username;
     private String email;
+    private String registerIp;
     private String passSalt;
     private String passHash;
     private LocalDateTime createdAt;
@@ -40,6 +41,14 @@ public class AppUser {
 
     public void setEmail(String email) {
         this.email = email;
+    }
+
+    public String getRegisterIp() {
+        return registerIp;
+    }
+
+    public void setRegisterIp(String registerIp) {
+        this.registerIp = registerIp;
     }
 
     public String getPassSalt() {

@@ -70,7 +70,8 @@ public final class AccountRoutes {
 
     private Mono<ServerResponse> register(ServerRequest req) {
         return req.bodyToMono(Map.class).flatMap(body ->
-                blocking(() -> users.register(str(body.get("username")), str(body.get("email")), str(body.get("password"))))
+                blocking(() -> users.register(str(body.get("username")), str(body.get("email")),
+                        str(body.get("password")), clientIp(req)))
                         .flatMap(res -> res.error() != null
                                 ? json(400, Map.of("error", res.error()))
                                 : json(200, Map.of("token", res.token(), "username", res.username()))))
@@ -197,6 +198,17 @@ public final class AccountRoutes {
         String h = req.headers().firstHeader("Authorization");
         String token = (h != null && h.startsWith("Bearer ")) ? h.substring(7) : h;
         return token == null ? null : users.userIdOf(token);
+    }
+
+    /** 优先取 Caddy 转发的真实 IP，没有反向代理时取直连 IP。 */
+    private static String clientIp(ServerRequest req) {
+        String forwarded = req.headers().firstHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+        return req.remoteAddress()
+                .map(address -> address.getAddress().getHostAddress())
+                .orElse(null);
     }
 
     private static Map<String, Object> convDto(ChatConversation c) {

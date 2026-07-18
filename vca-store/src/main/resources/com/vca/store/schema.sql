@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS app_user (
     id         BIGINT       NOT NULL AUTO_INCREMENT,
     username   VARCHAR(64)  NOT NULL,
     email      VARCHAR(128) NOT NULL,
+    register_ip VARCHAR(45)          COMMENT '注册 IP',
     pass_salt  VARCHAR(64)  NOT NULL,
     pass_hash  VARCHAR(128) NOT NULL,
     created_at DATETIME     NOT NULL,

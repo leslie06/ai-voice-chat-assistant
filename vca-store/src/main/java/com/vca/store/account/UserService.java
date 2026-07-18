@@ -35,7 +35,7 @@ public class UserService {
         }
     }
 
-    public AuthResult register(String username, String email, String password) {
+    public AuthResult register(String username, String email, String password, String registerIp) {
         String u = username == null ? "" : username.trim();
         String mail = email == null ? "" : email.trim();
         if (!isValidPhone(u)) {
@@ -57,6 +57,7 @@ public class UserService {
         AppUser user = new AppUser();
         user.setUsername(u);
         user.setEmail(mail);
+        user.setRegisterIp(registerIp);
         user.setPassSalt(salt);
         user.setPassHash(PasswordUtil.hash(password, salt));
         user.setCreatedAt(LocalDateTime.now());
