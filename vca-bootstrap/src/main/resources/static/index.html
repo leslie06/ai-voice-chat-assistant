@@ -217,8 +217,8 @@
         <button class="iconbtn" id="authClose" title="关闭">✕</button>
       </div>
       <div class="field" id="fUser">
-        <label for="authUser" id="lblUser">用户名</label>
-        <input class="modelsel" id="authUser" autocomplete="username" placeholder="2-32 个字符">
+        <label for="authUser" id="lblUser">手机号</label>
+        <input class="modelsel" id="authUser" type="tel" inputmode="numeric" maxlength="11" autocomplete="tel" placeholder="请输入11位手机号">
       </div>
       <div class="field" id="fEmail">
         <label for="authEmail">邮箱</label>
@@ -538,7 +538,7 @@ function botFinish(text){ if(text!=null) botText=text; const had=botBubble; if(b
    会话与消息全存服务端(MySQL), 按登录用户隔离 —— 每人只看自己的历史。前端只持有登录令牌。
    切换/新建会话时把该会话文本历史经 WS load_history 回灌后端模型, 让它据此续聊。 */
 let token=localStorage.getItem('vca_auth_token')||'';
-let me=null;                 // 当前用户名
+let me=null;                 // 当前脱敏显示名（用户+手机号后四位）
 let convs=[];                // [{id,title,updatedAt}]
 let activeId=null;           // 当前会话 id(字符串)
 let activeMsgs=[];           // 当前会话消息 [{role,content}]
@@ -637,9 +637,13 @@ function showLanding(){
   chat.innerHTML=''; document.getElementById('convTitle').textContent='Flying Fish';
   if(ws){ try{ws.close();}catch(e){} ws=null; }   // 退出后断开语音连接
 }
+function maskedUser(value){
+  const s=(value||'').trim();
+  return /^1[3-9]\d{9}$/.test(s) ? '用户'+s.slice(-4) : s;
+}
 async function enterApp(){
   document.body.classList.remove('logged-out'); document.body.classList.add('logged-in');
-  document.getElementById('meName').textContent=me||'';
+  document.getElementById('meName').textContent=maskedUser(me);
   await refreshConvs();
   if(convs.length) await openConv(convs[0].id); else await newChat();
   connect();   // 连 WS(onopen 会按当前会话 sendHistory)
@@ -684,7 +688,13 @@ function renderAuth(){
   show('authToggle', v==='login'||v==='register');
   show('authForgot', v==='login');
   show('authBack', v==='forgot'||v==='reset');
-  $a('lblUser').textContent = v==='forgot'?'用户名 / 邮箱':'用户名';
+  const userInput=$a('authUser'), forgot=v==='forgot';
+  $a('lblUser').textContent = forgot?'手机号 / 邮箱':'手机号';
+  userInput.type=forgot?'text':'tel';
+  userInput.inputMode=forgot?'text':'numeric';
+  userInput.maxLength=forgot?128:11;
+  userInput.autocomplete=forgot?'username':'tel';
+  userInput.placeholder=forgot?'请输入手机号或邮箱':'请输入11位手机号';
   $a('authTitle').textContent = {login:'登录',register:'注册',forgot:'找回密码',reset:'重置密码'}[v];
   $a('authSubmit').textContent = {login:'登录',register:'注册',forgot:'发送重置邮件',reset:'重置密码'}[v];
   $a('authToggle').textContent = v==='login'?'没有账号？去注册':'已有账号？去登录';
@@ -694,7 +704,8 @@ async function submitAuth(){
   const v=authView;
   if(v==='login' || v==='register'){
     const u=$a('authUser').value.trim(), p=$a('authPass').value;
-    if(!u||!p){ authMsg('请输入用户名和密码'); return; }
+    if(!u||!p){ authMsg('请输入手机号和密码'); return; }
+    if(!/^1[3-9]\d{9}$/.test(u)){ authMsg('请输入正确的11位手机号'); return; }
     const body=v==='register' ? {username:u,email:$a('authEmail').value.trim(),password:p} : {username:u,password:p};
     const r=await api('POST', v==='login'?'/api/login':'/api/register', body);
     if(r.ok && r.data && r.data.token){
@@ -703,7 +714,7 @@ async function submitAuth(){
     } else authMsg((r.data&&r.data.error)||'操作失败，请重试');
   } else if(v==='forgot'){
     const acc=$a('authUser').value.trim();
-    if(!acc){ authMsg('请输入用户名或邮箱'); return; }
+    if(!acc){ authMsg('请输入手机号或邮箱'); return; }
     const r=await api('POST','/api/password/forgot',{account:acc});
     if(r.ok){ toResetView(r.data&&r.data.devToken, '重置邮件已发送，请查收邮箱'); }
     else authMsg((r.data&&r.data.error)||'发送失败，请重试');

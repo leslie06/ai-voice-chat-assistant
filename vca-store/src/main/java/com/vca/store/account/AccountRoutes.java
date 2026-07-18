@@ -25,9 +25,9 @@ import static org.springframework.web.reactive.function.server.RequestPredicates
  *
  * <p>端点:
  * <pre>
- *   POST /api/register {username,email,password}      → {token,username}
- *   POST /api/login    {username,password}            → {token,username}
- *   GET  /api/me                                      → {username}
+ *   POST /api/register {username(手机号),email,password} → {token,username(脱敏显示名)}
+ *   POST /api/login    {username(手机号),password}       → {token,username(脱敏显示名)}
+ *   GET  /api/me                                         → {username(脱敏显示名)}
  *   POST /api/password/forgot {account}               → {ok} (dev 附 devToken)  发重置邮件
  *   POST /api/password/reset  {token,password}        → {ok}                    凭令牌设新密码
  *   POST /api/password/change-request                 → {ok} (dev 附 devToken)  已登录, 发重置邮件到本人邮箱
@@ -74,7 +74,7 @@ public final class AccountRoutes {
                         .flatMap(res -> res.error() != null
                                 ? json(400, Map.of("error", res.error()))
                                 : json(200, Map.of("token", res.token(), "username", res.username()))))
-                .onErrorResume(e -> json(400, Map.of("error", "注册失败: 用户名或邮箱可能已被占用")))
+                .onErrorResume(e -> json(400, Map.of("error", "注册失败: 手机号或邮箱可能已被占用")))
                 .switchIfEmpty(json(400, Map.of("error", "请求体缺失")));
     }
 

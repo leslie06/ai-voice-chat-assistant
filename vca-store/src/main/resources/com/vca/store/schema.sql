@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS conversation_turn (
     KEY idx_turn_created (created_at)                -- 按时间做评测切片
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '对话存档(数据飞轮)';
 
--- 用户账号: 密码用 PBKDF2 加盐哈希(不存明文); 邮箱用于找回/修改密码。
+-- 用户账号: username 保存中国大陆手机号；密码用 PBKDF2 加盐哈希；邮箱用于找回/修改密码。
 CREATE TABLE IF NOT EXISTS app_user (
     id         BIGINT       NOT NULL AUTO_INCREMENT,
     username   VARCHAR(64)  NOT NULL,
