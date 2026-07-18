@@ -574,18 +574,13 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             log.debug("切换打字模型: vendor={}, model={}", v, model);
         }
 
-        /** 前端切换对话模式: {@code pipeline}(三段式) 或 {@code s2s}(端到端语音大模型)。下一回合生效。 */
+        /** 当前仅允许三段式；端到端链路保留在代码中但不开放给客户端切换。 */
         private void onEngine(String value) {
-            SessionContext.Mode target;
-            if ("s2s".equalsIgnoreCase(value)) {
-                target = SessionContext.Mode.SPEECH_TO_SPEECH;
-            } else if ("pipeline".equalsIgnoreCase(value)) {
-                target = SessionContext.Mode.PIPELINE;
-            } else {
-                log.debug("忽略未知对话模式: {}", value);
+            if (!"pipeline".equalsIgnoreCase(value)) {
+                log.debug("端到端链路已关闭, 忽略对话模式切换: {}", value);
                 return;
             }
-            conversation.switchMode(target);
+            conversation.switchMode(SessionContext.Mode.PIPELINE);
             reconcileHandsfreePath();
         }
 

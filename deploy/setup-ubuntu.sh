@@ -36,9 +36,9 @@ if [ ! -f /etc/vca.env ]; then
   cat > /etc/vca.env <<'EOF'
 SPRING_PROFILES_ACTIVE=real
 SERVER_PORT=8080
-DASHSCOPE_API_KEY=sk-改成你的阿里云key
+DASHSCOPE_API_KEY=
 DEEPSEEK_ENABLED=true
-DEEPSEEK_API_KEY=sk-改成你的deepseek-key
+DEEPSEEK_API_KEY=
 # 服务器直连 DeepSeek：必须置空，禁用默认的本地 7890 代理
 DEEPSEEK_PROXY=
 EOF
