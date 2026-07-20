@@ -50,6 +50,10 @@ java -Xms512m -Xmx1g -Duser.timezone=Asia/Shanghai -jar ...jar
 | `DEEPSEEK_ENABLED` | 启用真实 DeepSeek（否则用 echo 桩当大脑）|
 | `DEEPSEEK_API_KEY` | DeepSeek Key（支持多个，`ApiKeyPool` 轮询）|
 | `DEEPSEEK_PROXY` | DeepSeek 出口代理；置空=直连 |
+| `KIMI_ENABLED` | 设为 `true` 启用 Kimi K3 |
+| `MOONSHOT_API_KEY` | Moonshot 官方 API Key（也兼容变量名 `KIMI_API_KEY`）|
+| `KIMI_BASE_URL` | 默认 `https://api.moonshot.cn/v1` |
+| `KIMI_MODEL` | 默认 `kimi-k3` |
 
 ### 接入层 / 默认会话（`vca.web.*`）
 | 配置 | 默认 | 说明 |
@@ -172,6 +176,10 @@ DASHSCOPE_API_KEY=sk-你的阿里云key
 DEEPSEEK_ENABLED=true
 DEEPSEEK_API_KEY=sk-你的deepseek-key
 DEEPSEEK_PROXY=          # ‼ 必须留空：服务器没有本地 7890 代理，留空=直连
+KIMI_ENABLED=true
+MOONSHOT_API_KEY=sk-你的新Moonshot-key
+KIMI_BASE_URL=https://api.moonshot.cn/v1
+KIMI_MODEL=kimi-k3
 ```
 ```bash
 systemctl restart vca

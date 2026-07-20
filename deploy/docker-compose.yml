@@ -8,8 +8,9 @@
 # .env 示例：
 #   DASHSCOPE_API_KEY=sk-xxx
 #   DEEPSEEK_API_KEY=sk-yyy
-#   KIMI_ENABLED=false
+#   KIMI_ENABLED=true
 #   MOONSHOT_API_KEY=sk-zzz
+#   KIMI_MODEL=kimi-k3
 
 services:
   vca:
@@ -26,7 +27,8 @@ services:
       KIMI_ENABLED: ${KIMI_ENABLED:-false}
       MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
       KIMI_API_KEY: ${KIMI_API_KEY:-}
-      KIMI_BASE_URL: ${KIMI_BASE_URL:-http://192.168.9.215:13000/v1}
+      KIMI_BASE_URL: ${KIMI_BASE_URL:-https://api.moonshot.cn/v1}
+      KIMI_MODEL: ${KIMI_MODEL:-kimi-k3}
     expose:
       - "8080"          # 只对内网暴露，由 caddy 转发，不直接对公网开 8080
 

@@ -30,7 +30,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * OpenAI 兼容文本对话实现。适配 DeepSeek、DashScope/Qwen、Kimi 私有网关等同形接口:
+ * OpenAI 兼容文本对话实现。适配 DeepSeek、DashScope/Qwen、Kimi 官方 API 等同形接口:
  * POST /chat/completions, stream=true, SSE data 里读取 choices[0].delta.content。
  *
  * <p>支持 function-calling: 传入 {@code tools} 时, 在请求体带 {@code tools}/{@code tool_choice=auto},

@@ -41,10 +41,9 @@ class OpenAiCompatibleLlmProviderTest {
     @Test
     void streamsTokensAndBuildsKimiCompatibleBody() throws Exception {
         OpenAiCompatibleLlmProperties.Client props = client(VendorType.MOONSHOT, "Kimi");
-        props.setDefaultModel("kimi-k2.6");
+        props.setDefaultModel("kimi-k3");
         props.setMaxTokensField("");
         props.setIncludeTemperature(false);
-        props.setExtraBody(Map.of("chat_template_kwargs", Map.of("thinking", true)));
         OpenAiCompatibleLlmProvider provider = provider("kimi", props);
 
         String sse = """
@@ -62,8 +61,10 @@ class OpenAiCompatibleLlmProviderTest {
                 .setBody(sse));
 
         StepVerifier.create(provider.chatStream(
-                        List.of(Message.user("你好，请介绍一下你自己")),
-                        LlmConfig.defaults(VendorType.MOONSHOT, "kimi-k2.6")))
+                        List.of(
+                                Message.system("你是 Kimi，由 Moonshot AI 提供的人工智能助手。"),
+                                Message.user("你好，请介绍一下你自己")),
+                        LlmConfig.defaults(VendorType.MOONSHOT, "kimi-k3")))
                 .expectNext("你好")
                 .expectNext("，我是 Kimi")
                 .verifyComplete();
@@ -72,9 +73,11 @@ class OpenAiCompatibleLlmProviderTest {
         assertThat(req.getPath()).isEqualTo("/chat/completions");
         assertThat(req.getHeader("Authorization")).isEqualTo("Bearer sk-test-key");
         String body = req.getBody().readUtf8();
-        assertThat(body).contains("\"model\":\"kimi-k2.6\"");
+        assertThat(body).contains("\"model\":\"kimi-k3\"");
+        assertThat(body).contains("\"role\":\"system\"");
+        assertThat(body).contains("你是 Kimi，由 Moonshot AI 提供的人工智能助手。");
         assertThat(body).contains("\"stream\":true");
-        assertThat(body).contains("\"chat_template_kwargs\":{\"thinking\":true}");
+        assertThat(body).doesNotContain("chat_template_kwargs");
         assertThat(body).doesNotContain("temperature");
         assertThat(body).doesNotContain("max_tokens");
         assertThat(body).doesNotContain("max_completion_tokens");
@@ -92,7 +95,7 @@ class OpenAiCompatibleLlmProviderTest {
 
         StepVerifier.create(provider.chatStream(
                         List.of(Message.user("hi")),
-                        new LlmConfig(VendorType.MOONSHOT, "kimi-k2.6", "", 0.7, 321)))
+                        new LlmConfig(VendorType.MOONSHOT, "kimi-k3", "", 0.7, 321)))
                 .verifyComplete();
 
         String body = server.takeRequest().getBody().readUtf8();

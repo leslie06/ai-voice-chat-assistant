@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * OpenAI 兼容文本 LLM 配置。DeepSeek、DashScope/Qwen、Kimi 私有网关等只要遵循
+ * OpenAI 兼容文本 LLM 配置。DeepSeek、DashScope/Qwen、Kimi 官方 API 等只要遵循
  * /chat/completions + SSE delta.content, 就可以通过这里配置成一个 LlmProvider。
  */
 @ConfigurationProperties(prefix = "vca.providers.llm.openai-compatible")

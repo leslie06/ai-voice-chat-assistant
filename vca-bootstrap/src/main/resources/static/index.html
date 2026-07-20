@@ -266,7 +266,7 @@
         <select class="modelsel" id="model">
           <option value="qwen|qwen3.7-plus" selected>Qwen3.7-Plus（最快·推荐）</option>
           <option value="qwen|qwen3.7-max">Qwen3.7-Max</option>
-          <option value="moonshot|kimi-k2.6">Kimi K2.6</option>
+          <option value="moonshot|kimi-k3">Kimi K3</option>
           <option value="zhipu|glm-5.1">GLM-5.1（公司内网）</option>
           <option value="deepseek|deepseek-v4-flash">DeepSeek-V4-Flash</option>
           <option value="deepseek|deepseek-v4-pro">DeepSeek-V4-Pro</option>
@@ -1015,7 +1015,8 @@ function stopCam(){
 /* ---------- 模型选择(三段式下语音+打字都用; 端到端下仅作用于打字) ---------- */
 const modelSel=document.getElementById('model');
 // 键名带 v2: 作废旧版只控制打字时存下的选择(可能是慢模型), 新逻辑下默认回到 Qwen。
-const savedModel=localStorage.getItem('vca_model_v2'); if(savedModel) modelSel.value=savedModel;
+const savedModel=localStorage.getItem('vca_model_v2');
+if(savedModel){ modelSel.value=savedModel; if(modelSel.value!==savedModel) localStorage.removeItem('vca_model_v2'); }
 function sendModel(){ const [vendor,model]=modelSel.value.split('|');
   localStorage.setItem('vca_model_v2',modelSel.value); send({type:'model',vendor,model}); }
 modelSel.onchange=sendModel;
