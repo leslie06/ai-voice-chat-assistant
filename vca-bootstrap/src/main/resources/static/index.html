@@ -190,19 +190,24 @@
       .music-mini-progress{grid-template-columns:28px minmax(80px,1fr) 28px;}
     }
     .hint{max-width:760px;margin:0 auto 6px;padding:0 16px;min-height:18px;font-size:12.5px;color:var(--accent);text-align:center;}
-    .composer{max-width:760px;margin:0 auto;padding:0 12px;display:flex;align-items:flex-end;gap:8px;}
+    .composer{width:100%;max-width:760px;min-width:0;margin:0 auto;padding:0 12px;display:flex;align-items:flex-end;gap:8px;}
     .voicebtn{flex:none;width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:var(--bg);
       font-size:19px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
     .voicebtn:active{transform:scale(.94);}
     .voicebtn.on{background:var(--danger);border-color:var(--danger);color:#fff;}
     .voicebtn.talk.rec{background:var(--danger);border-color:var(--danger);color:#fff;}
-    .inputbox{flex:1;display:flex;align-items:flex-end;border:1px solid var(--line);border-radius:22px;
+    .inputbox{flex:1;min-width:0;display:flex;align-items:flex-end;border:1px solid var(--line);border-radius:22px;
       padding:6px 6px 6px 16px;background:var(--bg);}
     .inputbox textarea{flex:1;border:none;outline:none;resize:none;font:inherit;font-size:15.5px;line-height:1.4;
-      max-height:120px;background:none;color:var(--text);padding:6px 0;}
+      width:100%;min-width:0;max-height:120px;background:none;color:var(--text);padding:6px 0;}
     .send{flex:none;width:34px;height:34px;border-radius:50%;border:none;background:var(--text);color:#fff;
       font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
     .send:disabled{background:#c9c9cf;cursor:default;}
+    @media(max-width:560px){
+      .composer{flex-wrap:wrap;justify-content:center;gap:6px;padding:0 10px;}
+      .voicebtn{width:38px;height:38px;font-size:17px;}
+      .inputbox{order:2;flex:0 0 100%;width:100%;}
+    }
     /* 视觉多模态: 聊天里的图片消息 + 摄像头小窗预览 */
     .bubble img.att{display:block;max-width:220px;max-height:220px;border-radius:10px;}
     .campreview{position:fixed;right:14px;bottom:92px;width:128px;border-radius:10px;z-index:60;
