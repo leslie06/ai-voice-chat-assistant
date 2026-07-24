@@ -170,6 +170,9 @@
     .music-mini-title{display:block;font-size:13px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .music-mini-artist{display:block;font-size:11px;color:#777;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .music-mini-player{width:min(100%,440px);min-width:0;margin:0 auto;}
+    .music-mini-close{position:absolute;right:14px;top:7px;display:grid;place-items:center;width:28px;height:28px;
+      padding:0;border:0;border-radius:50%;background:transparent;color:#888;font-size:20px;line-height:1;cursor:pointer;}
+    .music-mini-close:hover{background:#f1f1f1;color:#191919;}
     .music-mini-controls{display:flex;align-items:center;justify-content:center;gap:16px;height:38px;}
     .music-mini-btn{display:grid;place-items:center;flex:none;width:28px;height:28px;border:0;border-radius:50%;
       padding:0;background:transparent;color:#777;cursor:pointer;transition:color .15s ease,transform .15s ease;}
@@ -186,6 +189,7 @@
       .music-mini{padding:4px 10px;}
       .music-mini-track{position:static;width:auto;margin-bottom:3px;}
       .music-mini-player{width:100%;}
+      .music-mini-track{padding-right:34px;}
       .music-mini-controls{gap:20px;}
       .music-mini-progress{grid-template-columns:28px minmax(80px,1fr) 28px;}
     }
@@ -262,6 +266,7 @@
     <span class="dot" id="dot"></span>
     <h1 id="convTitle">Flying Fish</h1>
     <button class="iconbtn" id="bargeBtn" title="打断" style="display:none">⏹</button>
+    <button class="iconbtn authonly" id="musicBtn" title="音乐">♫</button>
     <button class="iconbtn authonly" id="settingsBtn" title="设置">⚙</button>
     <div class="authctas guestonly">
       <button class="cta-ghost" id="loginBtn">登录</button>
@@ -281,7 +286,7 @@
   </main>
 
   <footer>
-    <div class="music-mini authonly" id="musicMini">
+    <div class="music-mini authonly" id="musicMini" hidden>
       <div class="music-mini-track">
         <button class="music-mini-now" id="musicMiniOpen" title="打开 KTV 点歌台">
           <span class="music-mini-title" id="musicMiniTitle">音乐播放器</span>
@@ -310,6 +315,7 @@
           <span class="music-mini-time" id="musicMiniDuration">0:00</span>
         </div>
       </div>
+      <button class="music-mini-close" id="musicMiniClose" title="关闭播放器" aria-label="关闭播放器">×</button>
     </div>
     <div class="hint" id="hint"></div>
     <div class="composer">
@@ -635,6 +641,7 @@ const musicModeBtn=document.getElementById('musicMode');
 const musicFullLink=document.getElementById('musicFullLink');
 const musicPreviousBtn=document.getElementById('musicPrevious');
 const musicNextBtn=document.getElementById('musicNext');
+const musicMini=document.getElementById('musicMini');
 const musicMiniTitle=document.getElementById('musicMiniTitle');
 const musicMiniArtist=document.getElementById('musicMiniArtist');
 const musicMiniPrevious=document.getElementById('musicMiniPrevious');
@@ -684,6 +691,7 @@ function playMusicAt(index, remember){
   musicIndex=index;
   const track=musicTracks[musicIndex];
   updateMusicMeta(track);
+  musicMini.hidden=false;
   musicPlayer.src=track.url;
   musicPlayer.play().catch(()=>{}); // 浏览器若拦截自动播放，用户仍可点原生播放按钮
   if(musicCatalogTracks.length) renderMusicLibrary();
@@ -705,6 +713,8 @@ function previousMusic(){
 }
 musicPlayer.addEventListener('ended',nextMusic);
 musicPlayer.addEventListener('play',()=>{
+  // 点击免提时会先播放一段静音来解锁移动端媒体权限，此时并没有选中歌曲。
+  if(musicIndex>=0) musicMini.hidden=false;
   musicMiniToggle.innerHTML=MUSIC_PAUSE_ICON;
   if(musicCatalogTracks.length) renderMusicLibrary();
 });
@@ -739,6 +749,10 @@ function openMusicPanel(){
   loadMusicCatalog(false);
 }
 function closeMusicPanel(){ musicPanel.hidden=true; }
+function closeMusicMini(){
+  musicPlayer.pause();
+  musicMini.hidden=true;
+}
 function updateMusicModeButtons(){
   musicModeBtn.textContent=musicModeText();
   musicMiniRandom.classList.toggle('active',musicMode==='random');
@@ -825,6 +839,7 @@ function playCatalogTrack(index){
   renderMusicLibrary();
 }
 document.getElementById('musicClose').onclick=closeMusicPanel;
+document.getElementById('musicBtn').onclick=openMusicPanel;
 musicPanel.addEventListener('click',e=>{ if(e.target===musicPanel) closeMusicPanel(); });
 musicPreviousBtn.onclick=previousMusic;
 musicNextBtn.onclick=nextMusic;
@@ -835,6 +850,7 @@ function toggleMusicMode(){
 }
 musicModeBtn.onclick=toggleMusicMode;
 document.getElementById('musicMiniOpen').onclick=openMusicPanel;
+document.getElementById('musicMiniClose').onclick=closeMusicMini;
 musicMiniPrevious.onclick=previousMusic;
 musicMiniToggle.onclick=toggleMusic;
 musicMiniNext.onclick=nextMusic;
