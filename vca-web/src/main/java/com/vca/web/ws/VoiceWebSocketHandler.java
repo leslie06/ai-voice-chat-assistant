@@ -7,6 +7,7 @@ import com.vca.domain.model.AudioChunk;
 import com.vca.domain.model.AudioFrame;
 import com.vca.domain.model.Message;
 import com.vca.domain.model.MusicTrack;
+import com.vca.domain.model.MusicPlaylist;
 import com.vca.domain.model.SessionContext;
 import com.vca.domain.spi.MusicProvider;
 import com.vca.orchestrator.session.ConversationSession;
@@ -70,7 +71,7 @@ import java.util.function.Supplier;
  *       <li><b>二进制帧</b>: TTS 合成的音频块(24k PCM);</li>
  *       <li><b>文本帧(JSON)</b>: {@code asr}/{@code reply}/{@code chunk} 字幕,
  *         {@code turn_end}, {@code interrupted}, {@code error},
- *         {@code {"type":"music","action":"play","title":...,"artist":...,"url":...,"cover":...}}
+ *         {@code {"type":"music","action":"play","tracks":[...],"index":...}}
  *         点歌(前端用 &lt;audio&gt; 播放), 找不到时 {@code action:"notfound"},
  *         {@code {"type":"sources","items":[{"title":...,"url":...,"date":...}]}} 联网检索来源(在本轮回复前下发),
  *         以及 {@code {"type":"state","value":...,"label":...}} 让前端显示当前状态。</li>
@@ -196,8 +197,8 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             @Override
             public void onMusicRequest(String action, String query) {
                 // 调音源拿可直接播放的地址, 下发给前端用 <audio> 播放; 找不到则告知前端。
-                musicProvider.search(query)
-                        .map(track -> musicPlayMessage(track, query))
+                musicProvider.playlist(query)
+                        .map(playlist -> musicPlayMessage(playlist, query))
                         .defaultIfEmpty(Map.of("type", "music", "action", "notfound", "query", query))
                         .onErrorReturn(Map.of("type", "music", "action", "notfound", "query", query))
                         .subscribe(msg -> pushJson(session, outbound, msg));
@@ -267,8 +268,9 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         return "";
     }
 
-    /** 组装一条"播放"音乐消息(cover 可能为 null, 故用可放 null 的 LinkedHashMap 而非 Map.of) */
-    private Map<String, Object> musicPlayMessage(MusicTrack track, String query) {
+    /** 组装播放列表消息；前端负责上一首/下一首及顺序/随机播放。 */
+    private Map<String, Object> musicPlayMessage(MusicPlaylist playlist, String query) {
+        MusicTrack track = playlist.current();
         Map<String, Object> msg = new LinkedHashMap<>();
         msg.put("type", "music");
         msg.put("action", "play");
@@ -279,6 +281,19 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         msg.put("cover", track.coverUrl());
         msg.put("duration", track.durationSec());
         msg.put("full", track.full());
+        msg.put("index", playlist.currentIndex());
+        List<Map<String, Object>> tracks = new ArrayList<>(playlist.tracks().size());
+        for (MusicTrack item : playlist.tracks()) {
+            Map<String, Object> value = new LinkedHashMap<>();
+            value.put("title", item.title());
+            value.put("artist", item.artist());
+            value.put("url", item.playUrl());
+            value.put("cover", item.coverUrl());
+            value.put("duration", item.durationSec());
+            value.put("full", item.full());
+            tracks.add(value);
+        }
+        msg.put("tracks", tracks);
         return msg;
     }
 

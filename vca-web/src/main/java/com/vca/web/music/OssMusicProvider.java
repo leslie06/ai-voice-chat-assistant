@@ -5,6 +5,7 @@ import com.aliyun.oss.OSS;
 import com.aliyun.oss.model.ListObjectsRequest;
 import com.aliyun.oss.model.OSSObjectSummary;
 import com.aliyun.oss.model.ObjectListing;
+import com.vca.domain.model.MusicPlaylist;
 import com.vca.domain.model.MusicTrack;
 import com.vca.domain.spi.MusicProvider;
 import org.slf4j.Logger;
@@ -15,6 +16,7 @@ import reactor.core.scheduler.Schedulers;
 import java.net.URL;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -60,6 +62,32 @@ public final class OssMusicProvider implements MusicProvider, AutoCloseable {
                 });
     }
 
+    @Override
+    public Mono<MusicPlaylist> playlist(String query) {
+        if (query == null || query.isBlank()) {
+            return Mono.empty();
+        }
+        return Mono.fromCallable(() -> findPlaylist(query))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(result -> result == null ? Mono.empty() : Mono.just(result))
+                .onErrorResume(e -> {
+                    log.warn("OSS 播放列表生成失败: query={}, bucket={}, prefix={} ({})",
+                            query, bucket, prefix, e.toString());
+                    return Mono.empty();
+                });
+    }
+
+    @Override
+    public Mono<List<MusicTrack>> catalog() {
+        return Mono.fromCallable(this::signedCatalog)
+                .subscribeOn(Schedulers.boundedElastic())
+                .onErrorResume(e -> {
+                    log.warn("OSS 曲库列表生成失败: bucket={}, prefix={} ({})",
+                            bucket, prefix, e.toString());
+                    return Mono.just(List.of());
+                });
+    }
+
     private MusicTrack find(String query) {
         Song hit = bestSong(songs(), query);
         if (hit == null) {
@@ -68,6 +96,31 @@ public final class OssMusicProvider implements MusicProvider, AutoCloseable {
         Date expiresAt = new Date(System.currentTimeMillis() + urlLifetime.toMillis());
         URL url = client.generatePresignedUrl(bucket, hit.key(), expiresAt, HttpMethod.GET);
         return new MusicTrack(hit.title(), hit.artist(), url.toString(), null, 0, true);
+    }
+
+    private MusicPlaylist findPlaylist(String query) {
+        List<Song> songs = songs();
+        Song hit = bestSong(songs, query);
+        if (hit == null) {
+            return null;
+        }
+        List<MusicTrack> tracks = signedTracks(songs);
+        int currentIndex = songs.indexOf(hit);
+        return new MusicPlaylist(tracks, currentIndex);
+    }
+
+    private List<MusicTrack> signedCatalog() {
+        return signedTracks(songs());
+    }
+
+    private List<MusicTrack> signedTracks(List<Song> songs) {
+        Date expiresAt = new Date(System.currentTimeMillis() + urlLifetime.toMillis());
+        List<MusicTrack> tracks = new ArrayList<>(songs.size());
+        for (Song song : songs) {
+            URL url = client.generatePresignedUrl(bucket, song.key(), expiresAt, HttpMethod.GET);
+            tracks.add(new MusicTrack(song.title(), song.artist(), url.toString(), null, 0, true));
+        }
+        return List.copyOf(tracks);
     }
 
     private List<Song> songs() {
@@ -105,6 +158,7 @@ public final class OssMusicProvider implements MusicProvider, AutoCloseable {
             }
             marker = page.isTruncated() ? page.getNextMarker() : null;
         } while (marker != null && !marker.isBlank());
+        songs.sort(Comparator.comparing(Song::key));
         return List.copyOf(songs);
     }
 

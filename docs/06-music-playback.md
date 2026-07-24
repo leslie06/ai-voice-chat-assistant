@@ -157,7 +157,10 @@ QQ 音乐**没有面向第三方的合法播放 API/SDK**，会员权益只在�
 
 > 代码：`index.html` 的 `addMusic()` 与 `ws.onmessage` 的 `case 'music'`。
 
-- 收到 `{type:"music",action:"play",url,...}` → 创建一个独立的 `<audio>` 播放器自动播放；
+- 登录后顶栏常驻显示 `🎵` 入口，打开后是 KTV 式点歌台：左侧歌手分类、右侧歌曲列表，并支持歌名/歌手过滤；
+- 输入框上方常驻迷你播放器，可直接上一首、播放/暂停、下一首及切换顺序/随机，无需打开点歌台；
+- 收到 `{type:"music",action:"play",tracks:[...],index:...}` → 复用常驻 `<audio>` 播放器，从命中的歌曲开始播放；
+- 卡片提供「上一首 / 下一首 / 顺序播放 / 随机播放」，曲目自然结束后按当前模式自动切歌；播放模式保存在浏览器本地；
 - **音乐 ≠ TTS**：助手说话(TTS)走的是 24k PCM 块经 Web Audio 排播队列；音乐是 mp3/m4a 经 `<audio>`。两条音轨独立，互不串扰；
 - 播音乐前先 `stopPlayback()` 停掉 TTS 残留，避免和确认语长时间重叠；
 - 打断/出错时 `stopMusic()` 一并停掉音乐；
@@ -172,7 +175,12 @@ QQ 音乐**没有面向第三方的合法播放 API/SDK**，会员权益只在�
 // 命中并解析到可播放曲目
 { "type":"music", "action":"play",
   "query":"光阴的故事", "title":"光阴的故事", "artist":"罗大佑",
-  "url":"/music/files/...mp3", "cover":null, "duration":0, "full":true }
+  "url":"https://music-ky2.oss-cn-beijing.aliyuncs.com/...?签名",
+  "cover":null, "duration":0, "full":true, "index":3,
+  "tracks":[
+    { "title":"歌曲1", "artist":"歌手1", "url":"https://...", "full":true },
+    { "title":"光阴的故事", "artist":"罗大佑", "url":"https://...", "full":true }
+  ] }
 
 // 没找到
 { "type":"music", "action":"notfound", "query":"某首没有的歌" }

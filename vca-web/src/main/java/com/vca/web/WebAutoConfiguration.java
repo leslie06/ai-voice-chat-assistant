@@ -1,12 +1,14 @@
 package com.vca.web;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.vca.domain.model.MusicPlaylist;
 import com.vca.domain.spi.MusicProvider;
 import com.vca.gateway.GatewayAutoConfiguration;
 import com.vca.gateway.ProviderGateway;
 import com.vca.web.music.ItunesMusicProvider;
 import com.vca.web.music.LocalMusicProvider;
 import com.vca.web.music.LocalMusicRoute;
+import com.vca.web.music.MusicCatalogRoute;
 import com.vca.web.music.OssMusicProvider;
 import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
@@ -242,9 +244,26 @@ public class WebAutoConfiguration {
         LocalMusicProvider local = new LocalMusicProvider(props.getMusicDir());
         ItunesMusicProvider itunes = new ItunesMusicProvider(objectMapper);
         OssMusicProvider oss = ossProvider.getIfAvailable();
-        return query -> local.search(query)
-                .switchIfEmpty(oss == null ? Mono.empty() : oss.search(query))
-                .switchIfEmpty(itunes.search(query));
+        return new MusicProvider() {
+            @Override
+            public Mono<com.vca.domain.model.MusicTrack> search(String query) {
+                return local.search(query)
+                        .switchIfEmpty(oss == null ? Mono.empty() : oss.search(query))
+                        .switchIfEmpty(itunes.search(query));
+            }
+
+            @Override
+            public Mono<MusicPlaylist> playlist(String query) {
+                return local.search(query).map(MusicPlaylist::single)
+                        .switchIfEmpty(oss == null ? Mono.empty() : oss.playlist(query))
+                        .switchIfEmpty(itunes.search(query).map(MusicPlaylist::single));
+            }
+
+            @Override
+            public Mono<java.util.List<com.vca.domain.model.MusicTrack>> catalog() {
+                return oss == null ? Mono.just(java.util.List.of()) : oss.catalog();
+            }
+        };
     }
 
     private static void requireMusicOss(String value, String envName) {
@@ -257,6 +276,15 @@ public class WebAutoConfiguration {
     @Bean
     RouterFunction<ServerResponse> localMusicRoute(WebProperties props) {
         return LocalMusicRoute.create(props.getMusicDir());
+    }
+
+    /** KTV 点歌面板曲库接口；账号启用时复用登录令牌鉴权。 */
+    @Bean
+    RouterFunction<ServerResponse> musicCatalogRoute(
+            MusicProvider musicProvider, WebProperties props,
+            ObjectProvider<com.vca.orchestrator.auth.TokenAuthenticator> authenticator) {
+        return MusicCatalogRoute.create(
+                musicProvider, authenticator.getIfAvailable(), props.getAuthToken());
     }
 
     @Bean
