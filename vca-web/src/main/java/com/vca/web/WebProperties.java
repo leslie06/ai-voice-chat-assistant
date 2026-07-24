@@ -90,6 +90,18 @@ public class WebProperties {
     /** 本地曲库目录: 点歌时先在这里按文件名匹配整首播放, 找不到再回退 iTunes 试听。
      *  默认用户主目录下的 Music 文件夹。 */
     private String musicDir = System.getProperty("user.home") + "/Music";
+    /** OSS 私有曲库开关；启用后本地找不到时从 OSS 检索整首音乐。 */
+    private boolean musicOssEnabled;
+    /** 必须使用浏览器可访问的公网 endpoint，不能使用 -internal 地址。 */
+    private String musicOssEndpoint = "";
+    private String musicOssBucket = "";
+    private String musicOssAccessKeyId = "";
+    private String musicOssAccessKeySecret = "";
+    private String musicOssPrefix = "music";
+    /** 签名播放 URL 有效期，单位分钟。 */
+    private int musicOssUrlMinutes = 120;
+    /** OSS 曲目列表缓存时间，单位秒。 */
+    private int musicOssCatalogCacheSeconds = 300;
 
     /** 高德开放平台 Web 服务 key(查天气技能用)。留空则 get_weather 工具不注册。
      *  申请: https://console.amap.com → 应用管理 → Key(类型选"Web服务")。 */
@@ -279,6 +291,70 @@ public class WebProperties {
 
     public void setMusicDir(String musicDir) {
         this.musicDir = musicDir;
+    }
+
+    public boolean isMusicOssEnabled() {
+        return musicOssEnabled;
+    }
+
+    public void setMusicOssEnabled(boolean musicOssEnabled) {
+        this.musicOssEnabled = musicOssEnabled;
+    }
+
+    public String getMusicOssEndpoint() {
+        return musicOssEndpoint;
+    }
+
+    public void setMusicOssEndpoint(String musicOssEndpoint) {
+        this.musicOssEndpoint = musicOssEndpoint;
+    }
+
+    public String getMusicOssBucket() {
+        return musicOssBucket;
+    }
+
+    public void setMusicOssBucket(String musicOssBucket) {
+        this.musicOssBucket = musicOssBucket;
+    }
+
+    public String getMusicOssAccessKeyId() {
+        return musicOssAccessKeyId;
+    }
+
+    public void setMusicOssAccessKeyId(String musicOssAccessKeyId) {
+        this.musicOssAccessKeyId = musicOssAccessKeyId;
+    }
+
+    public String getMusicOssAccessKeySecret() {
+        return musicOssAccessKeySecret;
+    }
+
+    public void setMusicOssAccessKeySecret(String musicOssAccessKeySecret) {
+        this.musicOssAccessKeySecret = musicOssAccessKeySecret;
+    }
+
+    public String getMusicOssPrefix() {
+        return musicOssPrefix;
+    }
+
+    public void setMusicOssPrefix(String musicOssPrefix) {
+        this.musicOssPrefix = musicOssPrefix;
+    }
+
+    public int getMusicOssUrlMinutes() {
+        return musicOssUrlMinutes;
+    }
+
+    public void setMusicOssUrlMinutes(int musicOssUrlMinutes) {
+        this.musicOssUrlMinutes = musicOssUrlMinutes;
+    }
+
+    public int getMusicOssCatalogCacheSeconds() {
+        return musicOssCatalogCacheSeconds;
+    }
+
+    public void setMusicOssCatalogCacheSeconds(int musicOssCatalogCacheSeconds) {
+        this.musicOssCatalogCacheSeconds = musicOssCatalogCacheSeconds;
     }
 
     public String getAmapKey() {

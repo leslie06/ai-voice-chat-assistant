@@ -7,6 +7,7 @@ import com.vca.gateway.ProviderGateway;
 import com.vca.web.music.ItunesMusicProvider;
 import com.vca.web.music.LocalMusicProvider;
 import com.vca.web.music.LocalMusicRoute;
+import com.vca.web.music.OssMusicProvider;
 import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.metrics.TurnMetrics;
@@ -37,6 +38,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.web.reactive.HandlerMapping;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.ServerResponse;
@@ -45,7 +47,9 @@ import org.springframework.web.reactive.config.WebFluxConfigurer;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.server.support.HandshakeWebSocketService;
 import org.springframework.web.reactive.socket.server.upgrade.ReactorNettyRequestUpgradeStrategy;
+import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.util.Map;
 
 /**
@@ -211,16 +215,42 @@ public class WebAutoConfiguration {
     // 时间/日期不再做成工具: 改为每轮把当前真实时间注入 LLM 上下文(见 ConversationSession#currentTimeContext),
     // 模型据此直接答对、零延迟, 比靠 tool_choice=auto 偶发不调工具更可靠。新增数据型工具仍声明 Skill Bean 即可。
 
+    /** OSS 私有整首曲库；未启用时不创建客户端。 */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnProperty(prefix = "vca.web", name = "music-oss-enabled", havingValue = "true")
+    OssMusicProvider ossMusicProvider(WebProperties props) {
+        requireMusicOss(props.getMusicOssEndpoint(), "VCA_MUSIC_OSS_ENDPOINT");
+        requireMusicOss(props.getMusicOssBucket(), "VCA_MUSIC_OSS_BUCKET");
+        requireMusicOss(props.getMusicOssAccessKeyId(), "VCA_MUSIC_OSS_ACCESS_KEY_ID");
+        requireMusicOss(props.getMusicOssAccessKeySecret(), "VCA_MUSIC_OSS_ACCESS_KEY_SECRET");
+        com.aliyun.oss.OSS client = new com.aliyun.oss.OSSClientBuilder().build(
+                props.getMusicOssEndpoint(), props.getMusicOssAccessKeyId(),
+                props.getMusicOssAccessKeySecret());
+        log.info("OSS 音乐曲库已启用: oss://{}/{}", props.getMusicOssBucket(), props.getMusicOssPrefix());
+        return new OssMusicProvider(client, props.getMusicOssBucket(), props.getMusicOssPrefix(),
+                Duration.ofMinutes(Math.max(1, props.getMusicOssUrlMinutes())),
+                Duration.ofSeconds(Math.max(0, props.getMusicOssCatalogCacheSeconds())));
+    }
+
     /**
-     * 音乐检索: 先查本地曲库(整首播放), 没有再回退 iTunes(30 秒试听)。
-     * 换曲库只需提供别的 MusicProvider Bean 覆盖即可。
+     * 音乐检索: 本地整首 → OSS 私有整首 → iTunes 30 秒试听。
      */
     @Bean
-    @ConditionalOnMissingBean
-    MusicProvider musicProvider(ObjectMapper objectMapper, WebProperties props) {
+    @Primary
+    MusicProvider musicProvider(ObjectMapper objectMapper, WebProperties props,
+                                ObjectProvider<OssMusicProvider> ossProvider) {
         LocalMusicProvider local = new LocalMusicProvider(props.getMusicDir());
         ItunesMusicProvider itunes = new ItunesMusicProvider(objectMapper);
-        return query -> local.search(query).switchIfEmpty(itunes.search(query));
+        OssMusicProvider oss = ossProvider.getIfAvailable();
+        return query -> local.search(query)
+                .switchIfEmpty(oss == null ? Mono.empty() : oss.search(query))
+                .switchIfEmpty(itunes.search(query));
+    }
+
+    private static void requireMusicOss(String value, String envName) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("启用 OSS 音乐曲库时必须配置 " + envName);
+        }
     }
 
     /** 本地曲库文件流服务: 把 {@code /music/files/**} 映射到曲库目录, 支持 Range(可拖动)。 */

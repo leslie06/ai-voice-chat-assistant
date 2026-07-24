@@ -39,3 +39,6 @@ WantedBy=multi-user.target
 # VCA_OSS_ACCESS_KEY_ID=RAM用户AccessKeyId
 # VCA_OSS_ACCESS_KEY_SECRET=RAM用户AccessKeySecret
 # VCA_OSS_PREFIX=recordings
+# VCA_MUSIC_OSS_ENABLED=true
+# VCA_MUSIC_OSS_PREFIX=music
+# VCA_MUSIC_OSS_URL_MINUTES=120

@@ -22,7 +22,6 @@
 		     mybatis-spring 2.1.2 仅适配 Spring 5, 必须覆盖成 4.0.0(其要求 mybatis 3.5.19) -->
 		<mybatis-spring.version>4.0.0</mybatis-spring.version>
 		<mybatis.version>3.5.19</mybatis.version>
-		<aliyun-oss.version>3.18.5</aliyun-oss.version>
 	</properties>
 
 	<dependencies>
@@ -96,7 +95,6 @@
 		<dependency>
 			<groupId>com.aliyun.oss</groupId>
 			<artifactId>aliyun-sdk-oss</artifactId>
-			<version>${aliyun-oss.version}</version>
 		</dependency>
 		<!-- RAG 知识库: 解析上传的 PDF 文本(txt/md 零依赖直接读); bouncycastle 等为可选, 不传递 -->
 		<dependency>

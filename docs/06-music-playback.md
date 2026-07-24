@@ -107,11 +107,14 @@ public record MusicTrack(String title, String artist, String playUrl,
                          String coverUrl, int durationSec, boolean full) {}
 ```
 
-`playUrl` 必须是浏览器 `<audio>` 能直接放的地址（mp3/m4a…）。装配成**本地优先、在线兜底**：
+`playUrl` 必须是浏览器 `<audio>` 能直接放的地址（mp3/m4a…）。装配顺序为
+**本地整首 → OSS 私有整首 → iTunes 试听兜底**：
 
 ```java
 // WebAutoConfiguration
-return query -> local.search(query).switchIfEmpty(itunes.search(query));
+return query -> local.search(query)
+        .switchIfEmpty(oss.search(query))
+        .switchIfEmpty(itunes.search(query));
 ```
 
 ### 2.1 本地曲库 `LocalMusicProvider`（整首）
@@ -127,13 +130,20 @@ RouterFunctions.resources("/music/files/**", new FileSystemResource(musicDir));
 - 文件系统扫描是**阻塞操作**，丢到 `Schedulers.boundedElastic()`，不占事件循环线程；
 - 返回 `full=true`（整首）。合法、自用，不需要任何会员。
 
-### 2.2 在线兜底 `ItunesMusicProvider`（30 秒试听）
+### 2.2 OSS 私有曲库 `OssMusicProvider`（整首）
+
+- 递归列出指定 Bucket 前缀中的音频对象，曲目清单默认缓存 5 分钟；
+- 文件仍按 `歌手 - 歌名.mp3` 解析和匹配；
+- Bucket 保持私有，命中后由服务器生成临时 GET 签名 URL；
+- 浏览器直接从 OSS 播放，音频文件和流量不经过应用服务器。
+
+### 2.3 在线兜底 `ItunesMusicProvider`（30 秒试听）
 
 - 调 iTunes Search API（**合法、免密钥、CORS 友好**），取首条结果的 `previewUrl`；
 - 坑点：iTunes 返回 `Content-Type: text/javascript`，Jackson 解码器不认 → 故 `bodyToMono(String.class)` 取回文本再 `ObjectMapper.readTree` 自行解析；
 - 返回 `full=false`（仅 30 秒预览）。
 
-### 2.3 为什么没有"QQ 音乐整首"
+### 2.4 为什么没有"QQ 音乐整首"
 
 QQ 音乐**没有面向第三方的合法播放 API/SDK**，会员权益只在其官方 App 内生效。因此：
 
@@ -183,6 +193,16 @@ QQ 音乐**没有面向第三方的合法播放 API/SDK**，会员权益只在�
 | 配置 | 默认 | 说明 |
 |------|------|------|
 | `vca.web.music-dir` | `${user.home}/Music` | 本地曲库目录，整首播放从这里按文件名匹配 |
+| `VCA_MUSIC_OSS_ENABLED` | `false` | 启用 OSS 私有整首曲库 |
+| `VCA_MUSIC_OSS_ENDPOINT` | 复用 `VCA_OSS_ENDPOINT` | OSS 公网 endpoint；浏览器播放不可用 `-internal` |
+| `VCA_MUSIC_OSS_BUCKET` | 复用 `VCA_OSS_BUCKET` | 音乐所在 Bucket |
+| `VCA_MUSIC_OSS_ACCESS_KEY_ID/SECRET` | 复用 `VCA_OSS_ACCESS_KEY_*` | RAM 凭据，仅保存在服务器 |
+| `VCA_MUSIC_OSS_PREFIX` | `music` | 音乐对象前缀 |
+| `VCA_MUSIC_OSS_URL_MINUTES` | `120` | 临时播放 URL 有效期（分钟） |
+
+OSS 可保持私有读。后端使用 RAM 凭据列出 `music/` 下的对象，命中歌曲后生成短期 GET
+签名 URL，浏览器直接从 OSS 播放，音频流量不经过应用服务器。RAM 策略至少需要目标前缀的
+`oss:ListObjects` 与 `oss:GetObject` 权限。
 
 **命名建议**：`歌手 - 歌名.mp3`（短横线两边带空格），卡片能正确拆出「歌手 / 歌名」。新加文件无需重启，每次点歌实时扫描。
 

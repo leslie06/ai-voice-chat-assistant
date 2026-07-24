@@ -38,6 +38,21 @@ VCA_OSS_PREFIX=recordings
 `conversation_recording` 表保存 Bucket、Object Key 和录音状态。
 每段录音会生成 `user.wav`、`assistant.wav` 和可直接连续复听的 `conversation.wav`。
 
+如需从 OSS 私有曲库播放整首音乐，把有合法使用权的音频上传到同一 Bucket 的 `music/`
+前缀，并在 `/etc/vca.env` 增加：
+```bash
+VCA_MUSIC_OSS_ENABLED=true
+VCA_MUSIC_OSS_ENDPOINT=https://oss-cn-beijing.aliyuncs.com
+VCA_MUSIC_OSS_BUCKET=你的私有Bucket
+VCA_MUSIC_OSS_ACCESS_KEY_ID=RAM用户AccessKeyId
+VCA_MUSIC_OSS_ACCESS_KEY_SECRET=RAM用户AccessKeySecret
+VCA_MUSIC_OSS_PREFIX=music
+VCA_MUSIC_OSS_URL_MINUTES=120
+```
+音乐 endpoint 必须使用公网地址，不能使用 `-internal`，因为最终是用户手机浏览器直接从 OSS
+播放。Bucket 可保持私有；RAM 用户需有 `oss:ListObjects` 和目标 `music/*` 的 `oss:GetObject`
+权限。文件建议命名为 `歌手 - 歌名.mp3`。
+
 ### B2. Docker（一键，app + Caddy 一起拉起）
 ```bash
 # 改好 Caddyfile 域名(并把 localhost:8080 改成 vca:8080)，建 deploy/.env 填 key：

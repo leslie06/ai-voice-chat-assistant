@@ -67,6 +67,16 @@ vca:
     # 单会话最长存活秒数(防连着不挂烧账单); 同时在线连接上限。0=不限。
     max-session-seconds: ${VCA_MAX_SESSION_SECONDS:3600}
     max-connections: ${VCA_MAX_CONNECTIONS:8}
+    # OSS 私有整首曲库。本地曲库找不到时查 OSS，再找不到才回退 iTunes 30 秒试听。
+    # endpoint 必须是手机浏览器可访问的公网地址，不能使用 oss-*-internal。
+    music-oss-enabled: ${VCA_MUSIC_OSS_ENABLED:false}
+    music-oss-endpoint: ${VCA_MUSIC_OSS_ENDPOINT:${VCA_OSS_ENDPOINT:}}
+    music-oss-bucket: ${VCA_MUSIC_OSS_BUCKET:${VCA_OSS_BUCKET:}}
+    music-oss-access-key-id: ${VCA_MUSIC_OSS_ACCESS_KEY_ID:${VCA_OSS_ACCESS_KEY_ID:}}
+    music-oss-access-key-secret: ${VCA_MUSIC_OSS_ACCESS_KEY_SECRET:${VCA_OSS_ACCESS_KEY_SECRET:}}
+    music-oss-prefix: ${VCA_MUSIC_OSS_PREFIX:music}
+    music-oss-url-minutes: ${VCA_MUSIC_OSS_URL_MINUTES:120}
+    music-oss-catalog-cache-seconds: ${VCA_MUSIC_OSS_CATALOG_CACHE_SECONDS:300}
     # 高德 Web 服务 key: 查天气工具(get_weather)用。留空=不注册该工具。
     # 申请: https://console.amap.com → 应用管理 → Key(类型选"Web服务")。
     amap-key: ${AMAP_API_KEY:}
