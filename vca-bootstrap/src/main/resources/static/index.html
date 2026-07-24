@@ -70,8 +70,6 @@
     #musicPanel .iconbtn{color:#fff;background:rgba(0,0,0,.28);width:34px;height:34px;border-radius:50%;padding:0;}
     .music-now{display:flex;align-items:flex-end;gap:20px;padding:8px 24px 22px;
       background:linear-gradient(180deg,#244235 0%,#1a2e25 70%,#121212 100%);}
-    .music-cover{width:124px;height:124px;border-radius:6px;object-fit:cover;display:block;
-      background:linear-gradient(135deg,#1ed760,#124e2b);box-shadow:0 14px 32px rgba(0,0,0,.42);}
     .music-now-meta{min-width:0;flex:1;padding-bottom:4px;}
     .music-kicker{font-size:11px;font-weight:700;letter-spacing:1.4px;margin-bottom:7px;color:rgba(255,255,255,.68);}
     #musicTitle{font-size:28px;font-weight:800!important;line-height:1.08;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -112,7 +110,6 @@
     #musicPanel>.panel>.field-hint{margin:5px 24px 16px;}
     @media(max-width:560px){
       .music-now{align-items:center;padding:8px 18px 18px;gap:14px;}
-      .music-cover{width:78px;height:78px;}
       #musicTitle{font-size:21px;}
       .music-library{grid-template-columns:108px 1fr;height:300px;padding:0 10px;}
       .music-search,.music-controls,#musicAudioSlot{padding-left:14px;padding-right:14px;}
@@ -171,7 +168,6 @@
       background:#fff;border:1px solid #e7e7e7;border-radius:13px;color:#191919;
       box-shadow:0 5px 18px rgba(0,0,0,.08);}
     .music-mini-track{display:flex;align-items:center;gap:9px;min-width:0;}
-    .music-mini-cover{width:42px;height:42px;flex:none;object-fit:cover;border-radius:5px;background:linear-gradient(135deg,#1ed760,#124e2b);}
     .music-mini-now{flex:1;min-width:0;border:0;background:none;padding:2px 4px;text-align:left;cursor:pointer;color:#191919;}
     .music-mini-title{display:block;font-size:13px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .music-mini-artist{display:block;font-size:11px;color:#777;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -190,7 +186,6 @@
     #musicMiniSeek{width:100%;height:4px;margin:0;accent-color:#191919;cursor:pointer;}
     @media(max-width:520px){
       .music-mini{border-radius:0;padding:7px 10px;grid-template-columns:1fr;gap:3px;}
-      .music-mini-cover{width:36px;height:36px;}
       .music-mini-controls{gap:20px;}
       .music-mini-progress{grid-template-columns:28px minmax(80px,1fr) 28px;}
     }
@@ -283,7 +278,6 @@
   <footer>
     <div class="music-mini authonly" id="musicMini">
       <div class="music-mini-track">
-        <img class="music-mini-cover" id="musicMiniCover" alt="歌曲封面" hidden>
         <button class="music-mini-now" id="musicMiniOpen" title="打开 KTV 点歌台">
           <span class="music-mini-title" id="musicMiniTitle">音乐播放器</span>
           <span class="music-mini-artist" id="musicMiniArtist">点击选择歌曲</span>
@@ -372,7 +366,6 @@
         <button class="iconbtn" id="musicClose" title="关闭">✕</button>
       </div>
       <div class="music-now">
-        <img class="music-cover" id="musicCover" alt="歌曲封面" hidden>
         <div class="music-now-meta">
           <div class="music-kicker">正在播放</div>
           <div id="musicTitle" style="font-weight:600">还没有播放歌曲</div>
@@ -631,14 +624,12 @@ let musicTracks=[], musicIndex=-1, musicHistory=[];
 let musicCatalogTracks=[], musicCatalogLoadedAt=0, musicArtist='';
 let musicMode=localStorage.getItem('vca_music_mode')==='random'?'random':'sequence';
 const musicPanel=document.getElementById('musicPanel');
-const musicCoverEl=document.getElementById('musicCover');
 const musicTitleEl=document.getElementById('musicTitle');
 const musicSubEl=document.getElementById('musicSub');
 const musicModeBtn=document.getElementById('musicMode');
 const musicFullLink=document.getElementById('musicFullLink');
 const musicPreviousBtn=document.getElementById('musicPrevious');
 const musicNextBtn=document.getElementById('musicNext');
-const musicMiniCover=document.getElementById('musicMiniCover');
 const musicMiniTitle=document.getElementById('musicMiniTitle');
 const musicMiniArtist=document.getElementById('musicMiniArtist');
 const musicMiniPrevious=document.getElementById('musicMiniPrevious');
@@ -662,12 +653,6 @@ function unlockMedia(){
 function musicModeText(){ return musicMode==='random'?'🔀 随机播放':'🔁 顺序播放'; }
 function updateMusicMeta(track){
   if(!track) return;
-  if(musicCoverEl){
-    musicCoverEl.hidden=!track.cover;
-    if(track.cover) musicCoverEl.src=track.cover;
-  }
-  musicMiniCover.hidden=!track.cover;
-  if(track.cover) musicMiniCover.src=track.cover;
   if(musicTitleEl) musicTitleEl.textContent=track.title||'未知歌曲';
   if(musicSubEl) musicSubEl.textContent=(track.artist||'未知歌手')+' · '+(track.full?'完整播放':'30秒试听');
   musicMiniTitle.textContent=track.title||'未知歌曲';
