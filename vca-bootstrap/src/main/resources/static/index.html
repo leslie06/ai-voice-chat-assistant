@@ -163,15 +163,13 @@
     .empty{color:var(--sub);text-align:center;margin-top:18vh;font-size:15px;line-height:2;}
     /* 底部输入区 */
     footer{border-top:1px solid var(--line);background:var(--bg);padding:8px 0 12px;position:sticky;bottom:0;}
-    .music-mini{max-width:760px;margin:0 auto 8px;padding:9px 14px;display:grid;
-      grid-template-columns:minmax(150px,1fr) minmax(300px,1.65fr);align-items:center;gap:18px;
-      background:#fff;border:1px solid #e7e7e7;border-radius:13px;color:#191919;
-      box-shadow:0 5px 18px rgba(0,0,0,.08);}
-    .music-mini-track{display:flex;align-items:center;gap:9px;min-width:0;}
+    .music-mini{position:relative;max-width:760px;margin:0 auto 8px;padding:2px 14px 4px;
+      color:#191919;background:transparent;border:0;box-shadow:none;}
+    .music-mini-track{position:absolute;left:14px;top:10px;width:150px;display:flex;align-items:center;min-width:0;}
     .music-mini-now{flex:1;min-width:0;border:0;background:none;padding:2px 4px;text-align:left;cursor:pointer;color:#191919;}
     .music-mini-title{display:block;font-size:13px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
     .music-mini-artist{display:block;font-size:11px;color:#777;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-    .music-mini-player{min-width:0;}
+    .music-mini-player{width:min(100%,440px);min-width:0;margin:0 auto;}
     .music-mini-controls{display:flex;align-items:center;justify-content:center;gap:16px;height:38px;}
     .music-mini-btn{display:grid;place-items:center;flex:none;width:28px;height:28px;border:0;border-radius:50%;
       padding:0;background:transparent;color:#777;cursor:pointer;transition:color .15s ease,transform .15s ease;}
@@ -185,7 +183,9 @@
     .music-mini-time{font-size:10px;color:#777;text-align:center;font-variant-numeric:tabular-nums;}
     #musicMiniSeek{width:100%;height:4px;margin:0;accent-color:#191919;cursor:pointer;}
     @media(max-width:520px){
-      .music-mini{border-radius:0;padding:7px 10px;grid-template-columns:1fr;gap:3px;}
+      .music-mini{padding:4px 10px;}
+      .music-mini-track{position:static;width:auto;margin-bottom:3px;}
+      .music-mini-player{width:100%;}
       .music-mini-controls{gap:20px;}
       .music-mini-progress{grid-template-columns:28px minmax(80px,1fr) 28px;}
     }
