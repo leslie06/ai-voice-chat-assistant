@@ -7,6 +7,7 @@ import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
+import org.springframework.http.MediaType;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -21,7 +22,7 @@ public final class MusicCatalogRoute {
 
     public static RouterFunction<ServerResponse> create(
             MusicProvider provider, TokenAuthenticator authenticator, String sharedToken) {
-        return RouterFunctions.route(GET("/api/music/catalog"), request -> {
+        RouterFunction<ServerResponse> catalog = RouterFunctions.route(GET("/api/music/catalog"), request -> {
             if (!authorized(request, authenticator, sharedToken)) {
                 return ServerResponse.status(401).bodyValue(Map.of("error", "未登录或登录已失效"));
             }
@@ -31,6 +32,19 @@ public final class MusicCatalogRoute {
                     .onErrorResume(e -> ServerResponse.status(500)
                             .bodyValue(Map.of("error", "曲库加载失败")));
         });
+        RouterFunction<ServerResponse> lyrics = RouterFunctions.route(GET("/api/music/lyrics"), request -> {
+            if (!authorized(request, authenticator, sharedToken)) {
+                return ServerResponse.status(401).bodyValue(Map.of("error", "未登录或登录已失效"));
+            }
+            String id = request.queryParam("id").orElse("");
+            return provider.lyrics(id)
+                    .flatMap(text -> ServerResponse.ok()
+                            .contentType(MediaType.parseMediaType("text/plain;charset=UTF-8"))
+                            .bodyValue(text))
+                    .switchIfEmpty(ServerResponse.status(404).bodyValue("暂无歌词"))
+                    .onErrorResume(e -> ServerResponse.status(500).bodyValue("歌词加载失败"));
+        });
+        return catalog.and(lyrics);
     }
 
     private static boolean authorized(
@@ -49,6 +63,7 @@ public final class MusicCatalogRoute {
         value.put("artist", track.artist());
         value.put("url", track.playUrl());
         value.put("cover", track.coverUrl());
+        value.put("lyricsId", track.lyricsId());
         value.put("duration", track.durationSec());
         value.put("full", track.full());
         return value;

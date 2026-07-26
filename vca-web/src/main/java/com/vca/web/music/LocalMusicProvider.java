@@ -100,7 +100,7 @@ public class LocalMusicProvider implements MusicProvider {
             artist = stem.substring(0, sep).trim();
             title = stem.substring(sep + sepLen).trim();
         }
-        return new MusicTrack(title, artist, toUrl(file), null, 0, true);
+        return new MusicTrack(title, artist, toUrl(file), null, null, 0, true);
     }
 
     /** 把文件路径转成 /music/files/<相对路径>, 逐段做 path 编码(支持中文/空格) */

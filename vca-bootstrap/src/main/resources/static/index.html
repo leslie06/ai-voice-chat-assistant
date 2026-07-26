@@ -122,7 +122,19 @@
     .field-hint{font-size:12px;color:var(--sub);margin-top:7px;line-height:1.5;}
     /* 对话区 */
     main{flex:1;overflow-y:auto;padding:20px 0 8px;}
+    main.music-lyrics-mode{padding:0;overflow:hidden;background:#0e1513;}
+    main.music-lyrics-mode>.wrap,main.music-lyrics-mode>.hero{display:none!important;}
     .wrap{max-width:760px;margin:0 auto;padding:0 16px;}
+    .music-lyric-stage{height:100%;min-height:240px;padding:34px clamp(24px,7vw,92px);display:flex;
+      flex-direction:column;justify-content:center;gap:28px;color:#a8afad;overflow:hidden;
+      background:
+        radial-gradient(circle at 78% 18%,rgba(29,185,84,.16),transparent 35%),
+        linear-gradient(135deg,#17231f 0%,#0c1210 58%,#18231f 100%);}
+    .music-lyric-stage[hidden]{display:none;}
+    .music-lyric-current,.music-lyric-next{max-width:1100px;font-weight:650;line-height:1.35;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:.2s ease;}
+    .music-lyric-current{font-size:clamp(25px,3.2vw,43px);color:#25d996;}
+    .music-lyric-next{font-size:clamp(20px,2.5vw,34px);color:#aab0ae;}
     .msg{display:flex;margin:14px 0;gap:10px;}
     .msg.user{justify-content:flex-end;}
     .avatar{width:30px;height:30px;border-radius:7px;flex:none;display:flex;align-items:center;justify-content:center;
@@ -173,6 +185,10 @@
     .music-mini-close{position:absolute;right:14px;top:7px;display:grid;place-items:center;width:28px;height:28px;
       padding:0;border:0;border-radius:50%;background:transparent;color:#888;font-size:20px;line-height:1;cursor:pointer;}
     .music-mini-close:hover{background:#f1f1f1;color:#191919;}
+    .music-mini-lyrics{position:absolute;right:50px;top:8px;width:27px;height:27px;border:1.5px solid #1db954;
+      border-radius:7px;background:#fff;color:#1db954;font-size:14px;font-weight:750;cursor:pointer;}
+    .music-mini-lyrics:hover,.music-mini-lyrics.active{background:#1db954;color:#fff;}
+    .music-mini-lyrics:disabled{border-color:#bbb;color:#aaa;background:#fff;cursor:default;opacity:.65;}
     .music-mini-controls{display:flex;align-items:center;justify-content:center;gap:16px;height:38px;}
     .music-mini-btn{display:grid;place-items:center;flex:none;width:28px;height:28px;border:0;border-radius:50%;
       padding:0;background:transparent;color:#777;cursor:pointer;transition:color .15s ease,transform .15s ease;}
@@ -189,7 +205,7 @@
       .music-mini{padding:4px 10px;}
       .music-mini-track{position:static;width:auto;margin-bottom:3px;}
       .music-mini-player{width:100%;}
-      .music-mini-track{padding-right:34px;}
+      .music-mini-track{padding-right:70px;}
       .music-mini-controls{gap:20px;}
       .music-mini-progress{grid-template-columns:28px minmax(80px,1fr) 28px;}
     }
@@ -211,7 +227,23 @@
       .composer{flex-wrap:wrap;justify-content:center;gap:6px;padding:0 10px;}
       .voicebtn{width:38px;height:38px;font-size:17px;}
       .inputbox{order:2;flex:0 0 100%;width:100%;}
+      .music-lyric-stage{padding:24px 20px;gap:20px;}
+      .music-lyric-current{font-size:25px;white-space:normal;}
+      .music-lyric-next{font-size:20px;white-space:normal;}
     }
+    .lyrics-panel{height:min(760px,calc(100dvh - 32px));max-width:720px!important;padding:0!important;
+      display:flex;flex-direction:column;overflow:hidden;background:#121614!important;color:#fff;}
+    .lyrics-panel .panel-head{padding:18px 22px;margin:0;border-bottom:1px solid rgba(255,255,255,.08);}
+    .lyrics-panel .iconbtn{color:#fff;}
+    .lyrics-full-meta{padding:16px 28px 8px;}
+    .lyrics-full-title{font-size:22px;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .lyrics-full-artist{margin-top:4px;color:#9da5a1;font-size:13px;}
+    .lyrics-full-list{flex:1;overflow-y:auto;padding:20vh 28px 34vh;scroll-behavior:smooth;}
+    .lyrics-full-line{padding:9px 8px;border:0;background:none;color:#818986;font:inherit;font-size:20px;
+      font-weight:620;line-height:1.45;text-align:left;width:100%;cursor:pointer;border-radius:7px;transition:.16s ease;}
+    .lyrics-full-line:hover{color:#d9dddb;background:rgba(255,255,255,.04);}
+    .lyrics-full-line.active{color:#25d996;font-size:24px;}
+    .lyrics-empty{color:#9da5a1;text-align:center;padding-top:12vh;font-size:15px;}
     /* 视觉多模态: 聊天里的图片消息 + 摄像头小窗预览 */
     .bubble img.att{display:block;max-width:220px;max-height:220px;border-radius:10px;}
     .campreview{position:fixed;right:14px;bottom:92px;width:128px;border-radius:10px;z-index:60;
@@ -283,12 +315,16 @@
     <div class="wrap" id="chat">
       <div class="empty" id="empty">👋 你好，我是语音助手<br>点击 🎙 开启免提语音，或直接打字</div>
     </div>
+    <section class="music-lyric-stage" id="musicLyricStage" aria-live="polite" hidden>
+      <div class="music-lyric-current" id="musicLyricCurrent">歌词加载中…</div>
+      <div class="music-lyric-next" id="musicLyricNext"></div>
+    </section>
   </main>
 
   <footer>
     <div class="music-mini authonly" id="musicMini" hidden>
       <div class="music-mini-track">
-        <button class="music-mini-now" id="musicMiniOpen" title="打开 KTV 点歌台">
+        <button class="music-mini-now" id="musicMiniOpen" title="查看全部歌词">
           <span class="music-mini-title" id="musicMiniTitle">音乐播放器</span>
           <span class="music-mini-artist" id="musicMiniArtist">点击选择歌曲</span>
         </button>
@@ -315,6 +351,7 @@
           <span class="music-mini-time" id="musicMiniDuration">0:00</span>
         </div>
       </div>
+      <button class="music-mini-lyrics" id="musicMiniLyrics" title="同步歌词" aria-label="同步歌词" disabled>词</button>
       <button class="music-mini-close" id="musicMiniClose" title="关闭播放器" aria-label="关闭播放器">×</button>
     </div>
     <div class="hint" id="hint"></div>
@@ -406,6 +443,22 @@
         </div>
       </div>
 <!--      <div class="field-hint">歌曲来自已配置的 OSS 曲库；顺序播放按 OSS 文件名排列。</div>-->
+    </div>
+  </div>
+
+  <div class="overlay" id="lyricsPanel" hidden>
+    <div class="panel lyrics-panel">
+      <div class="panel-head">
+        <h2>全部歌词</h2>
+        <button class="iconbtn" id="lyricsClose" title="关闭">✕</button>
+      </div>
+      <div class="lyrics-full-meta">
+        <div class="lyrics-full-title" id="lyricsFullTitle">还没有播放歌曲</div>
+        <div class="lyrics-full-artist" id="lyricsFullArtist"></div>
+      </div>
+      <div class="lyrics-full-list" id="lyricsFullList">
+        <div class="lyrics-empty">暂无歌词</div>
+      </div>
     </div>
   </div>
 
@@ -635,7 +688,10 @@ let musicTracks=[], musicIndex=-1, musicHistory=[];
 let musicCatalogTracks=[], musicCatalogLoadedAt=0, musicArtist='';
 let musicMode=localStorage.getItem('vca_music_mode')==='random'?'random':'sequence';
 let musicPlayAttempt=0, musicPlayReported=0;
+let musicLyrics=[], musicLyricIndex=-2, musicLyricsVisible=false, musicLyricsRequest=0;
+const musicLyricsCache=new Map();
 const musicPanel=document.getElementById('musicPanel');
+const mainEl=document.getElementById('main');
 const musicTitleEl=document.getElementById('musicTitle');
 const musicSubEl=document.getElementById('musicSub');
 const musicModeBtn=document.getElementById('musicMode');
@@ -653,6 +709,14 @@ const musicMiniSequence=document.getElementById('musicMiniSequence');
 const musicMiniSeek=document.getElementById('musicMiniSeek');
 const musicMiniCurrent=document.getElementById('musicMiniCurrent');
 const musicMiniDuration=document.getElementById('musicMiniDuration');
+const musicMiniLyrics=document.getElementById('musicMiniLyrics');
+const musicLyricStage=document.getElementById('musicLyricStage');
+const musicLyricCurrent=document.getElementById('musicLyricCurrent');
+const musicLyricNext=document.getElementById('musicLyricNext');
+const lyricsPanel=document.getElementById('lyricsPanel');
+const lyricsFullTitle=document.getElementById('lyricsFullTitle');
+const lyricsFullArtist=document.getElementById('lyricsFullArtist');
+const lyricsFullList=document.getElementById('lyricsFullList');
 const MUSIC_PLAY_ICON='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.7a1 1 0 0 1 1.53-.85l9.1 6.3a1 1 0 0 1 0 1.7l-9.1 6.3A1 1 0 0 1 8 18.3V5.7Z"/></svg>';
 const MUSIC_PAUSE_ICON='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.25 5A1.25 1.25 0 0 1 8.5 3.75h1A1.25 1.25 0 0 1 10.75 5v14A1.25 1.25 0 0 1 9.5 20.25h-1A1.25 1.25 0 0 1 7.25 19V5Zm6 0a1.25 1.25 0 0 1 1.25-1.25h1A1.25 1.25 0 0 1 16.75 5v14a1.25 1.25 0 0 1-1.25 1.25h-1A1.25 1.25 0 0 1 13.25 19V5Z"/></svg>';
 musicMiniToggle.innerHTML=MUSIC_PLAY_ICON;
@@ -664,6 +728,136 @@ function unlockMedia(){
        if(p&&p.then) p.then(()=>{ try{musicPlayer.pause(); musicPlayer.currentTime=0;}catch(e){} }).catch(()=>{}); }catch(e){}
 }
 function musicModeText(){ return musicMode==='random'?'🔀 随机播放':'🔁 顺序播放'; }
+function parseLrc(source){
+  if(!source) return [];
+  const offsetMatch=source.match(/\[offset:([+-]?\d+)\]/i);
+  const offset=offsetMatch?Number(offsetMatch[1])/1000:0;
+  const result=[];
+  source.replace(/\r/g,'').split('\n').forEach(raw=>{
+    const stamps=[...raw.matchAll(/\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g)];
+    if(!stamps.length) return;
+    const text=raw.replace(/\[[^\]]+\]/g,'').trim()||'♪';
+    stamps.forEach(match=>{
+      const fraction=match[3]||'0';
+      const decimal=Number(fraction)/(fraction.length===1?10:fraction.length===2?100:1000);
+      result.push({time:Math.max(0,Number(match[1])*60+Number(match[2])+decimal+offset),text});
+    });
+  });
+  result.sort((a,b)=>a.time-b.time);
+  return result;
+}
+function closeInlineLyrics(){
+  musicLyricsVisible=false;
+  musicLyricStage.hidden=true;
+  mainEl.classList.remove('music-lyrics-mode');
+  musicMiniLyrics.classList.remove('active');
+}
+function renderFullLyrics(){
+  const track=musicTracks[musicIndex];
+  lyricsFullTitle.textContent=track&&track.title||'还没有播放歌曲';
+  lyricsFullArtist.textContent=track&&track.artist||'';
+  lyricsFullList.innerHTML='';
+  if(!musicLyrics.length){
+    const empty=document.createElement('div');
+    empty.className='lyrics-empty';
+    empty.textContent=track&&track.lyricsId?'歌词加载中…':'暂无歌词';
+    lyricsFullList.appendChild(empty);
+    return;
+  }
+  musicLyrics.forEach((line,index)=>{
+    const button=document.createElement('button');
+    button.type='button';
+    button.className='lyrics-full-line';
+    button.textContent=line.text;
+    button.dataset.index=String(index);
+    button.onclick=()=>{
+      musicPlayer.currentTime=line.time;
+      musicPlayer.play().catch(()=>{});
+      updateLyrics(line.time);
+    };
+    lyricsFullList.appendChild(button);
+  });
+}
+function updateLyrics(time){
+  let low=0,high=musicLyrics.length-1,index=-1;
+  while(low<=high){
+    const middle=(low+high)>>1;
+    if(musicLyrics[middle].time<=time+.08){ index=middle; low=middle+1; }
+    else high=middle-1;
+  }
+  if(index===musicLyricIndex) return;
+  musicLyricIndex=index;
+  const current=index>=0?musicLyrics[index]:null;
+  const next=musicLyrics[index+1]||(!current?musicLyrics[0]:null);
+  musicLyricCurrent.textContent=current?current.text:'♪';
+  musicLyricNext.textContent=next?next.text:'';
+  lyricsFullList.querySelectorAll('.lyrics-full-line.active').forEach(line=>line.classList.remove('active'));
+  const active=lyricsFullList.querySelector('.lyrics-full-line[data-index="'+index+'"]');
+  if(active){
+    active.classList.add('active');
+    if(!lyricsPanel.hidden) active.scrollIntoView({block:'center',behavior:'smooth'});
+  }
+}
+async function fetchTrackLyrics(track){
+  const request=++musicLyricsRequest;
+  musicLyrics=[];
+  musicLyricIndex=-2;
+  musicMiniLyrics.disabled=true;
+  renderFullLyrics();
+  if(!track||!track.lyricsId){
+    closeInlineLyrics();
+    return;
+  }
+  try{
+    let pending=musicLyricsCache.get(track.lyricsId);
+    if(!pending){
+      pending=fetch('/api/music/lyrics?id='+encodeURIComponent(track.lyricsId),{
+        headers:musicCatalogHeaders()
+      }).then(async response=>{
+        if(response.status===401){ onAuthExpired(); throw new Error('登录已失效'); }
+        if(!response.ok) throw new Error('暂无歌词');
+        return parseLrc(await response.text());
+      });
+      musicLyricsCache.set(track.lyricsId,pending);
+    }
+    const lines=await pending;
+    if(request!==musicLyricsRequest) return;
+    musicLyrics=lines;
+    musicMiniLyrics.disabled=!lines.length;
+    renderFullLyrics();
+    musicLyricIndex=-2;
+    updateLyrics(musicPlayer.currentTime||0);
+    if(!lines.length) closeInlineLyrics();
+  }catch(e){
+    if(request!==musicLyricsRequest) return;
+    musicLyricsCache.delete(track.lyricsId);
+    musicLyrics=[];
+    musicMiniLyrics.disabled=true;
+    closeInlineLyrics();
+    renderFullLyrics();
+  }
+}
+function toggleInlineLyrics(){
+  if(musicMiniLyrics.disabled||!musicLyrics.length) return;
+  musicLyricsVisible=!musicLyricsVisible;
+  musicLyricStage.hidden=!musicLyricsVisible;
+  mainEl.classList.toggle('music-lyrics-mode',musicLyricsVisible);
+  musicMiniLyrics.classList.toggle('active',musicLyricsVisible);
+  if(musicLyricsVisible){
+    musicLyricIndex=-2;
+    updateLyrics(musicPlayer.currentTime||0);
+  }
+}
+function openFullLyrics(){
+  const track=musicTracks[musicIndex];
+  lyricsFullTitle.textContent=track&&track.title||'还没有播放歌曲';
+  lyricsFullArtist.textContent=track&&track.artist||'';
+  renderFullLyrics();
+  lyricsPanel.hidden=false;
+  musicLyricIndex=-2;
+  updateLyrics(musicPlayer.currentTime||0);
+}
+function closeFullLyrics(){ lyricsPanel.hidden=true; }
 function updateMusicMeta(track){
   if(!track) return;
   if(musicTitleEl) musicTitleEl.textContent=track.title||'未知歌曲';
@@ -692,6 +886,7 @@ function playMusicAt(index, remember){
   musicIndex=index;
   const track=musicTracks[musicIndex];
   updateMusicMeta(track);
+  fetchTrackLyrics(track);
   musicMini.hidden=false;
   musicPlayAttempt++;
   musicPlayer.src=track.url;
@@ -746,6 +941,7 @@ function updateMusicProgress(){
   musicMiniDuration.textContent=musicTime(duration);
   musicMiniSeek.value=Number.isFinite(duration)&&duration>0
     ? String(musicPlayer.currentTime/duration*100) : '0';
+  updateLyrics(musicPlayer.currentTime||0);
 }
 musicPlayer.addEventListener('timeupdate',updateMusicProgress);
 musicPlayer.addEventListener('durationchange',updateMusicProgress);
@@ -765,6 +961,8 @@ function closeMusicPanel(){ musicPanel.hidden=true; }
 function closeMusicMini(){
   musicPlayer.pause();
   musicMini.hidden=true;
+  closeInlineLyrics();
+  closeFullLyrics();
 }
 function updateMusicModeButtons(){
   musicModeBtn.textContent=musicModeText();
@@ -862,8 +1060,11 @@ function toggleMusicMode(){
   updateMusicModeButtons();
 }
 musicModeBtn.onclick=toggleMusicMode;
-document.getElementById('musicMiniOpen').onclick=openMusicPanel;
+document.getElementById('musicMiniOpen').onclick=openFullLyrics;
 document.getElementById('musicMiniClose').onclick=closeMusicMini;
+musicMiniLyrics.onclick=toggleInlineLyrics;
+document.getElementById('lyricsClose').onclick=closeFullLyrics;
+lyricsPanel.addEventListener('click',e=>{ if(e.target===lyricsPanel) closeFullLyrics(); });
 musicMiniPrevious.onclick=previousMusic;
 musicMiniToggle.onclick=toggleMusic;
 musicMiniNext.onclick=nextMusic;
@@ -879,7 +1080,8 @@ function addMusic(t){
   dropEmpty();
   pushHist({role:'music', data:{title:t.title, artist:t.artist, query:t.query}});
   musicTracks=Array.isArray(t.tracks)&&t.tracks.length?t.tracks:[{
-    title:t.title, artist:t.artist, url:t.url, cover:t.cover, duration:t.duration, full:t.full
+    title:t.title, artist:t.artist, url:t.url, cover:t.cover, lyricsId:t.lyricsId,
+    duration:t.duration, full:t.full
   }];
   if(musicTracks.length>1){
     musicCatalogTracks=musicTracks.slice();

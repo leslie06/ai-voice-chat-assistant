@@ -35,4 +35,11 @@ public interface MusicProvider {
     default Mono<List<MusicTrack>> catalog() {
         return Mono.just(List.of());
     }
+
+    /**
+     * 按曲目携带的歌词标识读取 LRC。默认音源没有歌词。
+     */
+    default Mono<String> lyrics(String lyricsId) {
+        return Mono.empty();
+    }
 }

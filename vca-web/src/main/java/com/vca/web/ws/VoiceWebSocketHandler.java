@@ -279,6 +279,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         msg.put("artist", track.artist());
         msg.put("url", track.playUrl());
         msg.put("cover", track.coverUrl());
+        msg.put("lyricsId", track.lyricsId());
         msg.put("duration", track.durationSec());
         msg.put("full", track.full());
         msg.put("index", playlist.currentIndex());
@@ -289,6 +290,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             value.put("artist", item.artist());
             value.put("url", item.playUrl());
             value.put("cover", item.coverUrl());
+            value.put("lyricsId", item.lyricsId());
             value.put("duration", item.durationSec());
             value.put("full", item.full());
             tracks.add(value);

@@ -35,4 +35,17 @@ class OssMusicProviderTest {
 
         assertEquals("晴天", hit.title());
     }
+
+    @Test
+    void matchesLyricsOnlyWhenDirectoryAndFileStemAreEqual() {
+        List<OssMusicProvider.Song> songs = List.of(
+                OssMusicProvider.songOf("周杰伦 - 晴天.mp3", 10),
+                OssMusicProvider.songOf("华语/周杰伦 - 晴天.mp3", 10));
+
+        List<OssMusicProvider.Song> matched = OssMusicProvider.attachLyrics(
+                songs, java.util.Set.of("周杰伦 - 晴天.lrc"));
+
+        assertEquals("周杰伦 - 晴天.lrc", matched.get(0).lyricsKey());
+        assertNull(matched.get(1).lyricsKey());
+    }
 }

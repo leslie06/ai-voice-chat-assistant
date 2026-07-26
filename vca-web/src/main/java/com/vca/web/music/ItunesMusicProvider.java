@@ -75,6 +75,7 @@ public class ItunesMusicProvider implements MusicProvider {
                 t.path("artistName").asText(""),
                 url,
                 t.path("artworkUrl100").asText(null),
+                null,
                 (int) (t.path("trackTimeMillis").asLong(0) / 1000),
                 false));   // iTunes 只是 30 秒试听
     }

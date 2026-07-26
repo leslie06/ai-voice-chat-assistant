@@ -104,7 +104,8 @@ MVP 选关键词：快、稳、好维护。
 
 ```java
 public record MusicTrack(String title, String artist, String playUrl,
-                         String coverUrl, int durationSec, boolean full) {}
+                         String coverUrl, String lyricsId,
+                         int durationSec, boolean full) {}
 ```
 
 `playUrl` 必须是浏览器 `<audio>` 能直接放的地址（mp3/m4a…）。装配顺序为
@@ -143,6 +144,15 @@ RouterFunctions.resources("/music/files/**", new FileSystemResource(musicDir));
 - 坑点：iTunes 返回 `Content-Type: text/javascript`，Jackson 解码器不认 → 故 `bodyToMono(String.class)` 取回文本再 `ObjectMapper.readTree` 自行解析；
 - 返回 `full=false`（仅 30 秒预览）。
 
+### 2.4 同名 LRC 歌词
+
+- OSS 中的歌词必须与音频位于同一目录，并且除扩展名外文件名完全相同，例如
+  `周杰伦 - 晴天.mp3` 与 `周杰伦 - 晴天.lrc`；
+- OSS 曲库扫描时会自动关联 `.lrc`，歌词内容由登录鉴权后的
+  `/api/music/lyrics` 代理读取，私有 Bucket 不需要额外开放歌词文件；
+- 前端点击播放器的「词」进入同步歌词视图，点击歌名打开全部歌词；在全部歌词中点击任意一行可跳到对应播放时间；
+- LRC 请使用 UTF-8 编码，支持标准时间标签、同一行多个时间标签和 `[offset:毫秒]`。
+
 ### 2.4 为什么没有"QQ 音乐整首"
 
 QQ 音乐**没有面向第三方的合法播放 API/SDK**，会员权益只在其官方 App 内生效。因此：
@@ -159,6 +169,7 @@ QQ 音乐**没有面向第三方的合法播放 API/SDK**，会员权益只在�
 
 - 登录后顶栏常驻显示 `🎵` 入口，打开后是 KTV 式点歌台：左侧歌手分类、右侧歌曲列表，并支持歌名/歌手过滤；
 - 输入框上方常驻迷你播放器，可直接上一首、播放/暂停、下一首及切换顺序/随机，无需打开点歌台；
+- 播放器右侧「词」用于显示/关闭同步歌词；点击当前歌名打开可滚动的全部歌词；
 - 收到 `{type:"music",action:"play",tracks:[...],index:...}` → 复用常驻 `<audio>` 播放器，从命中的歌曲开始播放；
 - 卡片提供「上一首 / 下一首 / 顺序播放 / 随机播放」，曲目自然结束后按当前模式自动切歌；播放模式保存在浏览器本地；
 - **音乐 ≠ TTS**：助手说话(TTS)走的是 24k PCM 块经 Web Audio 排播队列；音乐是 mp3/m4a 经 `<audio>`。两条音轨独立，互不串扰；
@@ -176,10 +187,12 @@ QQ 音乐**没有面向第三方的合法播放 API/SDK**，会员权益只在�
 { "type":"music", "action":"play",
   "query":"光阴的故事", "title":"光阴的故事", "artist":"罗大佑",
   "url":"https://music-ky2.oss-cn-beijing.aliyuncs.com/...?签名",
-  "cover":null, "duration":0, "full":true, "index":3,
+  "cover":null, "lyricsId":"罗大佑 - 光阴的故事.lrc",
+  "duration":0, "full":true, "index":3,
   "tracks":[
-    { "title":"歌曲1", "artist":"歌手1", "url":"https://...", "full":true },
-    { "title":"光阴的故事", "artist":"罗大佑", "url":"https://...", "full":true }
+    { "title":"歌曲1", "artist":"歌手1", "url":"https://...", "lyricsId":null, "full":true },
+    { "title":"光阴的故事", "artist":"罗大佑", "url":"https://...",
+      "lyricsId":"罗大佑 - 光阴的故事.lrc", "full":true }
   ] }
 
 // 没找到
@@ -212,7 +225,8 @@ OSS 可保持私有读。后端使用 RAM 凭据列出 `music/` 下的对象，�
 签名 URL，浏览器直接从 OSS 播放，音频流量不经过应用服务器。RAM 策略至少需要目标前缀的
 `oss:ListObjects` 与 `oss:GetObject` 权限。
 
-**命名建议**：`歌手 - 歌名.mp3`（短横线两边带空格），卡片能正确拆出「歌手 / 歌名」。新加文件无需重启，每次点歌实时扫描。
+**命名建议**：`歌手 - 歌名.mp3`（短横线两边带空格），卡片能正确拆出「歌手 / 歌名」。
+歌词使用同目录、同名的 `.lrc`。曲库清单默认缓存 5 分钟；上传新文件后等待缓存刷新，或重启服务立即刷新。
 
 > ⚠️ 安全：`/music/files/**` 会把曲库目录通过 HTTP 暴露（已有路径穿越防护）。本机自用无碍，公网部署时注意别开放整目录。
 

@@ -7,6 +7,7 @@ package com.vca.domain.model;
  * @param artist      歌手
  * @param playUrl     可直接播放的音频地址(浏览器 {@code <audio>} 能放, 如 m4a/mp3)
  * @param coverUrl    封面图地址(可为 null)
+ * @param lyricsId    同步歌词标识(可为 null；前端据此按需读取，避免曲库接口携带全部歌词)
  * @param durationSec 时长(秒, 未知为 0)
  * @param full        是否整首(本地曲库为 true; 在线试听片段为 false)
  */
@@ -15,6 +16,7 @@ public record MusicTrack(
         String artist,
         String playUrl,
         String coverUrl,
+        String lyricsId,
         int durationSec,
         boolean full
 ) {

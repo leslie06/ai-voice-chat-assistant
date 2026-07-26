@@ -14,12 +14,16 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -95,7 +99,7 @@ public final class OssMusicProvider implements MusicProvider, AutoCloseable {
         }
         Date expiresAt = new Date(System.currentTimeMillis() + urlLifetime.toMillis());
         URL url = client.generatePresignedUrl(bucket, hit.key(), expiresAt, HttpMethod.GET);
-        return new MusicTrack(hit.title(), hit.artist(), url.toString(), null, 0, true);
+        return new MusicTrack(hit.title(), hit.artist(), url.toString(), null, hit.lyricsKey(), 0, true);
     }
 
     private MusicPlaylist findPlaylist(String query) {
@@ -118,9 +122,40 @@ public final class OssMusicProvider implements MusicProvider, AutoCloseable {
         List<MusicTrack> tracks = new ArrayList<>(songs.size());
         for (Song song : songs) {
             URL url = client.generatePresignedUrl(bucket, song.key(), expiresAt, HttpMethod.GET);
-            tracks.add(new MusicTrack(song.title(), song.artist(), url.toString(), null, 0, true));
+            tracks.add(new MusicTrack(
+                    song.title(), song.artist(), url.toString(), null, song.lyricsKey(), 0, true));
         }
         return List.copyOf(tracks);
+    }
+
+    @Override
+    public Mono<String> lyrics(String lyricsId) {
+        if (lyricsId == null || lyricsId.isBlank()) {
+            return Mono.empty();
+        }
+        return Mono.fromCallable(() -> readLyrics(lyricsId))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(value -> value == null ? Mono.empty() : Mono.just(value))
+                .onErrorResume(e -> {
+                    log.warn("OSS 歌词读取失败: id={} ({})", lyricsId, e.toString());
+                    return Mono.empty();
+                });
+    }
+
+    private String readLyrics(String lyricsId) throws Exception {
+        boolean known = songs().stream().anyMatch(song -> lyricsId.equals(song.lyricsKey()));
+        if (!known) {
+            return null;
+        }
+        try (com.aliyun.oss.model.OSSObject object = client.getObject(bucket, lyricsId);
+             java.io.InputStream input = object.getObjectContent()) {
+            byte[] bytes = input.readNBytes(512 * 1024 + 1);
+            if (bytes.length > 512 * 1024) {
+                throw new IllegalArgumentException("LRC 文件超过 512KB");
+            }
+            String text = new String(bytes, StandardCharsets.UTF_8);
+            return text.startsWith("\uFEFF") ? text.substring(1) : text;
+        }
     }
 
     private List<Song> songs() {
@@ -143,6 +178,7 @@ public final class OssMusicProvider implements MusicProvider, AutoCloseable {
 
     private List<Song> loadCatalog() {
         List<Song> songs = new ArrayList<>();
+        Set<String> lyricsKeys = new HashSet<>();
         String marker = null;
         do {
             ListObjectsRequest request = new ListObjectsRequest(bucket)
@@ -151,6 +187,10 @@ public final class OssMusicProvider implements MusicProvider, AutoCloseable {
                     .withMaxKeys(1000);
             ObjectListing page = client.listObjects(request);
             for (OSSObjectSummary object : page.getObjectSummaries()) {
+                if (isLyrics(object.getKey(), object.getSize())) {
+                    lyricsKeys.add(object.getKey());
+                    continue;
+                }
                 Song song = songOf(object.getKey(), object.getSize());
                 if (song != null) {
                     songs.add(song);
@@ -158,8 +198,33 @@ public final class OssMusicProvider implements MusicProvider, AutoCloseable {
             }
             marker = page.isTruncated() ? page.getNextMarker() : null;
         } while (marker != null && !marker.isBlank());
+        songs = attachLyrics(songs, lyricsKeys);
         songs.sort(Comparator.comparing(Song::key));
         return List.copyOf(songs);
+    }
+
+    static List<Song> attachLyrics(List<Song> songs, Set<String> lyricsKeys) {
+        Map<String, String> byStem = new HashMap<>();
+        for (String key : lyricsKeys) {
+            byStem.put(objectStem(key), key);
+        }
+        return songs.stream()
+                .map(song -> new Song(song.key(), song.fileStem(), song.title(), song.artist(),
+                        byStem.get(objectStem(song.key()))))
+                .toList();
+    }
+
+    private static boolean isLyrics(String key, long size) {
+        if (key == null || key.endsWith("/") || size <= 0) {
+            return false;
+        }
+        int dot = key.lastIndexOf('.');
+        return dot > key.lastIndexOf('/') && "lrc".equalsIgnoreCase(key.substring(dot + 1));
+    }
+
+    private static String objectStem(String key) {
+        int dot = key == null ? -1 : key.lastIndexOf('.');
+        return dot > key.lastIndexOf('/') ? key.substring(0, dot) : key;
     }
 
     static Song bestSong(List<Song> songs, String query) {
@@ -198,7 +263,7 @@ public final class OssMusicProvider implements MusicProvider, AutoCloseable {
             artist = stem.substring(0, separator).strip();
             title = stem.substring(separator + separatorLength).strip();
         }
-        return new Song(key, stem, title, artist);
+        return new Song(key, stem, title, artist, null);
     }
 
     private static int score(String stem, String query) {
@@ -234,7 +299,7 @@ public final class OssMusicProvider implements MusicProvider, AutoCloseable {
         client.shutdown();
     }
 
-    record Song(String key, String fileStem, String title, String artist) {
+    record Song(String key, String fileStem, String title, String artist, String lyricsKey) {
     }
 
     private record Catalog(List<Song> songs, long expiresAt) {

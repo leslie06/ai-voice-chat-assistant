@@ -263,6 +263,11 @@ public class WebAutoConfiguration {
             public Mono<java.util.List<com.vca.domain.model.MusicTrack>> catalog() {
                 return oss == null ? Mono.just(java.util.List.of()) : oss.catalog();
             }
+
+            @Override
+            public Mono<String> lyrics(String lyricsId) {
+                return oss == null ? Mono.empty() : oss.lyrics(lyricsId);
+            }
         };
     }
 
