@@ -1,6 +1,7 @@
 package com.vca.store;
 
 import com.vca.orchestrator.auth.TokenAuthenticator;
+import com.vca.domain.spi.MusicUploadStore;
 import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.recorder.ConversationRecorder;
@@ -31,9 +32,11 @@ import com.vca.store.mapper.KnowledgeChunkMapper;
 import com.vca.store.mapper.KnowledgeDocMapper;
 import com.vca.store.mapper.UserMemoryMapper;
 import com.vca.store.mapper.UserMusicPlayMapper;
+import com.vca.store.mapper.UserMusicUploadMapper;
 import com.vca.store.memory.MyBatisMemoryStore;
 import com.vca.store.music.MusicPlayRoutes;
 import com.vca.store.music.MusicPlayService;
+import com.vca.store.music.MyBatisMusicUploadStore;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.apache.ibatis.session.SqlSessionFactory;
@@ -102,6 +105,15 @@ public class StoreAutoConfiguration {
         addColumnIfMissing(ds, "conversation_recording", "conversation_file",
                 "VARCHAR(512) NULL COMMENT '按回合合并的完整对话 OSS Object Key'");
         addColumnIfMissing(ds, "conversation_recording", "conversation_bytes", "BIGINT NOT NULL DEFAULT 0");
+        addColumnIfMissing(ds, "user_music_upload", "status",
+                "VARCHAR(16) NOT NULL DEFAULT 'pending' COMMENT 'pending/reviewing/approved/rejected/review_error'");
+        addColumnIfMissing(ds, "user_music_upload", "text_labels", "VARCHAR(512) NULL");
+        addColumnIfMissing(ds, "user_music_upload", "text_reason", "VARCHAR(1024) NULL");
+        addColumnIfMissing(ds, "user_music_upload", "audio_task_id", "VARCHAR(128) NULL");
+        addColumnIfMissing(ds, "user_music_upload", "audio_risk_level", "VARCHAR(16) NULL");
+        addColumnIfMissing(ds, "user_music_upload", "moderation_labels", "VARCHAR(1024) NULL");
+        addColumnIfMissing(ds, "user_music_upload", "moderation_reason", "VARCHAR(2048) NULL");
+        addColumnIfMissing(ds, "user_music_upload", "reviewed_at", "DATETIME NULL");
     }
 
     private void addColumnIfMissing(HikariDataSource ds, String table, String column, String ddl) {
@@ -230,6 +242,18 @@ public class StoreAutoConfiguration {
     @ConditionalOnMissingBean
     MusicPlayService musicPlayService(UserMusicPlayMapper userMusicPlayMapper) {
         return new MusicPlayService(userMusicPlayMapper);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    UserMusicUploadMapper userMusicUploadMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, UserMusicUploadMapper.class);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(MusicUploadStore.class)
+    MusicUploadStore musicUploadStore(UserMusicUploadMapper mapper) {
+        return new MyBatisMusicUploadStore(mapper);
     }
 
     @Bean

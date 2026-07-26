@@ -71,6 +71,32 @@ CREATE TABLE IF NOT EXISTS user_music_play (
     KEY idx_music_popular (play_count, last_played_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户听歌次数统计';
 
+-- 用户上传曲库：先审核，审核通过后向所有登录用户公开。
+CREATE TABLE IF NOT EXISTS user_music_upload (
+    id                VARCHAR(36)  NOT NULL,
+    user_id           BIGINT       NOT NULL,
+    title             VARCHAR(255) NOT NULL,
+    artist            VARCHAR(255) NOT NULL,
+    original_filename VARCHAR(255) NOT NULL,
+    audio_object_key  VARCHAR(512) NOT NULL,
+    lyrics_object_key VARCHAR(512),
+    audio_bytes       BIGINT       NOT NULL,
+    lyrics_bytes      BIGINT       NOT NULL DEFAULT 0,
+    rights_confirmed  TINYINT(1)   NOT NULL DEFAULT 1,
+    status            VARCHAR(16)  NOT NULL DEFAULT 'pending',
+    text_labels       VARCHAR(512),
+    text_reason       VARCHAR(1024),
+    audio_task_id     VARCHAR(128),
+    audio_risk_level  VARCHAR(16),
+    moderation_labels VARCHAR(1024),
+    moderation_reason VARCHAR(2048),
+    reviewed_at       DATETIME,
+    created_at        DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    KEY idx_music_upload_user (user_id, created_at),
+    KEY idx_music_upload_review (status, created_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户上传歌曲';
+
 -- 一次 WebSocket 语音通话的原始双轨 + 完整对话录音。音频直接上传 OSS。
 CREATE TABLE IF NOT EXISTS conversation_recording (
     id                    VARCHAR(36)  NOT NULL,

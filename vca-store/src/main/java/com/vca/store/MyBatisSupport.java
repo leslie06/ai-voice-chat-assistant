@@ -12,6 +12,7 @@ import com.vca.store.mapper.KnowledgeChunkMapper;
 import com.vca.store.mapper.KnowledgeDocMapper;
 import com.vca.store.mapper.UserMemoryMapper;
 import com.vca.store.mapper.UserMusicPlayMapper;
+import com.vca.store.mapper.UserMusicUploadMapper;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.mybatis.spring.SqlSessionTemplate;
 
@@ -47,6 +48,7 @@ final class MyBatisSupport {
             factory.getConfiguration().addMapper(KnowledgeDocMapper.class);
             factory.getConfiguration().addMapper(KnowledgeChunkMapper.class);
             factory.getConfiguration().addMapper(UserMusicPlayMapper.class);
+            factory.getConfiguration().addMapper(UserMusicUploadMapper.class);
             return factory;
         } catch (Exception e) {
             throw new IllegalStateException("构建对话存档 SqlSessionFactory 失败", e);

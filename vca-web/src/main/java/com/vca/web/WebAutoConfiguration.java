@@ -3,12 +3,16 @@ package com.vca.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.vca.domain.model.MusicPlaylist;
 import com.vca.domain.spi.MusicProvider;
+import com.vca.domain.spi.MusicUploadStore;
 import com.vca.gateway.GatewayAutoConfiguration;
 import com.vca.gateway.ProviderGateway;
 import com.vca.web.music.ItunesMusicProvider;
 import com.vca.web.music.LocalMusicProvider;
 import com.vca.web.music.LocalMusicRoute;
 import com.vca.web.music.MusicCatalogRoute;
+import com.vca.web.music.MusicUploadRoute;
+import com.vca.web.music.AliyunMusicModerationClient;
+import com.vca.web.music.MusicModerationCoordinator;
 import com.vca.web.music.OssMusicProvider;
 import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
@@ -220,7 +224,8 @@ public class WebAutoConfiguration {
     /** OSS 私有整首曲库；未启用时不创建客户端。 */
     @Bean(destroyMethod = "close")
     @ConditionalOnProperty(prefix = "vca.web", name = "music-oss-enabled", havingValue = "true")
-    OssMusicProvider ossMusicProvider(WebProperties props) {
+    OssMusicProvider ossMusicProvider(
+            WebProperties props, ObjectProvider<MusicUploadStore> uploads) {
         requireMusicOss(props.getMusicOssEndpoint(), "VCA_MUSIC_OSS_ENDPOINT");
         requireMusicOss(props.getMusicOssBucket(), "VCA_MUSIC_OSS_BUCKET");
         requireMusicOss(props.getMusicOssAccessKeyId(), "VCA_MUSIC_OSS_ACCESS_KEY_ID");
@@ -231,7 +236,28 @@ public class WebAutoConfiguration {
         log.info("OSS 音乐曲库已启用: oss://{}/{}", props.getMusicOssBucket(), props.getMusicOssPrefix());
         return new OssMusicProvider(client, props.getMusicOssBucket(), props.getMusicOssPrefix(),
                 Duration.ofMinutes(Math.max(1, props.getMusicOssUrlMinutes())),
-                Duration.ofSeconds(Math.max(0, props.getMusicOssCatalogCacheSeconds())));
+                Duration.ofSeconds(Math.max(0, props.getMusicOssCatalogCacheSeconds())),
+                uploads.getIfAvailable());
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "vca.web", name = "music-moderation-enabled", havingValue = "true")
+    AliyunMusicModerationClient aliyunMusicModerationClient(
+            WebProperties props, ObjectMapper objectMapper) throws Exception {
+        requireMusicOss(props.getMusicModerationAccessKeyId(),
+                "VCA_MUSIC_MODERATION_ACCESS_KEY_ID");
+        requireMusicOss(props.getMusicModerationAccessKeySecret(),
+                "VCA_MUSIC_MODERATION_ACCESS_KEY_SECRET");
+        log.info("用户歌曲内容审核已启用: endpoint={}, region={}",
+                props.getMusicModerationEndpoint(), props.getMusicModerationRegion());
+        return new AliyunMusicModerationClient(props, objectMapper, props.getMusicOssBucket());
+    }
+
+    @Bean(destroyMethod = "close")
+    @ConditionalOnBean({MusicUploadStore.class, AliyunMusicModerationClient.class})
+    MusicModerationCoordinator musicModerationCoordinator(
+            MusicUploadStore uploads, AliyunMusicModerationClient moderation) {
+        return new MusicModerationCoordinator(uploads, moderation);
     }
 
     /**
@@ -291,6 +317,19 @@ public class WebAutoConfiguration {
             ObjectProvider<com.vca.orchestrator.auth.TokenAuthenticator> authenticator) {
         return MusicCatalogRoute.create(
                 musicProvider, authenticator.getIfAvailable(), props.getAuthToken());
+    }
+
+    /** 登录用户把 MP3/LRC 上传到自己的 OSS 私有曲库。 */
+    @Bean
+    @ConditionalOnProperty(prefix = "vca.web", name = "music-oss-enabled", havingValue = "true")
+    RouterFunction<ServerResponse> musicUploadRoute(
+            OssMusicProvider ossMusicProvider,
+            ObjectProvider<MusicUploadStore> uploads,
+            ObjectProvider<com.vca.orchestrator.auth.TokenAuthenticator> authenticator,
+            ObjectProvider<MusicModerationCoordinator> moderation) {
+        return MusicUploadRoute.create(
+                ossMusicProvider, uploads.getIfAvailable(), authenticator.getIfAvailable(),
+                moderation.getIfAvailable());
     }
 
     @Bean

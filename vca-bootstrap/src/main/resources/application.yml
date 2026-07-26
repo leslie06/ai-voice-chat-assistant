@@ -77,6 +77,14 @@ vca:
     music-oss-prefix: ${VCA_MUSIC_OSS_PREFIX:music}
     music-oss-url-minutes: ${VCA_MUSIC_OSS_URL_MINUTES:120}
     music-oss-catalog-cache-seconds: ${VCA_MUSIC_OSS_CATALOG_CACHE_SECONDS:300}
+    # 用户上传歌曲必须先做歌名/歌手文本审核和整段音频审核，通过后才公开。
+    music-moderation-enabled: ${VCA_MUSIC_MODERATION_ENABLED:false}
+    music-moderation-endpoint: ${VCA_MUSIC_MODERATION_ENDPOINT:green-cip.cn-beijing.aliyuncs.com}
+    music-moderation-region: ${VCA_MUSIC_MODERATION_REGION:cn-beijing}
+    music-moderation-access-key-id: ${VCA_MUSIC_MODERATION_ACCESS_KEY_ID:}
+    music-moderation-access-key-secret: ${VCA_MUSIC_MODERATION_ACCESS_KEY_SECRET:}
+    music-moderation-text-service: ${VCA_MUSIC_MODERATION_TEXT_SERVICE:nickname_detection}
+    music-moderation-audio-service: ${VCA_MUSIC_MODERATION_AUDIO_SERVICE:audio_media_detection}
     # 高德 Web 服务 key: 查天气工具(get_weather)用。留空=不注册该工具。
     # 申请: https://console.amap.com → 应用管理 → Key(类型选"Web服务")。
     amap-key: ${AMAP_API_KEY:}

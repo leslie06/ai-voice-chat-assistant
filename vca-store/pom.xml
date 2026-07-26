@@ -25,6 +25,10 @@
 	</properties>
 
 	<dependencies>
+		<dependency>
+			<groupId>com.vca</groupId>
+			<artifactId>vca-domain</artifactId>
+		</dependency>
 		<!-- 实现 orchestrator 的 ConversationRecorder 端口 -->
 		<dependency>
 			<groupId>com.vca</groupId>

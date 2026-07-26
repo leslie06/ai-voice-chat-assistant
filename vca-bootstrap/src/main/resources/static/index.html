@@ -88,6 +88,27 @@
     #musicQuery::placeholder{color:#919191;}
     #musicQuery:focus{box-shadow:0 0 0 2px #fff;}
     #musicPanel #musicSearch{background:#1ed760;color:#000;border-radius:22px;padding:8px 20px;font-weight:700;}
+    .music-upload-tools{display:flex;align-items:center;gap:10px;padding:9px 24px 0;}
+    #musicUploadToggle{border:1px solid #484848;background:#242424;color:#fff;border-radius:18px;
+      padding:7px 13px;font:inherit;font-size:12px;font-weight:700;cursor:pointer;}
+    #musicUploadToggle:hover{border-color:#fff;}
+    .music-upload-form{margin:9px 24px 0;padding:13px;border-radius:10px;background:#1c1c1c;}
+    .music-upload-form[hidden]{display:none;}
+    .music-upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;}
+    .music-upload-form label{display:block;color:#b3b3b3;font-size:11.5px;margin-bottom:5px;}
+    .music-upload-form input[type="text"],.music-upload-form input[type="file"]{box-sizing:border-box;width:100%;
+      border:1px solid #404040;border-radius:8px;background:#252525;color:#fff;padding:8px;font:inherit;font-size:12px;}
+    .music-upload-files{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px;}
+    .music-rights{display:flex!important;align-items:flex-start;gap:7px;margin:10px 0!important;line-height:1.45;}
+    .music-rights input{margin-top:2px;}
+    .music-upload-submit{border:0;border-radius:18px;padding:8px 15px;background:#1ed760;color:#000;
+      font:inherit;font-size:12px;font-weight:800;cursor:pointer;}
+    .music-upload-submit:disabled{opacity:.5;cursor:default;}
+    #musicUploadStatus{display:inline-block;margin-left:9px;color:#b3b3b3;font-size:11.5px;}
+    .music-upload-reviews{margin-top:10px;display:grid;gap:6px;}
+    .music-upload-review{display:flex;justify-content:space-between;gap:10px;color:#b3b3b3;font-size:11.5px;}
+    .music-upload-review strong{color:#fff;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .music-upload-review .approved{color:#1ed760}.music-upload-review .rejected{color:#ff6b6b}
     .music-library{display:grid;grid-template-columns:190px 1fr;gap:8px;margin-top:12px;height:330px;padding:0 16px 4px;}
     .music-artists,.music-songs{border:0;border-radius:9px;overflow-y:auto;background:#181818;}
     .music-artists{padding:8px;}
@@ -113,6 +134,9 @@
       #musicTitle{font-size:21px;}
       .music-library{grid-template-columns:108px 1fr;height:300px;padding:0 10px;}
       .music-search,.music-controls,#musicAudioSlot{padding-left:14px;padding-right:14px;}
+      .music-upload-tools{padding-left:14px;padding-right:14px;}
+      .music-upload-form{margin-left:14px;margin-right:14px;}
+      .music-upload-grid,.music-upload-files{grid-template-columns:1fr;}
       .music-song{padding:8px 7px;gap:5px;}
       .music-song-index{display:none;}
       .music-song button{opacity:1;width:28px;height:28px;}
@@ -432,6 +456,39 @@
         <input class="modelsel" id="musicQuery" placeholder="搜索歌名或歌手，例如：周杰伦">
         <button class="cta-solid" id="musicSearch" style="flex:none">搜索</button>
       </div>
+      <div class="music-upload-tools">
+        <button type="button" id="musicUploadToggle">＋ 上传歌曲</button>
+        <span class="field-hint">MP3 必传，LRC 可选；安全审核通过后所有用户可听</span>
+      </div>
+      <form class="music-upload-form" id="musicUploadForm" hidden>
+        <div class="music-upload-grid">
+          <div>
+            <label for="musicUploadTitle">歌名（不填则使用文件名）</label>
+            <input type="text" id="musicUploadTitle" name="title" maxlength="255">
+          </div>
+          <div>
+            <label for="musicUploadArtist">歌手</label>
+            <input type="text" id="musicUploadArtist" name="artist" maxlength="255" placeholder="未知歌手">
+          </div>
+        </div>
+        <div class="music-upload-files">
+          <div>
+            <label for="musicUploadAudio">MP3 文件（最大 25MB）</label>
+            <input type="file" id="musicUploadAudio" name="audio" accept=".mp3,audio/mpeg" required>
+          </div>
+          <div>
+            <label for="musicUploadLyrics">LRC 歌词（可选，最大 512KB）</label>
+            <input type="file" id="musicUploadLyrics" name="lyrics" accept=".lrc,text/plain">
+          </div>
+        </div>
+        <label class="music-rights">
+          <input type="checkbox" id="musicUploadRights" required>
+          <span>我确认拥有该歌曲和歌词的版权或合法使用授权，不上传侵权内容。</span>
+        </label>
+        <button class="music-upload-submit" id="musicUploadSubmit" type="submit">上传并提交审核</button>
+        <span id="musicUploadStatus"></span>
+        <div class="music-upload-reviews" id="musicUploadReviews"></div>
+      </form>
       <div class="music-library">
         <div class="music-artists" id="musicArtists">
           <div class="field-hint" style="padding:12px">正在加载歌手…</div>
@@ -827,7 +884,8 @@ async function fetchTrackLyrics(track){
   try{
     let pending=musicLyricsCache.get(track.lyricsId);
     if(!pending){
-      pending=fetch('/api/music/lyrics?id='+encodeURIComponent(track.lyricsId),{
+      const lyricsEndpoint=track.uploaded?'/api/music/uploads/lyrics':'/api/music/lyrics';
+      pending=fetch(lyricsEndpoint+'?id='+encodeURIComponent(track.lyricsId),{
         headers:musicCatalogHeaders()
       }).then(async response=>{
         if(response.status===401){ onAuthExpired(); throw new Error('登录已失效'); }
@@ -1005,11 +1063,22 @@ async function loadMusicCatalog(force){
   document.getElementById('musicArtists').innerHTML='<div class="field-hint" style="padding:12px">正在加载歌手…</div>';
   document.getElementById('musicSongs').innerHTML='<div class="field-hint" style="padding:12px">正在加载歌曲…</div>';
   try{
-    const response=await fetch('/api/music/catalog',{headers:musicCatalogHeaders()});
+    const [response,uploadResponse]=await Promise.all([
+      fetch('/api/music/catalog',{headers:musicCatalogHeaders()}),
+      fetch('/api/music/uploads',{headers:musicCatalogHeaders()})
+    ]);
     if(response.status===401){ onAuthExpired(); return; }
     const data=await response.json();
     if(!response.ok) throw new Error(data.error||'曲库加载失败');
-    musicCatalogTracks=Array.isArray(data.tracks)?data.tracks:[];
+    let mine=[];
+    if(uploadResponse.status===401){ onAuthExpired(); return; }
+    if(uploadResponse.ok){
+      const uploadData=await uploadResponse.json();
+      mine=Array.isArray(uploadData.mine)?uploadData.mine:[];
+    }
+    const publicTracks=Array.isArray(data.tracks)?data.tracks:[];
+    musicCatalogTracks=publicTracks;
+    renderUploadReviews(mine);
     musicCatalogLoadedAt=Date.now();
     musicArtist='';
     renderMusicLibrary();
@@ -1019,6 +1088,54 @@ async function loadMusicCatalog(force){
     document.getElementById('musicSongs').innerHTML='<div class="field-hint" style="padding:12px">'+esc(message)+'</div>';
   }
 }
+const musicUploadForm=document.getElementById('musicUploadForm');
+const musicUploadStatus=document.getElementById('musicUploadStatus');
+const musicUploadSubmit=document.getElementById('musicUploadSubmit');
+function renderUploadReviews(items){
+  const box=document.getElementById('musicUploadReviews');
+  if(!box) return;
+  const names={pending:'等待审核',reviewing:'音频审核中',approved:'已公开',rejected:'未通过'};
+  box.innerHTML=(items||[]).slice(0,6).map(item=>{
+    const status=item.status||'pending';
+    return '<div class="music-upload-review"><strong>'+esc((item.title||'未命名')+' · '+(item.artist||'未知歌手'))+
+      '</strong><span class="'+esc(status)+'">'+esc(names[status]||'等待审核')+'</span></div>';
+  }).join('');
+}
+document.getElementById('musicUploadToggle').onclick=()=>{
+  musicUploadForm.hidden=!musicUploadForm.hidden;
+  musicUploadStatus.textContent='';
+};
+musicUploadForm.addEventListener('submit',async event=>{
+  event.preventDefault();
+  const audio=document.getElementById('musicUploadAudio').files[0];
+  const lyrics=document.getElementById('musicUploadLyrics').files[0];
+  if(!audio){ musicUploadStatus.textContent='请选择 MP3 文件'; return; }
+  if(audio.size>25*1024*1024){ musicUploadStatus.textContent='MP3 不能超过 25MB'; return; }
+  if(lyrics&&lyrics.size>512*1024){ musicUploadStatus.textContent='LRC 不能超过 512KB'; return; }
+  if(!document.getElementById('musicUploadRights').checked){
+    musicUploadStatus.textContent='请先确认版权或使用授权'; return;
+  }
+  const form=new FormData(musicUploadForm);
+  form.set('rightsConfirmed','true');
+  musicUploadSubmit.disabled=true;
+  musicUploadStatus.textContent='正在上传，请不要关闭页面…';
+  try{
+    const response=await fetch('/api/music/uploads',{
+      method:'POST',headers:musicCatalogHeaders(),body:form
+    });
+    if(response.status===401){ onAuthExpired(); return; }
+    const data=await response.json();
+    if(!response.ok) throw new Error(data.error||'上传失败');
+    musicUploadStatus.textContent='上传成功，正在安全审核；通过后将自动公开';
+    musicUploadForm.reset();
+    musicCatalogLoadedAt=0;
+    await loadMusicCatalog(true);
+  }catch(error){
+    musicUploadStatus.textContent=error&&error.message||'上传失败';
+  }finally{
+    musicUploadSubmit.disabled=false;
+  }
+});
 function renderMusicLibrary(){
   const artistsBox=document.getElementById('musicArtists');
   const songsBox=document.getElementById('musicSongs');
@@ -1048,7 +1165,8 @@ function renderMusicLibrary(){
     number.textContent=current?'♪':String(index+1);
     const info=document.createElement('div'); info.className='music-song-info';
     const title=document.createElement('div'); title.className='music-song-title'; title.textContent=track.title||'未知歌曲';
-    const singer=document.createElement('div'); singer.className='music-song-artist'; singer.textContent=artist;
+    const singer=document.createElement('div'); singer.className='music-song-artist';
+    singer.textContent=artist+(track.uploaded?' · 我的上传':'');
     const play=document.createElement('button'); play.type='button';
     play.textContent=playing?'Ⅱ':'▶';
     play.title=playing?'暂停':(current?'继续播放':'播放');

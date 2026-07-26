@@ -102,6 +102,14 @@ public class WebProperties {
     private int musicOssUrlMinutes = 120;
     /** OSS 曲目列表缓存时间，单位秒。 */
     private int musicOssCatalogCacheSeconds = 300;
+    /** 用户上传歌曲内容审核；关闭或配置不完整时仍可上传，但绝不会公开。 */
+    private boolean musicModerationEnabled;
+    private String musicModerationEndpoint = "green-cip.cn-beijing.aliyuncs.com";
+    private String musicModerationRegion = "cn-beijing";
+    private String musicModerationAccessKeyId = "";
+    private String musicModerationAccessKeySecret = "";
+    private String musicModerationTextService = "nickname_detection";
+    private String musicModerationAudioService = "audio_media_detection";
 
     /** 高德开放平台 Web 服务 key(查天气技能用)。留空则 get_weather 工具不注册。
      *  申请: https://console.amap.com → 应用管理 → Key(类型选"Web服务")。 */
@@ -356,6 +364,21 @@ public class WebProperties {
     public void setMusicOssCatalogCacheSeconds(int musicOssCatalogCacheSeconds) {
         this.musicOssCatalogCacheSeconds = musicOssCatalogCacheSeconds;
     }
+
+    public boolean isMusicModerationEnabled() { return musicModerationEnabled; }
+    public void setMusicModerationEnabled(boolean value) { this.musicModerationEnabled = value; }
+    public String getMusicModerationEndpoint() { return musicModerationEndpoint; }
+    public void setMusicModerationEndpoint(String value) { this.musicModerationEndpoint = value; }
+    public String getMusicModerationRegion() { return musicModerationRegion; }
+    public void setMusicModerationRegion(String value) { this.musicModerationRegion = value; }
+    public String getMusicModerationAccessKeyId() { return musicModerationAccessKeyId; }
+    public void setMusicModerationAccessKeyId(String value) { this.musicModerationAccessKeyId = value; }
+    public String getMusicModerationAccessKeySecret() { return musicModerationAccessKeySecret; }
+    public void setMusicModerationAccessKeySecret(String value) { this.musicModerationAccessKeySecret = value; }
+    public String getMusicModerationTextService() { return musicModerationTextService; }
+    public void setMusicModerationTextService(String value) { this.musicModerationTextService = value; }
+    public String getMusicModerationAudioService() { return musicModerationAudioService; }
+    public void setMusicModerationAudioService(String value) { this.musicModerationAudioService = value; }
 
     public String getAmapKey() {
         return amapKey;
