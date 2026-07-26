@@ -96,6 +96,8 @@ public class StoreAutoConfiguration {
         addColumnIfMissing(ds, "conversation_turn", "agent_steps", "INT NULL");
         addColumnIfMissing(ds, "conversation_turn", "agent_replans", "INT NULL");
         addColumnIfMissing(ds, "app_user", "register_ip", "VARCHAR(45) NULL COMMENT '注册 IP'");
+        addColumnIfMissing(ds, "app_user", "last_login_at",
+                "DATETIME NULL COMMENT '最近一次成功登录时间'");
         addColumnIfMissing(ds, "conversation_recording", "oss_bucket", "VARCHAR(128) NULL COMMENT 'OSS Bucket'");
         addColumnIfMissing(ds, "conversation_recording", "conversation_file",
                 "VARCHAR(512) NULL COMMENT '按回合合并的完整对话 OSS Object Key'");

@@ -72,6 +72,8 @@ public class UserService {
                 || !PasswordUtil.verify(password, user.getPassSalt(), user.getPassHash())) {
             return AuthResult.fail("用户名或密码错误");
         }
+        user.setLastLoginAt(LocalDateTime.now());
+        users.updateById(user);
         return AuthResult.ok(tokens.issue(user.getId()), displayName(user.getUsername()), user.getId());
     }
 

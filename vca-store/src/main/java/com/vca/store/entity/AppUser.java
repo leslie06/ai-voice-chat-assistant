@@ -17,6 +17,7 @@ public class AppUser {
     private String registerIp;
     private String passSalt;
     private String passHash;
+    private LocalDateTime lastLoginAt;
     private LocalDateTime createdAt;
 
     public Long getId() {
@@ -65,6 +66,14 @@ public class AppUser {
 
     public void setPassHash(String passHash) {
         this.passHash = passHash;
+    }
+
+    public LocalDateTime getLastLoginAt() {
+        return lastLoginAt;
+    }
+
+    public void setLastLoginAt(LocalDateTime lastLoginAt) {
+        this.lastLoginAt = lastLoginAt;
     }
 
     public LocalDateTime getCreatedAt() {
