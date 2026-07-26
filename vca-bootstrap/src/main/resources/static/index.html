@@ -889,7 +889,6 @@ function addMusic(t){
   musicHistory=[];
   const current=musicTracks[musicIndex];
   addMsg('bot','🎵 正在播放《'+(current.title||t.query||'')+'》'+(current.artist?(' — '+current.artist):''));
-  openMusicPanel();
   renderMusicLibrary();
   // 播音乐前先停掉 TTS 残留, 避免和确认语重叠太久
   stopPlayback();
