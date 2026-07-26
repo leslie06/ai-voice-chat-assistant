@@ -24,6 +24,8 @@ class LocalMusicProviderTest {
     void setUp() throws IOException {
         // 造一个小曲库(含子目录), 文件内容无所谓
         touch(dir.resolve("周杰伦-晴天.mp3"));
+        Files.writeString(dir.resolve("周杰伦-晴天.lrc"),
+                "[00:01.00]故事的小黄花\n[00:05.00]从出生那年就飘着");
         touch(dir.resolve("周杰伦-七里香.mp3"));
         Path sub = Files.createDirectories(dir.resolve("网易云音乐"));
         touch(sub.resolve("光阴的故事-罗大佑.mp3"));
@@ -44,8 +46,18 @@ class LocalMusicProviderTest {
                     assertTrue(t.full(), "本地曲库应是整首");
                     assertTrue(t.playUrl().startsWith("/music/files/"), t.playUrl());
                     assertTrue(t.playUrl().endsWith(".mp3"));
+                    assertEquals("local:周杰伦-晴天.lrc", t.lyricsId());
                 })
                 .verifyComplete();
+    }
+
+    @Test
+    void readsSidecarLyricsAndRejectsPathTraversal() {
+        StepVerifier.create(provider.search("晴天").flatMap(track -> provider.lyrics(track.lyricsId())))
+                .assertNext(text -> assertTrue(text.contains("故事的小黄花")))
+                .verifyComplete();
+
+        StepVerifier.create(provider.lyrics("local:../secret.lrc")).verifyComplete();
     }
 
     @Test

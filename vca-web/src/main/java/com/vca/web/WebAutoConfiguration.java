@@ -266,7 +266,8 @@ public class WebAutoConfiguration {
 
             @Override
             public Mono<String> lyrics(String lyricsId) {
-                return oss == null ? Mono.empty() : oss.lyrics(lyricsId);
+                return local.lyrics(lyricsId)
+                        .switchIfEmpty(oss == null ? Mono.empty() : oss.lyrics(lyricsId));
             }
         };
     }

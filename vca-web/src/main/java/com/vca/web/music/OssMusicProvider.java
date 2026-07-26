@@ -198,7 +198,8 @@ public final class OssMusicProvider implements MusicProvider, AutoCloseable {
             }
             marker = page.isTruncated() ? page.getNextMarker() : null;
         } while (marker != null && !marker.isBlank());
-        songs = attachLyrics(songs, lyricsKeys);
+        // Stream.toList() 返回不可修改列表；复制为可变列表后再按 OSS key 排序。
+        songs = new ArrayList<>(attachLyrics(songs, lyricsKeys));
         songs.sort(Comparator.comparing(Song::key));
         return List.copyOf(songs);
     }

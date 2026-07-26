@@ -18,6 +18,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Locale;
 import java.util.Set;
+import java.util.stream.Stream;
 
 /**
  * 本地曲库音源: 在配置目录里按文件名匹配歌曲, <b>整首</b>播放。
@@ -31,13 +32,15 @@ public class LocalMusicProvider implements MusicProvider {
     private static final Logger log = LoggerFactory.getLogger(LocalMusicProvider.class);
 
     private static final Set<String> AUDIO_EXT = Set.of("mp3", "m4a", "flac", "wav", "aac", "ogg", "opus");
+    private static final String LYRICS_PREFIX = "local:";
+    private static final long MAX_LYRICS_BYTES = 512 * 1024;
     /** URL 前缀, 与文件服务路由一致 */
     static final String URL_PREFIX = "/music/files/";
 
     private final Path root;
 
     public LocalMusicProvider(String dir) {
-        this.root = Paths.get(dir);
+        this.root = Paths.get(dir).toAbsolutePath().normalize();
     }
 
     @Override
@@ -49,6 +52,20 @@ public class LocalMusicProvider implements MusicProvider {
         return Mono.fromCallable(() -> findBest(query))
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMap(hit -> hit == null ? Mono.empty() : Mono.just(toTrack(hit)));
+    }
+
+    @Override
+    public Mono<String> lyrics(String lyricsId) {
+        if (lyricsId == null || !lyricsId.startsWith(LYRICS_PREFIX)) {
+            return Mono.empty();
+        }
+        return Mono.fromCallable(() -> readLyrics(lyricsId.substring(LYRICS_PREFIX.length())))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(text -> text == null ? Mono.empty() : Mono.just(text))
+                .onErrorResume(e -> {
+                    log.warn("读取本地歌词失败: id={} ({})", lyricsId, e.toString());
+                    return Mono.empty();
+                });
     }
 
     /** 遍历曲库, 返回得分最高且达标的文件; 无则 null。遇不可读子目录跳过, 不中断。 */
@@ -100,7 +117,52 @@ public class LocalMusicProvider implements MusicProvider {
             artist = stem.substring(0, sep).trim();
             title = stem.substring(sep + sepLen).trim();
         }
-        return new MusicTrack(title, artist, toUrl(file), null, null, 0, true);
+        return new MusicTrack(title, artist, toUrl(file), null, lyricsId(file), 0, true);
+    }
+
+    /** 查找音频旁边同名的 LRC，并生成只能由后端解析的本地歌词标识。 */
+    private String lyricsId(Path audio) {
+        Path lyrics = findSidecarLyrics(audio);
+        if (lyrics == null) {
+            return null;
+        }
+        String relative = root.relativize(lyrics.toAbsolutePath().normalize()).toString().replace('\\', '/');
+        return LYRICS_PREFIX + relative;
+    }
+
+    private Path findSidecarLyrics(Path audio) {
+        Path parent = audio.getParent();
+        if (parent == null) {
+            return null;
+        }
+        String expectedStem = stem(audio);
+        try (Stream<Path> files = Files.list(parent)) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> isLyrics(path) && stem(path).equals(expectedStem))
+                    .findFirst()
+                    .orElse(null);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /** 只允许读取曲库根目录内、由服务端生成标识的 LRC，防止路径穿越。 */
+    private String readLyrics(String relative) throws IOException {
+        if (relative == null || relative.isBlank()) {
+            return null;
+        }
+        Path file = root.resolve(relative).normalize();
+        if (!file.startsWith(root) || !isLyrics(file) || !Files.isRegularFile(file)) {
+            return null;
+        }
+        try (java.io.InputStream input = Files.newInputStream(file)) {
+            byte[] bytes = input.readNBytes((int) MAX_LYRICS_BYTES + 1);
+            if (bytes.length > MAX_LYRICS_BYTES) {
+                throw new IllegalArgumentException("LRC 文件超过 512KB");
+            }
+            String text = new String(bytes, StandardCharsets.UTF_8);
+            return text.startsWith("\uFEFF") ? text.substring(1) : text;
+        }
     }
 
     /** 把文件路径转成 /music/files/<相对路径>, 逐段做 path 编码(支持中文/空格) */
@@ -156,6 +218,12 @@ public class LocalMusicProvider implements MusicProvider {
         String name = file.getFileName().toString();
         int dot = name.lastIndexOf('.');
         return dot > 0 && AUDIO_EXT.contains(name.substring(dot + 1).toLowerCase(Locale.ROOT));
+    }
+
+    private static boolean isLyrics(Path file) {
+        String name = file.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        return dot > 0 && "lrc".equalsIgnoreCase(name.substring(dot + 1));
     }
 
     /** 遍历过程中的当前最佳 */
