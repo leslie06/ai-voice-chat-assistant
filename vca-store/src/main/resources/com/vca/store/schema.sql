@@ -53,6 +53,23 @@ CREATE TABLE IF NOT EXISTS chat_message (
     KEY idx_msg_conv (conversation_id, id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '会话消息';
 
+-- 用户听歌统计: 每个用户每首歌一行；每次真正开始一轮播放时累计 play_count。
+CREATE TABLE IF NOT EXISTS user_music_play (
+    id                BIGINT       NOT NULL AUTO_INCREMENT,
+    user_id           BIGINT       NOT NULL,
+    song_key          CHAR(64)     NOT NULL COMMENT '歌名+歌手归一化后的 SHA-256',
+    title             VARCHAR(255) NOT NULL,
+    artist            VARCHAR(255) NOT NULL,
+    duration_sec      INT          NOT NULL DEFAULT 0,
+    play_count        BIGINT       NOT NULL DEFAULT 1,
+    first_played_at   DATETIME     NOT NULL,
+    last_played_at    DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_music_user_song (user_id, song_key),
+    KEY idx_music_user_last (user_id, last_played_at),
+    KEY idx_music_popular (play_count, last_played_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户听歌次数统计';
+
 -- 一次 WebSocket 语音通话的原始双轨 + 完整对话录音。音频直接上传 OSS。
 CREATE TABLE IF NOT EXISTS conversation_recording (
     id                    VARCHAR(36)  NOT NULL,

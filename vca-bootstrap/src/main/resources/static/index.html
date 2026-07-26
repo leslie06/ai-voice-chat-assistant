@@ -634,6 +634,7 @@ let musicUnlocked=false;
 let musicTracks=[], musicIndex=-1, musicHistory=[];
 let musicCatalogTracks=[], musicCatalogLoadedAt=0, musicArtist='';
 let musicMode=localStorage.getItem('vca_music_mode')==='random'?'random':'sequence';
+let musicPlayAttempt=0, musicPlayReported=0;
 const musicPanel=document.getElementById('musicPanel');
 const musicTitleEl=document.getElementById('musicTitle');
 const musicSubEl=document.getElementById('musicSub');
@@ -692,6 +693,7 @@ function playMusicAt(index, remember){
   const track=musicTracks[musicIndex];
   updateMusicMeta(track);
   musicMini.hidden=false;
+  musicPlayAttempt++;
   musicPlayer.src=track.url;
   musicPlayer.play().catch(()=>{}); // 浏览器若拦截自动播放，用户仍可点原生播放按钮
   if(musicCatalogTracks.length) renderMusicLibrary();
@@ -717,6 +719,17 @@ musicPlayer.addEventListener('play',()=>{
   if(musicIndex>=0) musicMini.hidden=false;
   musicMiniToggle.innerHTML=MUSIC_PAUSE_ICON;
   if(musicCatalogTracks.length) renderMusicLibrary();
+});
+musicPlayer.addEventListener('playing',()=>{
+  if(musicIndex<0 || musicPlayReported===musicPlayAttempt || !authed()) return;
+  const track=musicTracks[musicIndex];
+  if(!track) return;
+  musicPlayReported=musicPlayAttempt;
+  api('POST','/api/music/plays',{
+    title:track.title||'未知歌曲',
+    artist:track.artist||'未知歌手',
+    duration:Number(track.duration)||0
+  });
 });
 musicPlayer.addEventListener('pause',()=>{
   musicMiniToggle.innerHTML=MUSIC_PLAY_ICON;

@@ -30,7 +30,10 @@ import com.vca.store.mapper.EvaluationMapper;
 import com.vca.store.mapper.KnowledgeChunkMapper;
 import com.vca.store.mapper.KnowledgeDocMapper;
 import com.vca.store.mapper.UserMemoryMapper;
+import com.vca.store.mapper.UserMusicPlayMapper;
 import com.vca.store.memory.MyBatisMemoryStore;
+import com.vca.store.music.MusicPlayRoutes;
+import com.vca.store.music.MusicPlayService;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.apache.ibatis.session.SqlSessionFactory;
@@ -217,6 +220,18 @@ public class StoreAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    UserMusicPlayMapper userMusicPlayMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, UserMusicPlayMapper.class);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    MusicPlayService musicPlayService(UserMusicPlayMapper userMusicPlayMapper) {
+        return new MusicPlayService(userMusicPlayMapper);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     TokenUtil tokenUtil(StoreProperties props) {
         return new TokenUtil(props.getTokenSecret());
     }
@@ -336,5 +351,13 @@ public class StoreAutoConfiguration {
             UserService userService, ConversationService conversationService,
             PasswordResetService passwordResetService) {
         return AccountRoutes.create(userService, conversationService, passwordResetService);
+    }
+
+    /** 用户听歌统计 REST：实际开始播放后累计该用户、该歌曲的次数。 */
+    @Bean
+    org.springframework.web.reactive.function.server.RouterFunction<
+            org.springframework.web.reactive.function.server.ServerResponse> musicPlayRoutes(
+            UserService userService, MusicPlayService musicPlayService) {
+        return MusicPlayRoutes.create(userService, musicPlayService);
     }
 }
