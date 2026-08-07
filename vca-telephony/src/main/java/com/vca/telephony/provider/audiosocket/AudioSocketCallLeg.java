@@ -12,13 +12,15 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 一条 AudioSocket 连接 = 一路通话。
  *
  * <p><b>信令与媒体在这里是同一条 TCP</b>: Asterisk 的 dialplan 是 {@code Answer()} 之后才执行
- * {@code AudioSocket()}, 所以"连上来"本身就等于"已接通" —— 收到首帧即 emit
+ * {@code AudioSocket()}, 所以"连上来"本身就等于"已接通" —— {@link #pump()} 一开始就 emit
  * {@link CallEvent.Type#ANSWERED}, 不需要另外的信令通道。
  *
  * <p><b>两个必须知道的边界</b>:
@@ -29,8 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *       需要时由上层把 {@link CallEvent.Type#DTMF} 喂进 {@link #injectEvent}。</li>
  * </ol>
  *
- * <p>上行与事件都是 <b>unicast</b> sink: 一路通话只有一个消费者({@code CallSession}), 且订阅前到达的
- * 数据会被缓冲, 因此"先建 leg、再接 CallSession、最后开泵"这个顺序不会丢帧。
+ * <p>上行与事件都是 <b>unicast</b> sink: 一路通话只有一个消费者({@code CallSession})。
  */
 public final class AudioSocketCallLeg implements CallLeg {
 
@@ -38,6 +39,7 @@ public final class AudioSocketCallLeg implements CallLeg {
 
     private final Socket socket;
     private final AudioSocketConfig cfg;
+    private final DataInputStream in;
     private final Sinks.Many<byte[]> inbound = Sinks.many().unicast().onBackpressureBuffer();
     private final Sinks.Many<CallEvent> events = Sinks.many().unicast().onBackpressureBuffer();
     private final AtomicBoolean answered = new AtomicBoolean();
@@ -47,10 +49,13 @@ public final class AudioSocketCallLeg implements CallLeg {
 
     private volatile String callId;
     private volatile String peerNumber;
+    /** {@link #primeUuid} 误读到的非 UUID 帧, 留给 {@link #pump()} 先处理, 不能丢 */
+    private AudioSocketCodec.Frame pending;
 
-    public AudioSocketCallLeg(Socket socket, AudioSocketConfig cfg) {
+    public AudioSocketCallLeg(Socket socket, AudioSocketConfig cfg) throws IOException {
         this.socket = socket;
         this.cfg = cfg;
+        this.in = new DataInputStream(socket.getInputStream());
         this.callId = "as-" + socket.getPort() + "-" + System.nanoTime();
     }
 
@@ -118,8 +123,9 @@ public final class AudioSocketCallLeg implements CallLeg {
 
     // ---- 供上层补充 socket 上拿不到的信息 ----
 
-    /** 由 originate 侧按 UUID 关联上被叫号码 */
-    public void setPeerNumber(String number) {
+    /** 由 originate 侧按 UUID 关联上被叫号码 —— AudioSocket 自己拿不到号码 */
+    @Override
+    public void attachPeerNumber(String number) {
         this.peerNumber = number;
     }
 
@@ -128,16 +134,71 @@ public final class AudioSocketCallLeg implements CallLeg {
         events.tryEmitNext(event);
     }
 
+    // ---- 建连握手 ----
+
+    /**
+     * 建连后先把首帧 UUID 读出来。
+     *
+     * <p><b>为什么必须在建会话之前做</b>: {@code callId} 会被当成 sessionId 落库, 也是跟 originate 侧
+     * 对账被叫号码的唯一键。等读泵跑起来再更新就晚了 —— 那时会话已经用占位 id 建好了。
+     *
+     * <p>超时或首帧不是 UUID 都不算错: 留着占位 id 继续跑, 误读的帧交回给 {@link #pump()} 处理。
+     */
+    void primeUuid(int timeoutMs) {
+        if (timeoutMs <= 0) {
+            return;
+        }
+        try {
+            socket.setSoTimeout(timeoutMs);
+            AudioSocketCodec.Frame frame = AudioSocketCodec.read(in);
+            if (frame == null) {
+                finish("peer-closed");
+                return;
+            }
+            if (frame.type() == AudioSocketCodec.TYPE_UUID) {
+                String uuid = AudioSocketCodec.parseUuid(frame.payload());
+                if (!uuid.isEmpty()) {
+                    this.callId = uuid;
+                }
+            } else {
+                pending = frame;   // 该构建不发 UUID 帧, 这是正经数据, 不能吞
+            }
+        } catch (SocketTimeoutException e) {
+            log.debug("等 UUID 帧超时({}ms), 沿用占位 callId={}", timeoutMs, callId);
+        } catch (IOException e) {
+            log.warn("[{}] 握手读失败: {}", callId, e.toString());
+            finish("read-failed");
+        } finally {
+            resetTimeout();
+        }
+    }
+
+    private void resetTimeout() {
+        try {
+            socket.setSoTimeout(0);   // 之后是阻塞读, 不设超时
+        } catch (SocketException e) {
+            log.debug("[{}] 复位 soTimeout 失败: {}", callId, e.toString());
+        }
+    }
+
     // ---- 读泵 ----
 
     /**
      * 阻塞读取直到断连。由 {@link AudioSocketServer} 在独立线程上调用,
-     * <b>且必须在上层已经订阅之后再调</b>(见类注释里的顺序说明)。
+     * <b>且必须在上层已经订阅之后再调</b> —— 这样 ANSWERED 与首个音频帧都落在订阅之后。
      */
     void pump() {
-        try (DataInputStream in = new DataInputStream(socket.getInputStream())) {
+        if (finished.get()) {
+            return;   // 握手阶段已经断了
+        }
+        markAnswered();   // 连接建立 = 已接通(dialplan 里 Answer() 先于 AudioSocket())
+        try (DataInputStream stream = in) {
+            if (pending != null && !handle(pending)) {
+                return;
+            }
+            pending = null;
             AudioSocketCodec.Frame frame;
-            while ((frame = AudioSocketCodec.read(in)) != null) {
+            while ((frame = AudioSocketCodec.read(stream)) != null) {
                 if (!handle(frame)) {
                     return;
                 }
@@ -154,12 +215,11 @@ public final class AudioSocketCallLeg implements CallLeg {
 
     /** @return false 表示应停止读取 */
     private boolean handle(AudioSocketCodec.Frame frame) {
-        markAnswered();
         switch (frame.type()) {
             case AudioSocketCodec.TYPE_UUID -> {
                 String uuid = AudioSocketCodec.parseUuid(frame.payload());
                 if (!uuid.isEmpty()) {
-                    this.callId = uuid;   // 与 originate 侧对账的唯一键
+                    this.callId = uuid;
                 }
                 log.info("AudioSocket 接入: uuid={}", callId);
             }
@@ -185,14 +245,13 @@ public final class AudioSocketCallLeg implements CallLeg {
         return true;
     }
 
-    /** 收到任意一帧即视为已接通 —— dialplan 里 Answer() 先于 AudioSocket() 执行。 */
     private void markAnswered() {
         if (answered.compareAndSet(false, true)) {
             events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
         }
     }
 
-    /** 幂等收尾: 发 HANGUP、关流、关 socket。 */
+    /** 幂等收尾: 发 HANGUP、结束上行流、关 socket。 */
     private void finish(String reason) {
         if (!finished.compareAndSet(false, true)) {
             return;

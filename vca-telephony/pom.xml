@@ -18,9 +18,24 @@
 			<groupId>com.vca</groupId>
 			<artifactId>vca-orchestrator</artifactId>
 		</dependency>
+		<!-- 接入层同样经治理层拿 provider(开场白预合成要调 TTS), 与 vca-web 同构 -->
+		<dependency>
+			<groupId>com.vca</groupId>
+			<artifactId>vca-gateway</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.slf4j</groupId>
 			<artifactId>slf4j-api</artifactId>
+		</dependency>
+		<!-- 只要自动装配, 不需要 web 栈: AudioSocket 是裸 TCP, 不经 Spring 的 HTTP 层 -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-autoconfigure</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-configuration-processor</artifactId>
+			<optional>true</optional>
 		</dependency>
 
 		<dependency>

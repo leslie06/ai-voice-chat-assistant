@@ -26,6 +26,8 @@ class AudioSocketServerTest {
     /** 一路被接住的通话及其订阅出来的数据 */
     private static final class Captured {
         AudioSocketCallLeg leg;
+        /** onCall 回调那一刻的 callId —— 会话就是用它当 sessionId 建的 */
+        volatile String callIdAtSetup;
         final BlockingQueue<byte[]> audio = new ArrayBlockingQueue<>(64);
         final BlockingQueue<CallEvent> events = new ArrayBlockingQueue<>(16);
         final BlockingQueue<String> completions = new ArrayBlockingQueue<>(4);
@@ -44,9 +46,10 @@ class AudioSocketServerTest {
     }
 
     private DataInputStream connect(boolean swapBytes) throws Exception {
-        AudioSocketConfig cfg = new AudioSocketConfig(0, 8000, swapBytes, 16);
+        AudioSocketConfig cfg = new AudioSocketConfig(0, 8000, swapBytes, 16, 500);
         server = new AudioSocketServer(cfg, leg -> {
             captured.leg = leg;
+            captured.callIdAtSetup = leg.callId();
             // 模拟 CallSession: 在开泵之前订阅, 这正是 AudioSocketServer 保证的顺序
             leg.inboundAudio().subscribe(captured.audio::offer,
                     err -> captured.completions.offer("error"),
@@ -72,6 +75,35 @@ class AudioSocketServerTest {
         assertThat(take(captured.events).type()).isEqualTo(CallEvent.Type.ANSWERED);
         // callId 换成 Asterisk 的 UUID —— 这是跟 originate 侧对账被叫号码的唯一键
         awaitUntil(() -> "1f2e3d4c-aaaa-bbbb".equals(captured.leg.callId()));
+    }
+
+    /**
+     * UUID 必须在<b>建会话之前</b>就位: callId 会被当作 sessionId 落库, 等读泵跑起来再更新就晚了 ——
+     * 那时会话已经用占位 id 建好, 通话记录再也对不上 Asterisk 那边的通道。
+     */
+    @Test
+    void uuidIsAvailableBeforeSessionIsCreated() throws Exception {
+        connect(false);
+
+        client.getOutputStream().write(AudioSocketCodec.encode(AudioSocketCodec.TYPE_UUID,
+                "9a8b7c6d-eeee".getBytes(StandardCharsets.US_ASCII)));
+        client.getOutputStream().flush();
+
+        awaitUntil(() -> captured.callIdAtSetup != null);
+        assertThat(captured.callIdAtSetup).isEqualTo("9a8b7c6d-eeee");
+    }
+
+    /** 首帧不是 UUID(个别构建不发)时不能把这帧吞掉 —— 它是正经音频 */
+    @Test
+    void nonUuidFirstFrameIsNotSwallowed() throws Exception {
+        connect(false);
+        byte[] pcm = pattern(320);
+
+        client.getOutputStream().write(AudioSocketCodec.audioFrame(pcm));
+        client.getOutputStream().flush();
+
+        assertThat(take(captured.audio)).containsExactly(pcm);
+        assertThat(captured.callIdAtSetup).startsWith("as-");   // 沿用占位 id, 通话照常
     }
 
     @Test

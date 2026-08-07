@@ -17,8 +17,18 @@ public interface CallLeg {
     /** 通话唯一 id(用作 sessionId, 落库时能和 conversation_turn 对上) */
     String callId();
 
-    /** 被叫号码; 呼入场景是主叫号码 */
+    /** 被叫号码; 呼入场景是主叫号码。传输层拿不到时为 null, 见 {@link #attachPeerNumber} */
     String peerNumber();
+
+    /**
+     * 由外部把号码关联进来。
+     *
+     * <p>AudioSocket 这类"只传媒体"的通道拿不到号码 —— 它只有一个 UUID。号码握在发起呼叫的那一侧
+     * (AMI/ARI), 呼叫接通后按 UUID 对上, 再回填进来。默认空实现: 本来就带号码的传输层不必理会。
+     */
+    default void attachPeerNumber(String number) {
+        // 默认不支持回填; AudioSocket 等无号码通道覆写
+    }
 
     /**
      * 媒体采样率(Hz)。电话网固定 8000(窄带); 少数高清语音线路是 16000。

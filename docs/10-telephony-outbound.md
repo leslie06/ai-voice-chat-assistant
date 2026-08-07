@@ -13,9 +13,13 @@
 > | ✅ | `CallSession` 通话编排：接通/开场白/回合/epoch 门闸/打断/排空后回聆听 |
 > | ✅ | `PcmAudio` 升采样改线性插值（§3）+ 回归测试 |
 > | ✅ | **AudioSocket 接入**：`AudioSocketCodec` / `AudioSocketCallLeg` / `AudioSocketServer` |
-> | ✅ | 26 个单测覆盖上述闭环，**不需要装 Asterisk**（测试里的客户端扮演 Asterisk 跑真实 TCP） |
+> | ✅ | **Spring 装配**：`TelephonyProperties` / `TelephonyAutoConfiguration` / bootstrap 的 `TelephonyWiring`，默认关 |
+> | ✅ | **开场白预合成** `PromptCache`（TTS 失败自动降级为无开场白，不阻断通话） |
+> | ✅ | 32 个单测，**不需要装 Asterisk**（测试里的客户端扮演 Asterisk 跑真实 TCP） |
+> | ✅ | 真实启动验证：应用起来、端口监听、模拟 Asterisk 接入→UUID→接通→VAD 成轮→挂机 全通 |
+> | ✅ | **外呼（AMI）**：`AmiPacket` / `AmiClient` / `AmiTelephonyProvider` / `PendingCalls` 接线台 |
 > | ⬜ | Asterisk 侧配置（PJSIP trunk / dialplan）与真机联调 |
-> | ⬜ | AMI/ARI 信令：`TelephonyProvider.originate` + DTMF 事件注入 |
+> | ⬜ | DTMF 事件注入（钩子 `CallLeg.injectEvent` 已就位，缺 AMI 事件路由） |
 > | ⬜ | CPA 音频特征兜底、转人工 |
 > | ⬜ | 开场白预合成的生成与缓存（`PromptCache`，目前由调用方传入现成 PCM） |
 
@@ -233,6 +237,102 @@ vca:
 ```
 
 ---
+
+## 9.1 Asterisk 侧配置（Phase 0 本地闭环）
+
+> 以下按 Asterisk 18+ / PJSIP 写。**先确认你这个版本带 AudioSocket**：`asterisk -rx "module show like audiosocket"`，看到 `res_audiosocket.so` / `app_audiosocket.so` 才能继续。没有就得装 `asterisk-modules` 或自行编译。
+
+**`pjsip.conf`** —— 给软电话一个分机：
+
+```ini
+[transport-udp]
+type=transport
+protocol=udp
+bind=0.0.0.0:5060
+; Asterisk 在内网、对端在公网时必须配, 否则"能接通但听不到声音"
+; external_media_address=<公网IP>
+; external_signaling_address=<公网IP>
+
+[1000]
+type=endpoint
+context=ai-agent
+disallow=all
+allow=alaw            ; 锁 G.711A, 别让它协商到别的编码
+auth=1000-auth
+aors=1000
+
+[1000-auth]
+type=auth
+auth_type=userpass
+username=1000
+password=<改成你的>
+
+[1000]
+type=aor
+max_contacts=1
+```
+
+**`extensions.conf`** —— 拨 5000 进 AI：
+
+```ini
+[ai-agent]
+exten => 5000,1,NoOp(接入 VCA 语音助手)
+ same => n,Answer()
+ same => n,AudioSocket(${UUIDGEN},127.0.0.1:9092)   ; 必须在 Answer() 之后
+ same => n,Hangup()
+```
+
+**启动 VCA**：
+
+```bash
+VCA_TELEPHONY_ENABLED=true \
+VCA_TELEPHONY_GREETING="您好，这边是贷款咨询，方便耽误您一分钟吗？" \
+java -jar vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar
+```
+
+看到 `电话接入已启用: AudioSocket :9092` 就绪。软电话（Zoiper/Linphone）注册 1000，拨 5000。
+
+**验收清单**：听到开场白 → 说话能识别 → 有回复 → **能打断** → 挂机后 `conversation_turn` 有记录（需另开 `vca.store.enabled`）。
+
+**第一件要听的事**：如果听到的是刺耳噪声而不是人声，设 `VCA_TELEPHONY_SWAP_BYTES=true` 重启——SLIN 字节序在不同构建上不一致，这个开关就是为它准备的。
+
+## 9.2 外呼是怎么拨出去的
+
+一次外呼是**两条互不相干的通道**，这是理解这块代码的关键：
+
+```
+①  本进程 ──AMI Originate──▶ Asterisk ──SIP──▶ 客户手机     (出方向, 我们连 Asterisk)
+②                            Asterisk ──AudioSocket──▶ 本进程  (入方向, Asterisk 连我们)
+```
+
+两条路唯一的共同信息，是我们自己生成的一个 id。它**同时**当 AMI 的 `ActionID` 和 `Variable: CALLUUID`：
+
+```
+Action: Originate
+ActionID: <id>
+Channel: PJSIP/<被叫号码>@<trunk>
+Context: ai-agent          ; 接通后进这里, 那里跑 AudioSocket
+Async: true                ; 同步 Originate 会把 AMI 连接阻塞到通话结束
+Variable: CALLUUID=<id>    ; dialplan 里 AudioSocket(${CALLUUID},host:port) 用它
+Variable: __SIP_CODEC=alaw ; 锁死 G.711A
+```
+
+媒体连进来时带的 UUID 就是这个 id，`PendingCalls` 一查即可配对，并把被叫号码回填进 `CallLeg`（AudioSocket 自己拿不到号码）。**用同一个 id 兼任两职是刻意的**——失败事件 `OriginateResponse` 只带 `ActionID`，两者若是不同的 id，拿到失败通知也不知道该叫醒谁。
+
+三个值得注意的设计点：
+
+- **不会对着彩铃说话**。Originate 指定了 `Context/Exten`，Asterisk 只有在对端**真正接听**后才把通道送进 dialplan，`AudioSocket()` 根本不会在彩铃阶段执行。这比任何音频特征判定都可靠。
+- **失败立刻报错**。`Response: Success` 只表示"指令已受理"，真正结果在 `OriginateResponse` 事件里。空号/关机/拒接会立刻叫醒发起方，不必干等 `answerWaitMs`——批量外呼时这点等待会直接吃掉并发。
+- **先登记再发起**。反过来的话，快线路上媒体可能比登记还早连进来，那一路会被当成呼入，而发起方一直等到超时。
+
+外呼的 dialplan 与 Phase 0 共用同一个 context，只是 `AudioSocket()` 的第一个参数换成变量：
+
+```ini
+[ai-agent]
+exten => s,1,NoOp(外呼接通: ${CALLUUID})
+ same => n,AudioSocket(${CALLUUID},127.0.0.1:9092)
+ same => n,Hangup()
+```
 
 ## 10. 风险清单
 

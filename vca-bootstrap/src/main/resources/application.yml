@@ -135,6 +135,48 @@ vca:
       # 代价: 不能用语音随时插嘴(想打断点屏幕 ⏹ 按钮)。戴耳机/有 AEC 时设 false 可恢复全双工语音打断。
       half-duplex: ${VCA_VAD_HALF_DUPLEX:false}
 
+  # 电话接入(外呼/呼入): Asterisk 经 AudioSocket(裸 TCP)把通话音频接进来, 复用同一套编排。
+  # 默认关闭 —— 关闭时不监听端口、不建任何 bean, 对浏览器链路零影响。
+  # 联调顺序见 docs/10-telephony-outbound.md：先软电话拨内线跑通, 再接 SIP 中继做真实外呼。
+  telephony:
+    enabled: ${VCA_TELEPHONY_ENABLED:false}
+    port: ${VCA_TELEPHONY_PORT:9092}
+    # 电话网窄带固定 8000; 高清语音线路可能是 16000。
+    sample-rate: ${VCA_TELEPHONY_SAMPLE_RATE:8000}
+    # SLIN 字节序。联调时若听到的是刺耳噪声而不是人声, 把它设 true。
+    swap-payload-bytes: ${VCA_TELEPHONY_SWAP_BYTES:false}
+    # 单通最长时长, 到点主动挂机。外呼必须设, 否则一通挂死的电话会一直烧钱。
+    max-call-seconds: ${VCA_TELEPHONY_MAX_CALL_SECONDS:300}
+    # 开场白: 启动时预合成并缓存, 接通瞬间直接出声(首包延迟≈0, 也省掉每通的合成费)。
+    greeting: ${VCA_TELEPHONY_GREETING:}
+    greeting-barge-in: ${VCA_TELEPHONY_GREETING_BARGE_IN:true}
+    tts-voice: ${VCA_TELEPHONY_TTS_VOICE:longxiaochun}
+    # 电话专用 VAD 阈值 —— 不要复用 vca.web.vad 那组(那是按 48k 麦克风调的)。
+    vad:
+      speech-threshold: ${VCA_TELEPHONY_VAD_SPEECH:0.02}
+      silence-ms: ${VCA_TELEPHONY_VAD_SILENCE_MS:700}
+      barge-threshold: ${VCA_TELEPHONY_VAD_BARGE:0.025}
+      barge-ms: ${VCA_TELEPHONY_VAD_BARGE_MS:250}
+      # 起播保护期: 挡线路回声导致的自打断。
+      barge-grace-ms: ${VCA_TELEPHONY_VAD_BARGE_GRACE_MS:200}
+      # Silero 是 16k 模型, 8k 上采样后精度会掉; 开之前先用真实通话回归。
+      use-silero: ${VCA_TELEPHONY_VAD_SILERO:false}
+    # AMI: 外呼所需(经 Asterisk Manager Interface 发起呼叫)。不开则系统只能接呼入。
+    # 需要 manager.conf 里配好账号, 以及一条能拨出去的 SIP 中继(由客户提供)。
+    ami:
+      enabled: ${VCA_AMI_ENABLED:false}
+      host: ${VCA_AMI_HOST:127.0.0.1}
+      port: ${VCA_AMI_PORT:5038}
+      username: ${VCA_AMI_USERNAME:}
+      secret: ${VCA_AMI_SECRET:}
+      # SIP 中继名(PJSIP endpoint), 拨号串 = PJSIP/<号码>@<trunk>
+      trunk: ${VCA_AMI_TRUNK:trunk}
+      # 接通后进入的 dialplan context —— 那里跑 AudioSocket
+      context: ${VCA_AMI_CONTEXT:ai-agent}
+      exten: ${VCA_AMI_EXTEN:s}
+      ring-timeout-ms: ${VCA_AMI_RING_TIMEOUT_MS:30000}
+      answer-wait-ms: ${VCA_AMI_ANSWER_WAIT_MS:45000}
+
   # 对话落库(数据飞轮 P1): MySQL + MyBatis-Plus。开启后每轮对话异步写入 conversation_turn 表,
   # 供后续评测(延迟/失败率/误打断率/WER 抽样)。需先建库(CREATE DATABASE vca), 表由启动时 schema.sql 幂等建。
   # 凭据(密码)放 .env(VCA_STORE_*), 不进 yaml; 默认 enabled=false, 用 .env 打开。

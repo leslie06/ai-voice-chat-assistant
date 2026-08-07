@@ -79,7 +79,16 @@ public final class AudioSocketServer implements Closeable {
     }
 
     private void serve(Socket socket) {
-        AudioSocketCallLeg leg = new AudioSocketCallLeg(socket, cfg);
+        AudioSocketCallLeg leg;
+        try {
+            leg = new AudioSocketCallLeg(socket, cfg);
+        } catch (IOException e) {
+            log.warn("建立通话失败(取流异常): {}", e.toString());
+            closeQuietly(socket);
+            return;
+        }
+        // 先握手拿 UUID: callId 会当 sessionId 落库, 必须在建会话之前就位
+        leg.primeUuid(cfg.uuidWaitMs());
         try {
             onCall.accept(leg);   // 上层在此建 CallSession 并订阅
         } catch (RuntimeException e) {
@@ -88,6 +97,14 @@ public final class AudioSocketServer implements Closeable {
             return;
         }
         leg.pump();   // 订阅就位后才开泵
+    }
+
+    private static void closeQuietly(Socket socket) {
+        try {
+            socket.close();
+        } catch (IOException ignored) {
+            // 已经在错误路径上, 关不掉也没别的可做
+        }
     }
 
     @Override

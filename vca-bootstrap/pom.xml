@@ -36,6 +36,11 @@
 			<groupId>com.vca</groupId>
 			<artifactId>vca-provider-s2s-qwen</artifactId>
 		</dependency>
+		<!-- 电话接入层(与 vca-web 平级); 默认关(vca.telephony.enabled=false), 关时不占端口 -->
+		<dependency>
+			<groupId>com.vca</groupId>
+			<artifactId>vca-telephony</artifactId>
+		</dependency>
 		<!-- 对话落库(数据飞轮); 默认关(vca.store.enabled=false), 开启后自带连接池 -->
 		<dependency>
 			<groupId>com.vca</groupId>

@@ -132,7 +132,9 @@
       "Bash(./mvnw -pl vca-orchestrator,vca-telephony -am test -DfailIfNoTests=false)",
       "Bash(./mvnw -q test)",
       "Bash(echo \"EXIT=$?\")",
-      "Bash(./mvnw -pl vca-telephony -am test)"
+      "Bash(./mvnw -pl vca-telephony -am test)",
+      "Bash(pkill -f \"vca-bootstrap-0.0.1-SNAPSHOT.jar\")",
+      "Bash(lsof -nP -iTCP:19092 -sTCP:LISTEN)"
     ]
   }
 }
