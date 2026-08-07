@@ -25,6 +25,7 @@
 		<module>vca-provider-s2s-qwen</module>
 		<module>vca-store</module>
 		<module>vca-web</module>
+		<module>vca-telephony</module>
 		<module>vca-bootstrap</module>
 	</modules>
 
@@ -95,6 +96,11 @@
 			<dependency>
 				<groupId>com.vca</groupId>
 				<artifactId>vca-web</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.vca</groupId>
+				<artifactId>vca-telephony</artifactId>
 				<version>${project.version}</version>
 			</dependency>
 

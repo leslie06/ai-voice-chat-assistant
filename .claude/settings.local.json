@@ -127,7 +127,11 @@
       "Bash(javap wfx/org/springframework/web/reactive/config/WebFluxConfigurationSupport.class)",
       "Bash(unzip -o -q ~/environment/maven/repository/org/springframework/spring-webflux/7.0.7/spring-webflux-7.0.7.jar \"org/springframework/web/reactive/config/WebFluxConfigurer.class\" -d wfx)",
       "Bash(javap wfx/org/springframework/web/reactive/config/WebFluxConfigurer.class)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(./mvnw -q -pl vca-orchestrator,vca-telephony -am test -DfailIfNoTests=false)",
+      "Bash(./mvnw -pl vca-orchestrator,vca-telephony -am test -DfailIfNoTests=false)",
+      "Bash(./mvnw -q test)",
+      "Bash(echo \"EXIT=$?\")"
     ]
   }
 }

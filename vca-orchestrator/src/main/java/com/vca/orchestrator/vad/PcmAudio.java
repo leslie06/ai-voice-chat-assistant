@@ -55,7 +55,9 @@ public final class PcmAudio {
      * 抗混叠低通。早先用最近邻抽取(每 N 个取 1 个)会把 &gt;奈奎斯特(8kHz)的高频<b>混叠</b>进语音带,
      * 能量(RMS)看着照常、但波形结构被毁 —— Silero 这类依赖波形的 VAD 会把正常说话误判成静音。
      *
-     * <p><b>升采样</b>仍用最近邻(VAD/ASR 够用)。
+     * <p><b>升采样</b>用线性插值。早先的最近邻(每个源采样重复 N 次)会产出<b>阶梯状波形</b>: 电平不变、
+     * 但引入大量高频谐波, 同样会让 Silero 这类看波形的 VAD 打分失真。电话链路 8k→16k 是必经之路
+     * (窄带上行 → 16k VAD/ASR), 阶梯效应在 2 倍升采样下尤其明显, 故改为插值。
      */
     public static short[] resample(short[] in, int inRate, int outRate) {
         if (inRate <= 0 || inRate == outRate || in.length == 0) {
@@ -82,13 +84,17 @@ public final class PcmAudio {
                 out[i] = (short) (sum / (end - start));
             }
         } else {
-            // 升采样: 最近邻
+            // 升采样: 线性插值(在相邻两个源采样之间按小数位置取加权平均, 避免阶梯波形)
+            int last = in.length - 1;
             for (int i = 0; i < outLen; i++) {
-                int srcIdx = (int) Math.floor(i * ratio);
-                if (srcIdx >= in.length) {
-                    srcIdx = in.length - 1;
+                double src = i * ratio;
+                int i0 = (int) Math.floor(src);
+                if (i0 >= last) {
+                    out[i] = in[last];
+                    continue;
                 }
-                out[i] = in[srcIdx];
+                double frac = src - i0;
+                out[i] = (short) Math.round(in[i0] + (in[i0 + 1] - in[i0]) * frac);
             }
         }
         return out;
