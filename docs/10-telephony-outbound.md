@@ -12,9 +12,11 @@
 > | ✅ | `PacingBuffer` 下行实时节流（§4） |
 > | ✅ | `CallSession` 通话编排：接通/开场白/回合/epoch 门闸/打断/排空后回聆听 |
 > | ✅ | `PcmAudio` 升采样改线性插值（§3）+ 回归测试 |
-> | ✅ | 12 个单测覆盖上述闭环，不依赖 FreeSWITCH |
-> | ⬜ | FreeSWITCH 媒体接入（`FsMediaWebSocketHandler`）+ ESL 信令 |
-> | ⬜ | CPA 音频特征兜底、DTMF、转人工 |
+> | ✅ | **AudioSocket 接入**：`AudioSocketCodec` / `AudioSocketCallLeg` / `AudioSocketServer` |
+> | ✅ | 26 个单测覆盖上述闭环，**不需要装 Asterisk**（测试里的客户端扮演 Asterisk 跑真实 TCP） |
+> | ⬜ | Asterisk 侧配置（PJSIP trunk / dialplan）与真机联调 |
+> | ⬜ | AMI/ARI 信令：`TelephonyProvider.originate` + DTMF 事件注入 |
+> | ⬜ | CPA 音频特征兜底、转人工 |
 > | ⬜ | 开场白预合成的生成与缓存（`PromptCache`，目前由调用方传入现成 PCM） |
 
 ---

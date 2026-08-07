@@ -131,7 +131,8 @@
       "Bash(./mvnw -q -pl vca-orchestrator,vca-telephony -am test -DfailIfNoTests=false)",
       "Bash(./mvnw -pl vca-orchestrator,vca-telephony -am test -DfailIfNoTests=false)",
       "Bash(./mvnw -q test)",
-      "Bash(echo \"EXIT=$?\")"
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(./mvnw -pl vca-telephony -am test)"
     ]
   }
 }
