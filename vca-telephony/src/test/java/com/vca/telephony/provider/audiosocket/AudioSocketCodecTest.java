@@ -59,6 +59,23 @@ class AudioSocketCodecTest {
         assertThatThrownBy(() -> AudioSocketCodec.read(in)).isInstanceOf(EOFException.class);
     }
 
+    /**
+     * 握手阶段先单独读走类型字节(那一步允许超时), 剩下的必须无超时读完。
+     * 这条保证 {@code readAfterType} 与 {@code read} 对同一段字节的解析完全一致。
+     */
+    @Test
+    void readAfterTypeResumesMidFrame() throws Exception {
+        byte[] wire = AudioSocketCodec.audioFrame(new byte[]{9, 8, 7, 6});
+        DataInputStream in = new DataInputStream(new ByteArrayInputStream(wire));
+
+        int type = in.read();   // 模拟握手阶段已消费类型字节
+        AudioSocketCodec.Frame frame = AudioSocketCodec.readAfterType(in, type);
+
+        assertThat(frame.isAudio()).isTrue();
+        assertThat(frame.payload()).containsExactly(9, 8, 7, 6);
+        assertThat(AudioSocketCodec.read(in)).isNull();
+    }
+
     @Test
     void rejectsOversizedPayload() {
         assertThatThrownBy(() -> AudioSocketCodec.encode(AudioSocketCodec.TYPE_AUDIO, new byte[70_000]))

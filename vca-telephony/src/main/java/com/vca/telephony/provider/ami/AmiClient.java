@@ -158,8 +158,11 @@ public final class AmiClient implements Closeable {
         String id = packet.actionId();
         if (id != null) {
             CompletableFuture<AmiPacket> pending = awaiting.get(id);
-            // Response 才算应答; 带同一 ActionID 的事件(如 OriginateResponse)要继续走事件回调
-            if (pending != null && packet.isResponse()) {
+            // 判据是"有没有 Event 字段", 不能只看有没有 Response ——
+            // OriginateResponse 这类事件<b>两个字段都带</b>(Event: OriginateResponse + Response: Failure),
+            // 只看 Response 会把它当成 Action 的应答吞掉, 于是空号/关机永远叫不醒发起方,
+            // 一直干等到 answerWait 超时。AMI 的应答从不带 Event 字段, 事件则可能带 Response。
+            if (pending != null && packet.event() == null && packet.isResponse()) {
                 pending.complete(packet);
                 return;
             }

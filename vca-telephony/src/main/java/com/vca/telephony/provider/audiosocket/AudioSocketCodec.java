@@ -79,6 +79,17 @@ public final class AudioSocketCodec {
         if (type < 0) {
             return null;   // 干净的 EOF
         }
+        return readAfterType(in, type);
+    }
+
+    /**
+     * 已经拿到类型字节后, 把这一帧的剩余部分读完。
+     *
+     * <p>给握手阶段用: 那里对<b>首字节</b>设了读超时(等 Asterisk 发 UUID), 但一旦首字节到手就必须
+     * 无超时地把整帧读完 —— 超时若发生在帧中间, 已消费的头部字节就丢了, 流从此错位,
+     * 后面每一帧都会解析成垃圾。
+     */
+    public static Frame readAfterType(DataInputStream in, int type) throws IOException {
         int hi = in.read();
         int lo = in.read();
         if (hi < 0 || lo < 0) {

@@ -26,6 +26,7 @@ final class FakeAmiServer implements Closeable {
     private final BlockingQueue<AmiPacket> received = new LinkedBlockingQueue<>();
     private volatile OutputStream out;
     private volatile boolean rejectLogin;
+    private volatile boolean originateFailureFirst;
 
     FakeAmiServer() throws IOException {
         this.server = new ServerSocket(0);
@@ -40,6 +41,15 @@ final class FakeAmiServer implements Closeable {
 
     void rejectLogin() {
         this.rejectLogin = true;
+    }
+
+    /**
+     * 收到 Originate 时<b>先</b>推 OriginateResponse 失败事件, <b>再</b>回 Response: Success。
+     * 这把"事件早于应答到达"的竞态窗口固定下来 —— 真实 Asterisk 上这个顺序是可能出现的,
+     * 而此时 ActionID 还挂在等待表里, 正是事件会被误当成应答吞掉的时刻。
+     */
+    void sendOriginateFailureBeforeResponse() {
+        this.originateFailureFirst = true;
     }
 
     private void serve() {
@@ -72,6 +82,10 @@ final class FakeAmiServer implements Closeable {
         String id = action.actionId();
         if (id == null) {
             return;
+        }
+        if (originateFailureFirst && "Originate".equalsIgnoreCase(action.getOrDefault("Action", ""))) {
+            write("Event: OriginateResponse\r\nActionID: " + id
+                    + "\r\nResponse: Failure\r\nReason: 3\r\n\r\n");
         }
         boolean deny = rejectLogin && "Login".equalsIgnoreCase(action.getOrDefault("Action", ""));
         write("Response: " + (deny ? "Error" : "Success") + "\r\nActionID: " + id

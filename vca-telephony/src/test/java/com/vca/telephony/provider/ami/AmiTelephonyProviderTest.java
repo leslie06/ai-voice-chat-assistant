@@ -117,6 +117,30 @@ class AmiTelephonyProviderTest {
         assertThat(pending.pendingCount()).isZero();
     }
 
+    /**
+     * 回归: {@code OriginateResponse} <b>同时带 Event 和 Response 两个字段</b>。
+     * 早先 AmiClient 只看 "有没有 Response" 来判断是不是某个 Action 的应答, 于是当这个事件赶在
+     * Response 之前到达(ActionID 还挂在等待表里)时, 它会被当成应答吞掉、永远不走事件回调 ——
+     * 结果就是空号/关机叫不醒发起方, 一直干等到 answerWait。判据必须是 "有没有 Event 字段"。
+     */
+    @Test
+    void originateFailureEventIsNotSwallowedWhenItBeatsTheResponse() throws Exception {
+        PendingCalls pending = new PendingCalls();
+        server = new FakeAmiServer();
+        server.sendOriginateFailureBeforeResponse();
+        AmiConfig cfg = new AmiConfig("127.0.0.1", server.port(), "vca", "s3cr3t",
+                "trunk-cmcc", "ai-agent", "s", 30_000, 600_000, 3_000);
+        client = new AmiClient(cfg);
+        client.connect();
+        AmiTelephonyProvider p = new AmiTelephonyProvider(client, cfg, pending);
+        AtomicReference<Throwable> err = new AtomicReference<>();
+
+        p.originate("13800138000", "1000").subscribe(leg -> { }, err::set);
+
+        awaitUntil(() -> err.get() != null);
+        assertThat(err.get()).hasMessageContaining("外呼失败");
+    }
+
     @Test
     void blankCalleeIsRejectedWithoutTouchingAmi() throws Exception {
         AmiTelephonyProvider p = provider(new PendingCalls(), 45_000);

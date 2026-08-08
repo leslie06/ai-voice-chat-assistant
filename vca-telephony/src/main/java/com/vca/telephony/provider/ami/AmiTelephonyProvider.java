@@ -10,6 +10,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * 用 AMI 发起外呼。
@@ -34,6 +35,14 @@ public final class AmiTelephonyProvider implements TelephonyProvider {
 
     private static final Logger log = LoggerFactory.getLogger(AmiTelephonyProvider.class);
 
+    /**
+     * 号码白名单。<b>这是安全边界, 不是格式美化</b>: 号码会被拼进 AMI 报文
+     * ({@code Channel: PJSIP/<号码>@<trunk>}), 而 AMI 是 CRLF 分隔的行协议 —— 号码里若带
+     * {@code \r\n}, 攻击者就能往同一条连接里注入任意 manager action(挂断别人的通话、读配置、
+     * 甚至 {@code Originate} 到自己的号码上刷话费)。只放行数字与拨号符, 一律不做"清洗后放行"。
+     */
+    private static final Pattern DIALABLE = Pattern.compile("[0-9+*#]{1,32}");
+
     private final AmiClient client;
     private final AmiConfig cfg;
     private final PendingCalls pending;
@@ -47,8 +56,11 @@ public final class AmiTelephonyProvider implements TelephonyProvider {
 
     @Override
     public Mono<CallLeg> originate(String callee, String callerId) {
-        if (callee == null || callee.isBlank()) {
-            return Mono.error(new IllegalArgumentException("被叫号码为空"));
+        if (callee == null || !DIALABLE.matcher(callee).matches()) {
+            return Mono.error(new IllegalArgumentException("被叫号码非法: " + safeEcho(callee)));
+        }
+        if (callerId != null && !callerId.isBlank() && !DIALABLE.matcher(callerId).matches()) {
+            return Mono.error(new IllegalArgumentException("主叫号显非法: " + safeEcho(callerId)));
         }
         String callId = UUID.randomUUID().toString();
 
@@ -100,6 +112,15 @@ public final class AmiTelephonyProvider implements TelephonyProvider {
             return;   // 成功由媒体连入来确认, 这里不用管
         }
         pending.fail(callId, packet.getOrDefault("Reason", packet.getOrDefault("Response", "unknown")));
+    }
+
+    /** 回显非法输入时先掐掉换行, 免得把注入内容原样写进日志(日志注入) */
+    private static String safeEcho(String raw) {
+        if (raw == null) {
+            return "(空)";
+        }
+        String cleaned = raw.replaceAll("[\\r\\n]", "\\\\n");
+        return cleaned.length() > 40 ? cleaned.substring(0, 40) + "…" : cleaned;
     }
 
     /** 见类注释: 指定 Context/Exten 的 Originate 只在真接通后才进 dialplan。 */

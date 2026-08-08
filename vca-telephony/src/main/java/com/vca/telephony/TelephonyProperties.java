@@ -59,6 +59,14 @@ public class TelephonyProperties {
     /** AMI: 外呼所需。不开只能接呼入。 */
     private Ami ami = new Ami();
 
+    /**
+     * 单拨外呼端点 {@code POST /telephony/calls} 的访问令牌。
+     *
+     * <p><b>留空 = 不注册该端点</b>。这个接口会真的打电话、真的花钱, 没有令牌就暴露出去等于
+     * 把话费和号码信誉交给公网, 所以宁可不提供也不裸奔。
+     */
+    private String apiToken = "";
+
     /** Asterisk Manager Interface —— 发起外呼的控制通道。 */
     public static class Ami {
         /** 开关。关闭时不连 Asterisk, 系统只能接呼入。 */
@@ -396,5 +404,13 @@ public class TelephonyProperties {
 
     public void setAmi(Ami ami) {
         this.ami = ami;
+    }
+
+    public String getApiToken() {
+        return apiToken;
+    }
+
+    public void setApiToken(String apiToken) {
+        this.apiToken = apiToken;
     }
 }

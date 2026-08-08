@@ -18,6 +18,7 @@
 > | ✅ | 32 个单测，**不需要装 Asterisk**（测试里的客户端扮演 Asterisk 跑真实 TCP） |
 > | ✅ | 真实启动验证：应用起来、端口监听、模拟 Asterisk 接入→UUID→接通→VAD 成轮→挂机 全通 |
 > | ✅ | **外呼（AMI）**：`AmiPacket` / `AmiClient` / `AmiTelephonyProvider` / `PendingCalls` 接线台 |
+> | ✅ | **单拨端点** `POST /telephony/calls`（强制令牌鉴权，号码做 AMI 注入防护） |
 > | ⬜ | Asterisk 侧配置（PJSIP trunk / dialplan）与真机联调 |
 > | ⬜ | DTMF 事件注入（钩子 `CallLeg.injectEvent` 已就位，缺 AMI 事件路由） |
 > | ⬜ | CPA 音频特征兜底、转人工 |
@@ -324,6 +325,25 @@ Variable: __SIP_CODEC=alaw ; 锁死 G.711A
 - **不会对着彩铃说话**。Originate 指定了 `Context/Exten`，Asterisk 只有在对端**真正接听**后才把通道送进 dialplan，`AudioSocket()` 根本不会在彩铃阶段执行。这比任何音频特征判定都可靠。
 - **失败立刻报错**。`Response: Success` 只表示"指令已受理"，真正结果在 `OriginateResponse` 事件里。空号/关机/拒接会立刻叫醒发起方，不必干等 `answerWaitMs`——批量外呼时这点等待会直接吃掉并发。
 - **先登记再发起**。反过来的话，快线路上媒体可能比登记还早连进来，那一路会被当成呼入，而发起方一直等到超时。
+
+### 怎么拨第一通电话
+
+```bash
+curl -X POST http://localhost:8080/telephony/calls \
+  -H 'X-Telephony-Token: <你的令牌>' \
+  -H 'Content-Type: application/json' \
+  -d '{"number":"13800138000","callerId":"01088886666"}'
+
+# 接通: {"callId":"...","outcome":"answered","peerNumber":"13800138000","elapsedMs":8123}
+# 未通: {"callId":null,"outcome":"failed","reason":"外呼失败: 3","elapsedMs":3120}
+```
+
+这是**冒烟工具，不是批量入口**——它会一直等到接通或失败才返回，便于人肉验证"到底通没通"。批量外呼需要异步发起 + 并发控制 + 重呼策略，那是名单/任务系统的事。
+
+两条安全约束写死在代码里：
+
+- **未配 `vca.telephony.api-token` 就不注册这个端点。** 它会真的打电话、真的花钱，没令牌暴露到公网等于把话费和号码信誉交出去。
+- **号码只放行 `[0-9+*#]`。** 号码会被拼进 `Channel: PJSIP/<号码>@<trunk>`，而 AMI 是 CRLF 行协议——号码里带 `\r\n` 就能往同一条连接注入任意 manager action（挂断别人的通话、读配置、甚至 Originate 到自己号码上刷话费）。一律不做"清洗后放行"。
 
 外呼的 dialplan 与 Phase 0 共用同一个 context，只是 `AudioSocket()` 的第一个参数换成变量：
 

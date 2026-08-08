@@ -15,6 +15,7 @@ import com.vca.telephony.provider.audiosocket.AudioSocketServer;
 import com.vca.telephony.session.CallConversationFactory;
 import com.vca.telephony.session.CallSession;
 import com.vca.telephony.session.PendingCalls;
+import com.vca.telephony.web.OutboundCallRoute;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -23,6 +24,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.web.reactive.function.server.RouterFunction;
+import org.springframework.web.reactive.function.server.RouterFunctions;
+import org.springframework.web.reactive.function.server.ServerResponse;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -107,6 +111,23 @@ public class TelephonyAutoConfiguration {
         log.info("外呼已启用: 中继={}, context={}, 振铃超时={}ms",
                 props.getAmi().getTrunk(), props.getAmi().getContext(), props.getAmi().getRingTimeoutMs());
         return new AmiTelephonyProvider(client, props.toAmiConfig(), pending);
+    }
+
+    /**
+     * 单拨外呼端点。<b>只在配了令牌时才注册</b> —— 这个接口会真的打电话、真的花钱,
+     * 没令牌就暴露出去等于把话费和号码信誉交给公网。宁可不提供, 也不裸奔。
+     */
+    @Bean
+    @ConditionalOnBean(AmiTelephonyProvider.class)
+    RouterFunction<ServerResponse> outboundCallRoute(AmiTelephonyProvider provider, TelephonyProperties props) {
+        if (props.getApiToken().isBlank()) {
+            log.warn("未配 vca.telephony.api-token, 不注册外呼端点 POST /telephony/calls "
+                    + "(外呼能力仍在, 只是没有 HTTP 触发入口)");
+            return RouterFunctions.route().build();   // 空路由: 不匹配任何请求
+        }
+        log.info("外呼端点已注册: POST /telephony/calls (需 X-Telephony-Token)");
+        return OutboundCallRoute.create(provider, props.getApiToken(),
+                Duration.ofMillis(props.getAmi().getAnswerWaitMs() + 5_000L));
     }
 
     @Bean(destroyMethod = "close")

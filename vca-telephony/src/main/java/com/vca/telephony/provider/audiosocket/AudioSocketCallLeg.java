@@ -148,13 +148,31 @@ public final class AudioSocketCallLeg implements CallLeg {
         if (timeoutMs <= 0) {
             return;
         }
+        int type;
         try {
+            // 只对<b>首字节</b>设超时。拿到之后立刻取消 —— 超时若打在帧中间, 已消费的头部字节就丢了,
+            // 流从此错位, 整通电话的音频都会解析成垃圾。
             socket.setSoTimeout(timeoutMs);
-            AudioSocketCodec.Frame frame = AudioSocketCodec.read(in);
-            if (frame == null) {
+            type = in.read();
+        } catch (SocketTimeoutException e) {
+            log.debug("等 UUID 帧超时({}ms), 沿用占位 callId={}", timeoutMs, callId);
+            resetTimeout();
+            return;   // 一个字节都没消费, 流是干净的, 交给读泵继续
+        } catch (IOException e) {
+            log.warn("[{}] 握手读失败: {}", callId, e.toString());
+            resetTimeout();
+            finish("read-failed");
+            return;
+        } finally {
+            resetTimeout();
+        }
+
+        try {
+            if (type < 0) {
                 finish("peer-closed");
                 return;
             }
+            AudioSocketCodec.Frame frame = AudioSocketCodec.readAfterType(in, type);
             if (frame.type() == AudioSocketCodec.TYPE_UUID) {
                 String uuid = AudioSocketCodec.parseUuid(frame.payload());
                 if (!uuid.isEmpty()) {
@@ -163,13 +181,9 @@ public final class AudioSocketCallLeg implements CallLeg {
             } else {
                 pending = frame;   // 该构建不发 UUID 帧, 这是正经数据, 不能吞
             }
-        } catch (SocketTimeoutException e) {
-            log.debug("等 UUID 帧超时({}ms), 沿用占位 callId={}", timeoutMs, callId);
         } catch (IOException e) {
             log.warn("[{}] 握手读失败: {}", callId, e.toString());
             finish("read-failed");
-        } finally {
-            resetTimeout();
         }
     }
 

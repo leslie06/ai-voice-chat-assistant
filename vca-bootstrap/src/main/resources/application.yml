@@ -161,6 +161,9 @@ vca:
       barge-grace-ms: ${VCA_TELEPHONY_VAD_BARGE_GRACE_MS:200}
       # Silero 是 16k 模型, 8k 上采样后精度会掉; 开之前先用真实通话回归。
       use-silero: ${VCA_TELEPHONY_VAD_SILERO:false}
+    # 单拨外呼端点 POST /telephony/calls 的令牌。留空=不注册该端点。
+    # 这个接口会真的打电话、真的花钱, 没令牌就暴露到公网等于把话费和号码信誉交出去。
+    api-token: ${VCA_TELEPHONY_API_TOKEN:}
     # AMI: 外呼所需(经 Asterisk Manager Interface 发起呼叫)。不开则系统只能接呼入。
     # 需要 manager.conf 里配好账号, 以及一条能拨出去的 SIP 中继(由客户提供)。
     ami:
