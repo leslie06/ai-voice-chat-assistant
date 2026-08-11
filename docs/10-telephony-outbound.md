@@ -279,9 +279,18 @@ max_contacts=1
 [ai-agent]
 exten => 5000,1,NoOp(接入 VCA 语音助手)
  same => n,Answer()
- same => n,AudioSocket(${UUIDGEN},127.0.0.1:9092)   ; 必须在 Answer() 之后
+ same => n,Set(CALLUUID=${UUID()})                  ; 见下方警告
+ same => n,AudioSocket(${CALLUUID},127.0.0.1:9092)  ; 必须在 Answer() 之后
  same => n,Hangup()
 ```
+
+> ⚠️ **第一个参数必须是合法 UUID。** AudioSocket 协议里那一帧就是 16 字节 UUID，`app_audiosocket`
+> 会真的去解析它。别拿 `${UNIQUEID}` 顶替——它是"时间戳.序号"（如 `1786444930.4`），会直接报
+> `Failed to parse UUID`，通道当场退出。症状是**接通后立刻挂断，而 VCA 侧连一条连接日志都没有**，
+> 很容易误判成网络或端口问题。
+>
+> `${UUID()}` 由 `func_uuid.so` 提供，先 `asterisk -rx "module show like func_uuid"` 确认；
+> 没有就用 `${SHELL(uuidgen)}`。
 
 **启动 VCA**：
 
