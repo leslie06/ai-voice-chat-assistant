@@ -150,7 +150,9 @@ vca:
     # 开场白: 启动时预合成并缓存, 接通瞬间直接出声(首包延迟≈0, 也省掉每通的合成费)。
     greeting: ${VCA_TELEPHONY_GREETING:}
     greeting-barge-in: ${VCA_TELEPHONY_GREETING_BARGE_IN:true}
-    tts-voice: ${VCA_TELEPHONY_TTS_VOICE:longxiaochun}
+    # 留空 = 用 vca.gateway.tts.candidates 里配的音色(推荐)。
+    # 在这里写死音色会顶掉候选的配置, 音色与 CosyVoice 模型不配套时合成直接 418。
+    tts-voice: ${VCA_TELEPHONY_TTS_VOICE:}
     # 电话专用 VAD 阈值 —— 不要复用 vca.web.vad 那组(那是按 48k 麦克风调的)。
     vad:
       speech-threshold: ${VCA_TELEPHONY_VAD_SPEECH:0.02}

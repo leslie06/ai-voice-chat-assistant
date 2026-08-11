@@ -71,6 +71,36 @@ class PromptCacheTest {
         assertThat(calls.get()).isZero();
     }
 
+    /**
+     * 失败不进缓存。启动时 TTS 抖一下(配额/超时/音色配错)就永久没有开场白, 是最难查的那种问题 ——
+     * 服务看着一切正常, 只是每通电话都少了开场白, 而它正是首包延迟优化的全部意义。
+     */
+    @Test
+    void failureIsNotCachedSoNextCallRetries() {
+        AtomicInteger calls = new AtomicInteger();
+        TtsProvider flaky = new TtsProvider() {
+            @Override
+            public VendorType vendor() {
+                return VendorType.ALIYUN;
+            }
+
+            @Override
+            public Flux<AudioChunk> synthesize(Flux<String> textSegments, TtsConfig cfg) {
+                // 第一次失败(模拟启动瞬间的抖动), 之后正常
+                if (calls.incrementAndGet() == 1) {
+                    return Flux.error(new IllegalStateException("配额抖动"));
+                }
+                return textSegments.map(t -> new AudioChunk(
+                        new byte[TTS_RATE * 2], AudioFormat.PCM, 0, t, false));
+            }
+        };
+        PromptCache cache = cache(flaky);
+
+        assertThat(cache.get("您好")).isEmpty();                      // 启动预热失败
+        assertThat(cache.get("您好")).hasSize(MEDIA_RATE * 2);        // 下一通电话自动重试, 拿到了
+        assertThat(calls.get()).isEqualTo(2);
+    }
+
     /** TTS 抖动不该阻断外呼: 没有开场白也能打, 只是首句要现合成 */
     @Test
     void ttsFailureDegradesToEmptyInsteadOfThrowing() {

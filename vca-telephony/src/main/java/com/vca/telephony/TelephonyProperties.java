@@ -48,9 +48,18 @@ public class TelephonyProperties {
     /** 开场白文本。启动时预合成并缓存, 接通瞬间直接出声(首包延迟≈0)。留空则接通后直接进聆听。 */
     private String greeting = "";
 
-    /** 开场白合成用的 TTS 厂商/音色/采样率。 */
+    /** 开场白合成用的 TTS 厂商与采样率。 */
     private VendorType ttsVendor = VendorType.ALIYUN;
-    private String ttsVoice = "longxiaochun";
+
+    /**
+     * 开场白音色。<b>默认留空, 交给治理层候选决定</b>({@code vca.gateway.tts.candidates})。
+     *
+     * <p>别在这里写死音色: 按 {@code ManagedProviders} 的规则, 同厂商时"会话指定的音色"会<b>顶掉</b>
+     * 候选自带的音色。一旦这里的默认值和部署实际用的 CosyVoice 模型不配套(例如把 v1 的音色喂给 v3 模型),
+     * 合成就会以 {@code InvalidParameter / Engine return error code: 418} 失败 —— 而浏览器那条链路
+     * 因为把音色留给候选决定, 完全不受影响, 于是很难联想到是音色的问题。
+     */
+    private String ttsVoice = "";
     private int ttsSampleRate = 24_000;
 
     /** 电话专用 VAD 阈值 —— 不要复用浏览器那组(那是按 48k 麦克风调的)。 */

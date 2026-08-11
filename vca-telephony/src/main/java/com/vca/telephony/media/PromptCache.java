@@ -54,7 +54,19 @@ public final class PromptCache {
         if (text == null || text.isBlank()) {
             return new byte[0];
         }
-        return cache.computeIfAbsent(text.strip(), this::synthesize);
+        String key = text.strip();
+        byte[] cached = cache.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        byte[] pcm = synthesize(key);
+        // 只缓存成功结果。早先用 computeIfAbsent 会把失败(空数组)也存下来, 于是启动时 TTS 抖一下
+        // (配额、超时、音色配错)就永久没有开场白了 —— 而开场白正是整套外呼里首包延迟优化的核心,
+        // 丢了它等于白做。留空不缓存, 下一通电话会自动重试。
+        if (pcm.length > 0) {
+            cache.put(key, pcm);
+        }
+        return pcm;
     }
 
     /** 预热: 启动时把已知话术合成好, 别等第一通电话才现做。 */
