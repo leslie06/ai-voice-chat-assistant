@@ -11,8 +11,6 @@ import com.vca.web.music.LocalMusicProvider;
 import com.vca.web.music.LocalMusicRoute;
 import com.vca.web.music.MusicCatalogRoute;
 import com.vca.web.music.MusicUploadRoute;
-import com.vca.web.music.AliyunMusicModerationClient;
-import com.vca.web.music.MusicModerationCoordinator;
 import com.vca.web.music.OssMusicProvider;
 import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
@@ -240,26 +238,6 @@ public class WebAutoConfiguration {
                 uploads.getIfAvailable());
     }
 
-    @Bean
-    @ConditionalOnProperty(prefix = "vca.web", name = "music-moderation-enabled", havingValue = "true")
-    AliyunMusicModerationClient aliyunMusicModerationClient(
-            WebProperties props, ObjectMapper objectMapper) throws Exception {
-        requireMusicOss(props.getMusicModerationAccessKeyId(),
-                "VCA_MUSIC_MODERATION_ACCESS_KEY_ID");
-        requireMusicOss(props.getMusicModerationAccessKeySecret(),
-                "VCA_MUSIC_MODERATION_ACCESS_KEY_SECRET");
-        log.info("用户歌曲内容审核已启用: endpoint={}, region={}",
-                props.getMusicModerationEndpoint(), props.getMusicModerationRegion());
-        return new AliyunMusicModerationClient(props, objectMapper, props.getMusicOssBucket());
-    }
-
-    @Bean(destroyMethod = "close")
-    @ConditionalOnBean({MusicUploadStore.class, AliyunMusicModerationClient.class})
-    MusicModerationCoordinator musicModerationCoordinator(
-            MusicUploadStore uploads, AliyunMusicModerationClient moderation) {
-        return new MusicModerationCoordinator(uploads, moderation);
-    }
-
     /**
      * 音乐检索: 本地整首 → OSS 私有整首 → iTunes 30 秒试听。
      */
@@ -319,17 +297,21 @@ public class WebAutoConfiguration {
                 musicProvider, authenticator.getIfAvailable(), props.getAuthToken());
     }
 
-    /** 登录用户把 MP3/LRC 上传到自己的 OSS 私有曲库。 */
+    /**
+     * 已审核通过的用户歌曲的只读接口（列表 + 歌词）。
+     *
+     * <p>上传入口已下线：内容审核队列每 15 秒重扫一次待审记录，提交失败的记录会永远留在
+     * 队列里反复调用阿里云文本审核，一条卡住的记录一天就是约 5700 次付费调用。整条
+     * 审核链路连同上传接口一并移除，历史已通过的歌曲不受影响，继续可听。
+     */
     @Bean
     @ConditionalOnProperty(prefix = "vca.web", name = "music-oss-enabled", havingValue = "true")
     RouterFunction<ServerResponse> musicUploadRoute(
             OssMusicProvider ossMusicProvider,
             ObjectProvider<MusicUploadStore> uploads,
-            ObjectProvider<com.vca.orchestrator.auth.TokenAuthenticator> authenticator,
-            ObjectProvider<MusicModerationCoordinator> moderation) {
+            ObjectProvider<com.vca.orchestrator.auth.TokenAuthenticator> authenticator) {
         return MusicUploadRoute.create(
-                ossMusicProvider, uploads.getIfAvailable(), authenticator.getIfAvailable(),
-                moderation.getIfAvailable());
+                ossMusicProvider, uploads.getIfAvailable(), authenticator.getIfAvailable());
     }
 
     @Bean

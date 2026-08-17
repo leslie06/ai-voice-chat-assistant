@@ -220,22 +220,26 @@ QQ 音乐**没有面向第三方的合法播放 API/SDK**，会员权益只在�
 | `VCA_MUSIC_OSS_ACCESS_KEY_ID/SECRET` | 复用 `VCA_OSS_ACCESS_KEY_*` | RAM 凭据，仅保存在服务器 |
 | `VCA_MUSIC_OSS_PREFIX` | `music` | 音乐对象前缀 |
 | `VCA_MUSIC_OSS_URL_MINUTES` | `120` | 临时播放 URL 有效期（分钟） |
-| `VCA_MUSIC_MODERATION_ENABLED` | `false` | 用户上传歌曲安全审核；未启用时上传入口拒绝接收文件 |
-| `VCA_MUSIC_MODERATION_ENDPOINT` | `green-cip.cn-beijing.aliyuncs.com` | 阿里云内容安全公网 endpoint |
-| `VCA_MUSIC_MODERATION_REGION` | `cn-beijing` | 内容安全及音乐 OSS 所在地域 |
-| `VCA_MUSIC_MODERATION_ACCESS_KEY_ID/SECRET` | 空 | 有内容安全调用权限的 RAM 凭据 |
-| `VCA_MUSIC_MODERATION_TEXT_SERVICE` | `nickname_detection` | 歌名、歌手文本审核服务 |
-| `VCA_MUSIC_MODERATION_AUDIO_SERVICE` | `audio_media_detection` | OSS 整段音频审核服务 |
 
 OSS 可保持私有读。后端使用 RAM 凭据列出 `music/` 下的对象，命中歌曲后生成短期 GET
 签名 URL，浏览器直接从 OSS 播放，音频流量不经过应用服务器。RAM 策略至少需要目标前缀的
 `oss:ListObjects` 与 `oss:GetObject` 权限。
 
-用户上传文件保存在 `music/users/{userId}/{uploadId}/`（当 OSS 前缀为空时从 `users/` 开始）。
-记录先进入 `pending/reviewing`，歌名/歌手文本和整段音频都通过后才变为 `approved` 并进入公共
-曲库；命中色情、涉政、暴恐标签或音频为中/高风险时变为 `rejected`。审核服务暂时失败时任务
-保持非公开并由后台自动重试。启用前需在阿里云开通内容安全 2.0、给 RAM 用户内容安全调用权限，
-并完成“内容安全读取当前 OSS Bucket”的云资源授权。
+### 用户上传歌曲（已下线）
+
+网页上传入口、`POST /api/music/uploads` 接口和阿里云内容审核队列已全部移除。
+
+原因：审核队列每 15 秒重扫一次 `pending/reviewing` 记录，而记录只有在**文本审核与音频提交
+双双成功**后才会写回 `audio_task_id`。一旦音频提交持续失败（凭据、地域、云资源授权任一不
+对），记录就永远留在队列里，每一轮都重新调用一次**按次计费**的阿里云文本审核 —— 单条卡住
+的记录一天约 5700 次调用，且没有重试上限、退避或终态可以打断它。
+
+历史上已 `approved` 的歌曲仍保存在 `music/users/{userId}/{uploadId}/`，通过
+`/api/music/catalog` 正常进入公共曲库并可播放；`GET /api/music/uploads` 与
+`/api/music/uploads/lyrics` 两个只读接口保留。
+
+若日后要恢复上传，必须先补上：文本审核结果独立落库（复用 `text_labels` 列，别和音频提交
+绑定在一次事务里）、失败计数 + 指数退避、超限后落到终态 `review_error`。
 
 **命名建议**：`歌手 - 歌名.mp3`（短横线两边带空格），卡片能正确拆出「歌手 / 歌名」。
 歌词使用同目录、同名的 `.lrc`。曲库清单默认缓存 5 分钟；上传新文件后等待缓存刷新，或重启服务立即刷新。

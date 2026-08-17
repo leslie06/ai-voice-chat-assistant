@@ -36,7 +36,6 @@
 		<spring-boot.version>4.0.6</spring-boot.version>
 		<dashscope.version>2.22.18</dashscope.version>
 		<aliyun-oss.version>3.18.5</aliyun-oss.version>
-		<aliyun-green.version>3.3.3</aliyun-green.version>
 		<onnxruntime.version>1.20.0</onnxruntime.version>
 	</properties>
 
@@ -123,11 +122,6 @@
 				<groupId>com.aliyun.oss</groupId>
 				<artifactId>aliyun-sdk-oss</artifactId>
 				<version>${aliyun-oss.version}</version>
-			</dependency>
-			<dependency>
-				<groupId>com.aliyun</groupId>
-				<artifactId>green20220302</artifactId>
-				<version>${aliyun-green.version}</version>
 			</dependency>
 
 			<!-- ONNX Runtime: 跑 Silero VAD 这类轻量语音活动检测模型(替代能量阈值法) -->
