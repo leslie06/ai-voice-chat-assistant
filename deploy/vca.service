@@ -30,6 +30,8 @@ WantedBy=multi-user.target
 # ---- /etc/vca.env 示例（自行创建，权限 600）----
 # SPRING_PROFILES_ACTIVE=real
 # SERVER_PORT=8080
+# VCA_LOG_LEVEL=INFO        # 生产必设：DEBUG 的日志量长期累积会把磁盘写满
+# 另建议限制 journald 占用：/etc/systemd/journald.conf 里设 SystemMaxUse=500M
 # DASHSCOPE_API_KEY=sk-你的阿里云key
 # DEEPSEEK_ENABLED=true
 # DEEPSEEK_API_KEY=sk-你的deepseek-key

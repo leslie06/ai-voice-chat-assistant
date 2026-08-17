@@ -19,7 +19,10 @@ spring:
 
 logging:
   level:
-    com.vca: DEBUG
+    # 本地开发默认 DEBUG(排障方便); 生产务必设 VCA_LOG_LEVEL=INFO ——
+    # DEBUG 下每轮对话会打大量细节, journald 长期累积能吃掉几十 GB, 把磁盘写满。
+    # 磁盘一满, 故障会以各种看似无关的形式出现(数据库起不来、查询挂起), 极难往这上面联想。
+    com.vca: ${VCA_LOG_LEVEL:DEBUG}
 
 # 可观测性: 健康检查 + 指标。注意这些 HTTP 端点当前无鉴权, 公网部署建议用反向代理限制 /actuator。
 management:
