@@ -131,7 +131,17 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         if (authenticator != null) {
             userId = authenticator.authenticate(token);
             if (userId == null) {
-                log.warn("WS 用户令牌无效, 拒绝连接: {}", session.getId());
+                // 分开记: 这两种情况一个是常态、一个是事故, 混成同一条 WARN 会让真问题淹没在噪音里。
+                if (token == null || token.isBlank()) {
+                    // 未登录的访客打开页面, 前端照样会发起 WS 连接(只是不带 token) —— 正常拒绝, 不是故障
+                    log.debug("WS 未带登录令牌(访客未登录), 拒绝连接: {}", session.getId());
+                } else {
+                    // 令牌本身在, 但签名对不上。因为令牌不带过期时间(见 TokenUtil), 已登录用户
+                    // 突然大面积出现这条, 基本只有一个原因: vca.store.token-secret 变了(常见于
+                    // 部署时环境变量丢失, 回落到默认密钥), 此前签发的令牌全部作废。
+                    log.warn("WS 登录令牌签名不匹配, 拒绝连接: {} —— 若大量出现, 先查 vca.store.token-secret 是否变更",
+                            session.getId());
+                }
                 return session.close(CloseStatus.POLICY_VIOLATION.withReason("invalid token"));
             }
         } else if (!authToken.isEmpty() && !authToken.equals(token)) {
