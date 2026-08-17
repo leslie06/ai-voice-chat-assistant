@@ -184,6 +184,11 @@ vca:
     username: ${VCA_STORE_USERNAME:root}
     password: ${VCA_STORE_PASSWORD:}
     queue-capacity: ${VCA_STORE_QUEUE_CAPACITY:1000}
+    # 连接池上限。这个池不只服务后台落库 —— 账号鉴权、会话历史、向量记忆、RAG、音乐目录都用它,
+    # 而 WS 并发上限是 8; 太小会在几个用户同时聊天时打满, 报错却出现在登录等看似无关的地方。
+    max-pool-size: ${VCA_STORE_MAX_POOL_SIZE:16}
+    # 连接借出超过这么久未归还就打印借用方调用栈(排查连接泄漏用); 0=关闭。
+    leak-detection-ms: ${VCA_STORE_LEAK_DETECTION_MS:20000}
     # OSS 录音（用户/客服原始双轨 + 按回合排列的 conversation.wav），不落服务器磁盘。
     audio-recording-enabled: ${VCA_AUDIO_RECORDING_ENABLED:false}
     audio-recording-queue-capacity: ${VCA_AUDIO_RECORDING_QUEUE_CAPACITY:2048}

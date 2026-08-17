@@ -80,8 +80,16 @@ public class StoreAutoConfiguration {
             cfg.setDriverClassName(props.getDriverClassName());
         }
         cfg.setPoolName("vca-store");
-        cfg.setMaximumPoolSize(4);   // 落库是低频后台写, 小池足够
+        // 池大小可配。别再按"只有后台落库"来估 —— 账号鉴权、会话历史、向量记忆、RAG、音乐目录
+        // 都共用这个池, 打满时的报错会出现在离根因很远的地方(例如登录失败), 极难定位。
+        cfg.setMaximumPoolSize(props.getMaxPoolSize());
+        if (props.getLeakDetectionMs() > 0) {
+            // 借出超时未还就打印借用方调用栈 —— 查"连接被谁占着"唯一有效的手段, 只告警不影响业务
+            cfg.setLeakDetectionThreshold(props.getLeakDetectionMs());
+        }
         HikariDataSource ds = new HikariDataSource(cfg);
+        log.info("对话落库连接池: maxPoolSize={}, 泄漏告警阈值={}ms",
+                props.getMaxPoolSize(), props.getLeakDetectionMs());
 
         DatabasePopulatorUtils.execute(
                 new ResourceDatabasePopulator(new ClassPathResource("com/vca/store/schema.sql")), ds);

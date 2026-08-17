@@ -27,6 +27,24 @@ public class StoreProperties {
     /** 异步落库队列容量。满了丢最旧, 保护语音热路径。 */
     private int queueCapacity = 1000;
 
+    /**
+     * 数据库连接池上限。
+     *
+     * <p>早先写死为 4, 理由是"落库是低频后台写"。<b>这个前提已经不成立</b>: 同一个池现在还要服务
+     * 账号、会话历史、向量记忆、RAG 知识库、音乐目录、录音元数据, 而 WS 并发上限是 8 ——
+     * 几个用户同时聊天就能把 4 个连接占满, 后续请求排队 30 秒后超时。
+     * 池打满时的报错(如登录、鉴权)往往出现在离根因很远的地方, 很难查, 所以宁可留足。
+     */
+    private int maxPoolSize = 16;
+
+    /**
+     * 连接借出多久未归还就打印泄漏告警(ms); 0=关闭。
+     *
+     * <p>这是排查"连接被谁占着"的唯一有效手段 —— 触发时 HikariCP 会打出借用方的完整调用栈。
+     * 只告警不影响业务, 生产也可以常开。
+     */
+    private long leakDetectionMs = 20_000;
+
     /** 是否录制登录用户的语音通话；默认关闭，部署时需在取得用户同意后显式开启。 */
     private boolean audioRecordingEnabled = false;
 
@@ -124,6 +142,22 @@ public class StoreProperties {
 
     public int getQueueCapacity() {
         return queueCapacity;
+    }
+
+    public int getMaxPoolSize() {
+        return maxPoolSize;
+    }
+
+    public void setMaxPoolSize(int maxPoolSize) {
+        this.maxPoolSize = maxPoolSize;
+    }
+
+    public long getLeakDetectionMs() {
+        return leakDetectionMs;
+    }
+
+    public void setLeakDetectionMs(long leakDetectionMs) {
+        this.leakDetectionMs = leakDetectionMs;
     }
 
     public void setQueueCapacity(int queueCapacity) {
