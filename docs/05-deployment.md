@@ -167,7 +167,11 @@ bash /root/setup-ubuntu.sh 你的域名.com
 
 ### 6.3 服务器：填密钥并重启
 
+完整模板见 **`deploy/vca.env.example`**——除了密钥占位符，还写了并发、连接池、
+VAD 打断阈值这些调优项的**取值依据**（尤其打断阈值，凭感觉调很容易调到彻底失效）。
+
 ```bash
+cp deploy/vca.env.example /etc/vca.env && chmod 600 /etc/vca.env
 nano /etc/vca.env
 ```
 ```ini
