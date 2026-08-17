@@ -83,20 +83,24 @@ public class StoreAutoConfiguration {
         // 池大小可配。别再按"只有后台落库"来估 —— 账号鉴权、会话历史、向量记忆、RAG、音乐目录
         // 都共用这个池, 打满时的报错会出现在离根因很远的地方(例如登录失败), 极难定位。
         cfg.setMaximumPoolSize(props.getMaxPoolSize());
-        if (props.getLeakDetectionMs() > 0) {
-            // 借出超时未还就打印借用方调用栈 —— 查"连接被谁占着"唯一有效的手段, 只告警不影响业务
-            cfg.setLeakDetectionThreshold(props.getLeakDetectionMs());
-        }
+        // 泄漏检测<b>刻意不在这里开</b>, 理由见下方 DDL 之后。
         HikariDataSource ds = new HikariDataSource(cfg);
-        log.info("对话落库连接池: maxPoolSize={}, 泄漏告警阈值={}ms",
-                props.getMaxPoolSize(), props.getLeakDetectionMs());
 
         DatabasePopulatorUtils.execute(
                 new ResourceDatabasePopulator(new ClassPathResource("com/vca/store/schema.sql")), ds);
         // 轻量迁移: CREATE TABLE IF NOT EXISTS 不会给已存在的表补新列, 故对升级后新增的列做幂等补齐
         // (MySQL 不支持 ADD COLUMN IF NOT EXISTS, 用 information_schema 判存在再 ALTER)。
         migrate(ds);
-        log.info("对话落库已启用(数据飞轮, MySQL+MyBatis-Plus): url={}", props.getUrl());
+
+        // 建表与补列跑完之后再开泄漏检测。这段 DDL 在 main 线程上一口气占着同一个连接跑完,
+        // 本来就可能超过阈值(实测整个启动约 20s), 在建池时就开会让<b>每次启动都刷一条假的
+        // "Apparent connection leak"</b> —— 假警报一多, 真出现泄漏时就没人当回事了。
+        if (props.getLeakDetectionMs() > 0) {
+            // 借出超时未还即打印借用方调用栈 —— 查"连接被谁占着"唯一有效的手段, 只告警不影响业务
+            ds.setLeakDetectionThreshold(props.getLeakDetectionMs());
+        }
+        log.info("对话落库已启用(数据飞轮, MySQL+MyBatis-Plus): url={}, maxPoolSize={}, 泄漏告警阈值={}ms",
+                props.getUrl(), props.getMaxPoolSize(), props.getLeakDetectionMs());
         return ds;
     }
 
