@@ -218,24 +218,37 @@ FreeSWITCH ──WebSocket(L16 8k)──▶ /ws/call ──▶ CallSession ─�
 ```yaml
 vca:
   telephony:
-    enabled: false
-    media-path: /ws/call          # FreeSWITCH 推流目标
-    sample-rate: 8000
-    pacing-ms: 20                 # 下行节流粒度
-    max-call-seconds: 300
-    max-concurrent-calls: 50
-    esl:
-      host: 127.0.0.1
-      port: 8021
-      password: ***
-    cpa:
-      ignore-early-media: true
-      ringback-detect-ms: 6000    # 连续有声超过此值判彩铃
-    vad:                          # 电话专用阈值, 与浏览器分开
+    enabled: ${VCA_TELEPHONY_ENABLED:false}
+    port: 9092                    # AudioSocket 监听端口, Asterisk 连过来
+    sample-rate: 8000             # 电话网窄带; 高清语音线路可能是 16000
+    swap-payload-bytes: false     # 听到刺耳噪声而非人声时设 true
+    max-call-seconds: 300         # 单通上限, 到点主动挂机
+    greeting: 您好，这边是贷款咨询…  # 启动预合成, 接通瞬间出声
+    greeting-barge-in: true
+    tts-voice: ''                 # 留空 = 用 gateway 候选的音色(别写死)
+    api-token: ${VCA_TELEPHONY_API_TOKEN:}   # 留空 = 不注册外呼端点
+    vad:                          # 电话专用阈值, 与 vca.web.vad 分开
       speech-threshold: 0.02
       silence-ms: 700
       barge-threshold: 0.025
+      barge-ms: 250
+      barge-grace-ms: 200
+    ami:                          # 外呼所需; 不开只能接呼入
+      enabled: false
+      host: 127.0.0.1
+      port: 5038
+      username: ***
+      secret: ***
+      trunk: trunk-cmcc           # SIP 中继名, 拨号串 = PJSIP/<号码>@<trunk>
+      context: ai-agent
+      ring-timeout-ms: 30000
+      answer-wait-ms: 45000
 ```
+
+完整项与默认值以 `TelephonyProperties` 和 `vca-bootstrap/src/main/resources/application.yml` 为准。
+
+> ⚠️ **还没有并发路数上限。** 早先这里写过 `max-concurrent-calls: 50`，但那只是方案阶段的设想，
+> **代码里并不存在这个配置**。批量外呼之前必须补上，否则名单一灌就会同时打爆内存和中继。
 
 ---
 
@@ -371,7 +384,7 @@ exten => s,1,NoOp(外呼接通: ${CALLUUID})
 | 8k 下 ASR 识别率下降 | 用真实通话录音评测，必要时换电话专用 ASR 模型（各家都有 8k 电话模型，别用通用模型） |
 | Silero VAD 在窄带上误判 | 先修线性插值升采样；仍不行则电话路径回退 `EnergyVad` + 调阈值 |
 | 打断在高延迟线路上迟钝 | 端到端延迟预算要单独测：线路 RTT + VAD 判决 + 取消上游，目标 < 500ms |
-| 并发上不去 | 治理态外置 Redis（Phase 3）；先用 `max-concurrent-calls` 硬限保命 |
+| 并发上不去 | 治理态外置 Redis（Phase 3）。**并发路数上限尚未实现**，批量外呼前必须先补 |
 
 ---
 

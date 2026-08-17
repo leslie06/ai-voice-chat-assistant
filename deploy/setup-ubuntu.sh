@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ubuntu/Debian 一键安装 JDK17 + Caddy，并把 VCA 装成 systemd 服务。
 # 用法（服务器上，root 执行）：
-#   1) 已把 app.jar 放到 /opt/vca/app.jar
+#   1) 已把 jar 放到 /opt/vca/vca.jar
 #   2) 已把 Caddyfile 放到 /etc/caddy/Caddyfile（并改好域名）
 #   3) bash setup-ubuntu.sh
 set -euo pipefail

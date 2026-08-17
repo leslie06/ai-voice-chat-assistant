@@ -15,7 +15,7 @@ cloudflared tunnel --url http://localhost:8080      # 或 ngrok http 8080
 ### B1. 裸机 + systemd + Caddy
 ```bash
 # 服务器上：装 JDK17 + Caddy；放行安全组 80/443
-scp vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar  user@server:/opt/vca/app.jar
+scp vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar  user@server:/opt/vca/vca.jar
 # 写 /etc/vca.env（见 vca.service 注释），然后：
 sudo cp deploy/vca.service /etc/systemd/system/ && sudo systemctl enable --now vca
 # 改 Caddyfile 的域名后：

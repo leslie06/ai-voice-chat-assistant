@@ -9,6 +9,6 @@ RUN ./mvnw -pl vca-bootstrap -am package -DskipTests -q
 
 FROM eclipse-temurin:17-jre
 WORKDIR /app
-COPY --from=build /src/vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar app.jar
+COPY --from=build /src/vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar vca.jar
 EXPOSE 8080
-ENTRYPOINT ["java","-Duser.timezone=Asia/Shanghai","-jar","/app/app.jar"]
+ENTRYPOINT ["java","-Duser.timezone=Asia/Shanghai","-jar","/app/vca.jar"]

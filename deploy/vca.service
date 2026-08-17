@@ -1,6 +1,6 @@
 # systemd 服务单元：让 VCA 在服务器上常驻、开机自启、崩溃自动重启
 # 安装：
-#   1) 把 jar 放到 /opt/vca/app.jar
+#   1) 把 jar 放到 /opt/vca/vca.jar
 #   2) 把真实 key 写进 /etc/vca.env（见下方 EnvironmentFile 示例）
 #   3) sudo cp deploy/vca.service /etc/systemd/system/vca.service
 #   4) sudo systemctl daemon-reload && sudo systemctl enable --now vca
@@ -16,8 +16,10 @@ Type=simple
 User=vca
 WorkingDirectory=/opt/vca
 EnvironmentFile=/etc/vca.env
-# 2核2G 服务器：堆控制在 512m，给 OS/Caddy/Netty直接内存 留余量
-ExecStart=/usr/bin/java -Xms256m -Xmx512m -XX:MaxDirectMemorySize=128m -Duser.timezone=Asia/Shanghai -jar /opt/vca/app.jar
+# 2核4G 服务器：堆 1g，给 OS/Caddy/Netty直接内存 留余量。
+# 内存只有 2G 时改回 -Xms256m -Xmx512m -XX:MaxDirectMemorySize=128m。
+# 注意：并发通话每路都要占内存（下行节流缓冲最多 480KB/路 + VAD 状态），跑电话外呼时别用最小值。
+ExecStart=/usr/bin/java -Xms512m -Xmx1g -XX:MaxDirectMemorySize=256m -Duser.timezone=Asia/Shanghai -jar /opt/vca/vca.jar
 SuccessExitStatus=143
 Restart=on-failure
 RestartSec=3

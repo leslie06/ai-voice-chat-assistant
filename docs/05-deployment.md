@@ -123,7 +123,7 @@ upstream vca_backend {
 | 文件 | 用途 |
 |------|------|
 | `deploy/setup-ubuntu.sh` | Ubuntu/Debian 一键脚本：建 swap、装 JDK17、装 Caddy、建运行用户、装 systemd 服务、配自动 HTTPS |
-| `deploy/vca.service` | systemd 单元（已按 2 核 2G 调好 JVM 堆）|
+| `deploy/vca.service` | systemd 单元（默认按 2 核 4G 配 JVM 堆；2G 机器按文件内注释调小）|
 | `deploy/Caddyfile` | Caddy 反代模板（自动 TLS + 自动支持 WebSocket）|
 | `deploy/README.md` | 公网部署速查 |
 
@@ -152,7 +152,7 @@ upstream vca_backend {
 ./mvnw -pl vca-bootstrap -am package -DskipTests
 
 ssh root@你的IP "mkdir -p /opt/vca"
-scp vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar root@你的IP:/opt/vca/app.jar
+scp vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar root@你的IP:/opt/vca/vca.jar
 scp deploy/vca.service deploy/setup-ubuntu.sh           root@你的IP:/root/
 ```
 
@@ -194,19 +194,23 @@ curl -I https://你的域名.com  # 200
 ```
 手机浏览器打开 `https://你的域名.com` → 「🔊 开启声音」→「💬 免提对话」。
 
-### 6.5 针对 2 核 2G 的调优（已内置）
+### 6.5 小内存机器的调优
 
-- `deploy/vca.service` 已设 `-Xms256m -Xmx512m -XX:MaxDirectMemorySize=128m`，给系统/Caddy/Netty 直接内存留余量；
+- `deploy/vca.service` 默认 `-Xms512m -Xmx1g -XX:MaxDirectMemorySize=256m`（按 **2 核 4G** 配）；
+  **2G 机器**改成 `-Xms256m -Xmx512m -XX:MaxDirectMemorySize=128m`，给系统/Caddy/Netty 直接内存留余量；
 - 脚本自动创建 **2G swap** 兜底；
-- 若日志出现 `OutOfMemoryError` 或进程被 kill：把 `-Xmx512m` 降到 `-Xmx384m`，`systemctl daemon-reload && systemctl restart vca`。
-- 连接本身很轻，2 核 2G 跑十几路并发的瓶颈是**带宽**而非内存/CPU。
+- 若日志出现 `OutOfMemoryError` 或进程被 kill：把 `-Xmx` 再降一档，`systemctl daemon-reload && systemctl restart vca`；
+- 浏览器连接本身很轻，跑十几路并发的瓶颈是**带宽**而非内存/CPU；
+- **但电话外呼不同**：每路通话要额外占内存（下行节流缓冲最多 480KB/路，加 VAD 状态与 Reactor 缓冲），
+  别指望 512m 堆扛几十路。⚠️ **当前代码还没有并发路数上限**（见 `docs/10` 的待办），
+  批量外呼前必须先补上，否则名单一灌就会把内存和中继一起打爆。
 
 ### 6.6 更新版本（重新发布）
 
 ```bash
 # 本机
 ./mvnw -pl vca-bootstrap -am package -DskipTests
-scp vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar root@你的IP:/opt/vca/app.jar
+scp vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar root@你的IP:/opt/vca/vca.jar
 # 服务器
 systemctl restart vca
 # 手机端强制刷新（Cmd/Ctrl+Shift+R）避免缓存旧页面（徽标应为 界面 v4）
@@ -227,9 +231,9 @@ systemctl restart vca
 ```dockerfile
 FROM eclipse-temurin:17-jre
 WORKDIR /app
-COPY vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar app.jar
+COPY vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar vca.jar
 EXPOSE 8080
-ENTRYPOINT ["java","-jar","/app/app.jar"]
+ENTRYPOINT ["java","-jar","/app/vca.jar"]
 ```
 ```bash
 docker build -t vca:latest .
