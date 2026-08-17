@@ -45,6 +45,19 @@ public class StoreProperties {
      */
     private long leakDetectionMs = 20_000;
 
+    /**
+     * 等待表元数据锁的上限(秒), 0=不设置(沿用服务器默认)。
+     *
+     * <p><b>MySQL 的 {@code lock_wait_timeout} 默认是 31536000 秒 —— 365 天。</b> 启动时的
+     * {@code ALTER TABLE} 只要撞上别的连接握着这张表的锁(旧进程没退干净、某个开着事务没提交的
+     * 客户端会话), 就会一直等下去: 服务卡在启动中途, 日志停在 "Start completed" 之后再无一行,
+     * 既不报错也不退出, 极难判断发生了什么。
+     *
+     * <p>设一个短上限后, 同样的情况会在几秒内以 "Lock wait timeout exceeded" 失败, 启动明确报错 ——
+     * <b>宁可启动失败并说清原因, 也不要无声挂死。</b>
+     */
+    private int lockWaitTimeoutSeconds = 15;
+
     /** 是否录制登录用户的语音通话；默认关闭，部署时需在取得用户同意后显式开启。 */
     private boolean audioRecordingEnabled = false;
 
@@ -150,6 +163,14 @@ public class StoreProperties {
 
     public void setMaxPoolSize(int maxPoolSize) {
         this.maxPoolSize = maxPoolSize;
+    }
+
+    public int getLockWaitTimeoutSeconds() {
+        return lockWaitTimeoutSeconds;
+    }
+
+    public void setLockWaitTimeoutSeconds(int lockWaitTimeoutSeconds) {
+        this.lockWaitTimeoutSeconds = lockWaitTimeoutSeconds;
     }
 
     public long getLeakDetectionMs() {

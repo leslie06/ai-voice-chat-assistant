@@ -83,14 +83,30 @@ public class StoreAutoConfiguration {
         // 池大小可配。别再按"只有后台落库"来估 —— 账号鉴权、会话历史、向量记忆、RAG、音乐目录
         // 都共用这个池, 打满时的报错会出现在离根因很远的地方(例如登录失败), 极难定位。
         cfg.setMaximumPoolSize(props.getMaxPoolSize());
+        // 元数据锁等待上限。MySQL 的 lock_wait_timeout 默认 31536000 秒(365 天), 启动时的
+        // ALTER TABLE 一旦撞上别人握着的表锁就会无限等待 —— 服务卡在启动中途, 日志停在
+        // "Start completed" 之后再无一行, 既不报错也不退出。设成秒级后同样的情况会明确失败。
+        if (props.getLockWaitTimeoutSeconds() > 0) {
+            cfg.setConnectionInitSql("SET SESSION lock_wait_timeout = " + props.getLockWaitTimeoutSeconds());
+        }
         // 泄漏检测<b>刻意不在这里开</b>, 理由见下方 DDL 之后。
         HikariDataSource ds = new HikariDataSource(cfg);
 
-        DatabasePopulatorUtils.execute(
-                new ResourceDatabasePopulator(new ClassPathResource("com/vca/store/schema.sql")), ds);
-        // 轻量迁移: CREATE TABLE IF NOT EXISTS 不会给已存在的表补新列, 故对升级后新增的列做幂等补齐
-        // (MySQL 不支持 ADD COLUMN IF NOT EXISTS, 用 information_schema 判存在再 ALTER)。
-        migrate(ds);
+        try {
+            DatabasePopulatorUtils.execute(
+                    new ResourceDatabasePopulator(new ClassPathResource("com/vca/store/schema.sql")), ds);
+            // 轻量迁移: CREATE TABLE IF NOT EXISTS 不会给已存在的表补新列, 故对升级后新增的列做幂等补齐
+            // (MySQL 不支持 ADD COLUMN IF NOT EXISTS, 用 information_schema 判存在再 ALTER)。
+            migrate(ds);
+        } catch (RuntimeException e) {
+            ds.close();
+            throw new IllegalStateException(
+                    "对话落库建表/迁移失败: " + e.getMessage()
+                            + " —— 若是 'Lock wait timeout exceeded', 说明有别的连接握着表的元数据锁"
+                            + "(常见于旧进程没退干净, 或某个客户端会话开着事务没提交)。"
+                            + "用 SHOW FULL PROCESSLIST 找到并 KILL 掉那个连接; "
+                            + "临时绕过可设 vca.store.enabled=false 先让服务起来。", e);
+        }
 
         // 建表与补列跑完之后再开泄漏检测。这段 DDL 在 main 线程上一口气占着同一个连接跑完,
         // 本来就可能超过阈值(实测整个启动约 20s), 在建池时就开会让<b>每次启动都刷一条假的
