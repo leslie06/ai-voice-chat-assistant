@@ -41,13 +41,21 @@ public class ConversationService {
         return c;
     }
 
-    /** 删除会话(及其消息); 不属于该用户则返回 false。 */
+    /**
+     * 删除会话; 不属于该用户则返回 false。
+     *
+     * <p><b>逻辑删除</b>: 只把 {@code deleted} 置 1(见 {@link ChatConversation#getDeleted()}),
+     * 行还在库里。用户侧的效果与真删一致 —— 所有读取路径都经 {@link #owned} 的 selectById,
+     * 而 MyBatis-Plus 会自动给它加上 {@code deleted = 0}。
+     *
+     * <p>消息<b>刻意不删</b>: 它们只能通过会话访问, 会话既已不可见, 消息自然也取不到;
+     * 留着才能在误删时连同内容一起恢复 —— 只删会话行、把消息清空, 恢复出来的会是个空壳。
+     */
     public boolean delete(long userId, long convId) {
         ChatConversation c = owned(userId, convId);
         if (c == null) {
             return false;
         }
-        messages.delete(Wrappers.<ChatMessage>query().eq("conversation_id", convId));
         conversations.deleteById(convId);
         return true;
     }

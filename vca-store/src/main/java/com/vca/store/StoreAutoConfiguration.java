@@ -126,6 +126,9 @@ public class StoreAutoConfiguration {
         // 多步 Agent 指标(P3): 给已存在的 conversation_turn 补列
         addColumnIfMissing(ds, "conversation_turn", "agent_steps", "INT NULL");
         addColumnIfMissing(ds, "conversation_turn", "agent_replans", "INT NULL");
+        // 会话逻辑删除: 老库补列。默认 0, 已有会话全部视为未删除。
+        addColumnIfMissing(ds, "chat_conversation", "deleted",
+                "TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除 0正常 1已删'");
         addColumnIfMissing(ds, "app_user", "register_ip", "VARCHAR(45) NULL COMMENT '注册 IP'");
         addColumnIfMissing(ds, "app_user", "last_login_at",
                 "DATETIME NULL COMMENT '最近一次成功登录时间'");

@@ -39,8 +39,10 @@ CREATE TABLE IF NOT EXISTS chat_conversation (
     title      VARCHAR(255),
     created_at DATETIME     NOT NULL,
     updated_at DATETIME     NOT NULL,
+    -- 逻辑删除: 0=正常 1=已删。删除只置位不删行, 误删可恢复(消息也一并保留)。
+    deleted    TINYINT      NOT NULL DEFAULT 0,
     PRIMARY KEY (id),
-    KEY idx_conv_user (user_id, updated_at)
+    KEY idx_conv_user (user_id, deleted, updated_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户会话';
 
 -- 会话内的消息(展示用)。role: user | bot | music。
