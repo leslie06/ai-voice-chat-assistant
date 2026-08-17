@@ -1487,9 +1487,41 @@ setInterval(()=>{
   if(!tr||tr.readyState==='ended'||tr.muted){ D.last='麦克风掉线,自动重连'; paint(); reacquireMic(); return; }
   if(Date.now()-lastMicAudioTs>4000){ D.last='麦克风无声,自动重连'; paint(); reacquireMic(); }
 }, 1000);
-// 切回前台时恢复 AudioContext(后台常被挂起导致采集停摆)
-document.addEventListener('visibilitychange',()=>{ if(!document.hidden&&audioCtx){ if(audioCtx.resume)audioCtx.resume();
-  if(streaming) lastMicAudioTs=Date.now(); } });
+/* ---------- 手机上"锁屏/切页面就断"的对策 ----------
+   移动浏览器会在页面不可见时挂起页面: AudioContext 被 suspend、ScriptProcessor 不再回调、
+   定时器被限流、WebSocket 可能被回收。这是平台限制, 网页拿不到"后台持续录音"的能力
+   (那需要原生 App)。但两件事能救回来:
+     1) 屏幕熄灭 —— Wake Lock 让免提期间屏幕不灭, 这是最主要的场景;
+     2) 切走再切回 —— 回前台时主动把音频/麦克风/WebSocket 一次性拉起来, 而不是等各自的超时。 */
+// iPadOS 会把自己报成 Mac, 所以补一条 maxTouchPoints 判断
+function isMobile(){
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+      || (navigator.maxTouchPoints>1 && /Mac/i.test(navigator.platform||''));
+}
+let wakeLock=null;
+async function acquireWakeLock(){
+  if(!('wakeLock' in navigator)||wakeLock) return;
+  try{
+    wakeLock=await navigator.wakeLock.request('screen');
+    // 系统仍可能自行释放(切后台/低电量), 记下来以便回前台时重新申请
+    wakeLock.addEventListener('release',()=>{ wakeLock=null; });
+  }catch(e){ /* 不支持或被拒: 不影响功能, 只是屏幕会照常熄灭 */ }
+}
+function releaseWakeLock(){ try{ wakeLock&&wakeLock.release(); }catch(e){} wakeLock=null; }
+
+// 回到前台: 三条链路一起恢复。顺序无所谓, 但都要做 —— 只 resume 音频是不够的,
+// 麦克风音轨常已被系统回收(看门狗要 4 秒才发现), WebSocket 的 3 秒重连定时器在后台也被限流。
+async function resumeAfterForeground(){
+  if(audioCtx&&audioCtx.state==='suspended'){ try{ await audioCtx.resume(); }catch(e){} }
+  if(!streaming) return;
+  acquireWakeLock();                                   // 后台时会被系统释放, 回来要重申请
+  if(!ws||ws.readyState>1){ D.ws='重连中'; paint(); connect(); }   // 别等那 3 秒定时器
+  lastMicAudioTs=Date.now();
+  reacquireMic();                                      // 主动重连, 不等看门狗超时
+}
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) resumeAfterForeground(); });
+// iOS 从"切走"回来有时只触发 pageshow 不触发 visibilitychange
+window.addEventListener('pageshow',()=>{ if(!document.hidden) resumeAfterForeground(); });
 function announceMic(){ send({type:'mic',sampleRate:audioCtx.sampleRate}); }
 
 /* ---------- 按住说话 (PTT) ---------- */
@@ -1513,9 +1545,14 @@ hfBtn.onclick=async()=>{
     unlockMedia();   // 手势内解锁 <audio> 播放通道(iOS), 让语音点歌能自动出声
     try{ await ensureMic(); }catch(e){ addSys('⚠ 麦克风: '+e.message); return; }
     announceMic(); send({type:'mode',value:'handsfree'}); streaming=true;
-    hfBtn.classList.add('on'); talkBtn.disabled=true; addSys('— 免提已开启，直接说话即可 —');
+    acquireWakeLock();   // 免提期间不让屏幕熄灭(手机上一黑屏就采不到音了)
+    hfBtn.classList.add('on'); talkBtn.disabled=true;
+    addSys('— 免提已开启，直接说话即可 —');
+    // 手机上必须说清楚: 网页拿不到后台录音能力, 切走就会停。说明白了用户才不会以为是坏了。
+    if(isMobile()) addSys('📱 免提期间屏幕会保持常亮；切到别的 App 会暂停，切回来自动恢复');
   } else {
     streaming=false; send({type:'mode',value:'idle'}); hfBtn.classList.remove('on'); talkBtn.disabled=false;
+    releaseWakeLock();
     hint.textContent=''; addSys('— 免提已关闭 —');
   }
 };
