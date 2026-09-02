@@ -909,6 +909,8 @@ function playMusicAt(index, remember){
   fetchTrackLyrics(track);
   musicMini.hidden=false;
   musicPlayAttempt++;
+  updateMediaSession(track);   // 先换锁屏上的歌名/封面, 不等新歌缓冲出 metadata
+  mediaPosAt=0;
   musicPlayer.src=track.url;
   musicPlayer.play().catch(()=>{}); // 浏览器若拦截自动播放，用户仍可点原生播放按钮
   if(musicCatalogTracks.length) renderMusicLibrary();
@@ -928,10 +930,102 @@ function previousMusic(){
   const previous=musicHistory.length?musicHistory.pop():(musicIndex-1+musicTracks.length)%musicTracks.length;
   playMusicAt(previous,false);
 }
+
+/* ---------- 锁屏 / 通知栏媒体控制(Media Session) ----------
+   两个平台的毛病正好相反, 但都出在"没接这套 API"上:
+   · iOS 会自己从 <audio> 猜出正在播放, 所以锁屏能看到歌 —— 但上一首/下一首按钮只有注册了
+     previoustrack/nexttrack 处理器才会出现, 否则系统给的是 ±15 秒快进快退;
+   · Android(Chrome)则要有 metadata 才肯弹媒体通知, 光播 <audio> 不够。
+   metadata 只在真正开播时设(见 play 监听): 免提解锁用的那段静音也会触发 play 事件,
+   那时 musicIndex<0, 设了就会在锁屏上显示一张"未知歌曲"的空卡片。 */
+const hasMediaSession = 'mediaSession' in navigator && typeof window.MediaMetadata === 'function';
+let mediaPosAt = 0;   // setPositionState 节流用: timeupdate 每秒 4 次, 没必要跟着刷
+
+// 系统会按通知栏/锁屏的显示尺寸来挑图。封面通常只有一张(iTunes 或 OSS 的跨域地址),
+// 就把同一张按各档尺寸都报一遍, 交给系统缩放; 没封面时退回站内 logo, 免得显示成空白方块
+function mediaArtwork(track){
+  const src = (track && track.cover) ? track.cover : new URL('logo.png', location.href).href;
+  const type = /\.png(\?|$)/i.test(src) ? 'image/png' : 'image/jpeg';
+  return ['96x96','128x128','192x192','256x256','384x384','512x512']
+    .map(sizes => ({src, sizes, type}));
+}
+
+function updateMediaSession(track){
+  if(!hasMediaSession || !track) return;
+  try{
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: track.title || '未知歌曲',
+      artist: track.artist || '未知歌手',
+      album: track.full ? '完整播放' : '30秒试听',
+      artwork: mediaArtwork(track)
+    });
+  }catch(e){}
+  // 只有一首时摘掉切歌处理器, 系统就不会画出点了没反应的按钮(iOS 会换回 ±15 秒)
+  setMediaHandler('previoustrack', musicTracks.length>1 ? previousMusic : null);
+  setMediaHandler('nexttrack',     musicTracks.length>1 ? nextMusic     : null);
+}
+
+function setMediaHandler(action, fn){
+  if(!hasMediaSession) return;
+  // 老浏览器不认某个 action 会抛 TypeError, 逐个 try 保证不影响其余处理器
+  try{ navigator.mediaSession.setActionHandler(action, fn); }catch(e){}
+}
+
+function updateMediaPosition(force){
+  if(!hasMediaSession || !navigator.mediaSession.setPositionState) return;
+  const now = Date.now();
+  if(!force && now - mediaPosAt < 1000) return;
+  mediaPosAt = now;
+  const d = musicPlayer.duration;
+  if(!Number.isFinite(d) || d<=0) return;
+  try{
+    navigator.mediaSession.setPositionState({
+      duration: d,
+      playbackRate: musicPlayer.playbackRate || 1,
+      position: Math.min(Math.max(musicPlayer.currentTime||0, 0), d)
+    });
+  }catch(e){}
+}
+
+function setMediaPlaybackState(state){
+  if(!hasMediaSession) return;
+  try{ navigator.mediaSession.playbackState = state; }catch(e){}
+}
+
+function clearMediaSession(){
+  if(!hasMediaSession) return;
+  try{ navigator.mediaSession.metadata = null; }catch(e){}
+  setMediaPlaybackState('none');
+}
+
+// 播放/暂停/停止/拖动进度: 锁屏按钮直接驱动同一个 <audio>, 与页面内按钮走同一条路径
+setMediaHandler('play',  ()=>musicPlayer.play().catch(()=>{}));
+setMediaHandler('pause', ()=>musicPlayer.pause());
+setMediaHandler('stop',  ()=>closeMusicMini());
+setMediaHandler('seekto', d=>{
+  if(!d || !Number.isFinite(d.seekTime)) return;
+  if(d.fastSeek && musicPlayer.fastSeek){ musicPlayer.fastSeek(d.seekTime); }
+  else{ musicPlayer.currentTime = d.seekTime; }
+  updateMediaPosition(true);
+});
+setMediaHandler('seekbackward', d=>{
+  musicPlayer.currentTime = Math.max(0, musicPlayer.currentTime - ((d&&d.seekOffset)||10));
+  updateMediaPosition(true);
+});
+setMediaHandler('seekforward', d=>{
+  const end = Number.isFinite(musicPlayer.duration) ? musicPlayer.duration : Infinity;
+  musicPlayer.currentTime = Math.min(end, musicPlayer.currentTime + ((d&&d.seekOffset)||10));
+  updateMediaPosition(true);
+});
+
 musicPlayer.addEventListener('ended',nextMusic);
 musicPlayer.addEventListener('play',()=>{
   // 点击免提时会先播放一段静音来解锁移动端媒体权限，此时并没有选中歌曲。
-  if(musicIndex>=0) musicMini.hidden=false;
+  if(musicIndex>=0){
+    musicMini.hidden=false;
+    updateMediaSession(musicTracks[musicIndex]);   // 开播这一刻写 metadata, 锁屏才认
+    setMediaPlaybackState('playing');
+  }
   musicMiniToggle.innerHTML=MUSIC_PAUSE_ICON;
   if(musicCatalogTracks.length) renderMusicLibrary();
 });
@@ -948,6 +1042,7 @@ musicPlayer.addEventListener('playing',()=>{
 });
 musicPlayer.addEventListener('pause',()=>{
   musicMiniToggle.innerHTML=MUSIC_PLAY_ICON;
+  if(musicIndex>=0) setMediaPlaybackState('paused');   // 锁屏按钮跟着变回"播放"
   if(musicCatalogTracks.length) renderMusicLibrary();
 });
 function musicTime(value){
@@ -962,10 +1057,12 @@ function updateMusicProgress(){
   musicMiniSeek.value=Number.isFinite(duration)&&duration>0
     ? String(musicPlayer.currentTime/duration*100) : '0';
   updateLyrics(musicPlayer.currentTime||0);
+  updateMediaPosition(false);
 }
 musicPlayer.addEventListener('timeupdate',updateMusicProgress);
-musicPlayer.addEventListener('durationchange',updateMusicProgress);
-musicPlayer.addEventListener('loadedmetadata',updateMusicProgress);
+musicPlayer.addEventListener('durationchange',()=>{ updateMusicProgress(); updateMediaPosition(true); });
+musicPlayer.addEventListener('loadedmetadata',()=>{ updateMusicProgress(); updateMediaPosition(true); });
+musicPlayer.addEventListener('seeked',()=>updateMediaPosition(true));
 musicMiniSeek.addEventListener('input',()=>{
   if(Number.isFinite(musicPlayer.duration)&&musicPlayer.duration>0)
     musicPlayer.currentTime=Number(musicMiniSeek.value)/100*musicPlayer.duration;
@@ -980,6 +1077,7 @@ function openMusicPanel(){
 function closeMusicPanel(){ musicPanel.hidden=true; }
 function closeMusicMini(){
   musicPlayer.pause();
+  clearMediaSession();   // 收起播放器就撤掉锁屏卡片, 否则会留一张点不动的
   musicMini.hidden=true;
   closeInlineLyrics();
   closeFullLyrics();
