@@ -47,6 +47,7 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -57,6 +58,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -272,6 +274,59 @@ public class ConversationSession {
      * 据当前问题的时效性自动联网检索, 命中则拼成一条 system 注入本回合(否则返回 null)。
      * 自动注入式: 不依赖模型自调 web_search 工具, 凡命中时效启发式就直接搜并喂结果; 普通闲聊不触发, 不产生调用。
      */
+    /**
+     * 组装本回合喂给模型的<b>工作消息列表</b>: [当前时间] + [长期记忆] + [知识库 RAG] + [联网检索] + 历史快照。
+     * 时间/日期是廉价上下文, 直接给比靠模型调工具更可靠 —— 模型据此直接答对, 无需也无延迟。
+     *
+     * <p><b>为什么是异步的</b>: 记忆召回与知识库检索都要先发一次 embedding HTTP 再查库, 联网要发一次搜索
+     * HTTP —— 三者都是阻塞调用({@code Embedder} 的契约明写"只应在 boundedElastic / 后台 worker 上调用")。
+     * 此前它们在 {@code respond()} 里被<b>同步串行</b>调用, 而 respond 跑在订阅线程上(打字回合是 WebSocket
+     * 的 netty 事件循环, 语音回合是 ASR 回调线程), 于是有两个问题叠加:
+     * <ol>
+     *   <li><b>阻塞了事件循环</b>: 一次慢检索会连坐同一事件循环线程上的其它所有会话(它们的音频收发一起卡住);</li>
+     *   <li><b>三次网络往返串成一条</b>, 原样叠加进首字延迟 —— 这是语音助手最不该付的延迟。</li>
+     * </ol>
+     *
+     * <p>这里改成三路各自 {@code subscribeOn(boundedElastic)} <b>并行</b>发起, 只等最慢的一路;
+     * 注入顺序仍固定为 时间→记忆→知识库→联网, 模型看到的提示词结构不变。三路彼此独立, 任一路
+     * 返回 null(未启用/无命中/失败降级)即跳过, 与改造前语义完全一致。
+     *
+     * <p>没启用的那几路不做线程切换(就地跑, 立即返回 null), 避免为纯闲聊白付一次调度开销。
+     */
+    private Mono<List<Message>> assembleContext(String userText) {
+        boolean memBlocking = memory != MemoryStore.NOOP && userId != null;
+        boolean kbBlocking = knowledge != KnowledgeStore.NOOP && userId != null
+                && userText != null && !userText.isBlank();
+        boolean webBlocking = webSearchAuto && webSearch != WebSearchProvider.NOOP
+                && WebSearchHeuristic.isTimeSensitive(userText);
+
+        Mono<Optional<String>> mem = offload(memBlocking, () -> memoryContext(userText));
+        Mono<Optional<String>> kb = offload(kbBlocking, () -> knowledgeContext(userText));
+        Mono<Optional<String>> web = offload(webBlocking, () -> webSearchContext(userText));
+
+        return Mono.zip(mem, kb, web).map(ctx -> {
+            List<Message> working = new ArrayList<>();
+            working.add(Message.system(currentTimeContext()));
+            ctx.getT1().ifPresent(m -> working.add(Message.system(m)));   // 长期记忆: 让助手记得用户(跨会话)
+            ctx.getT2().ifPresent(m -> working.add(Message.system(m)));   // RAG: 自动检索知识库并注入
+            ctx.getT3().ifPresent(m -> working.add(Message.system(m)));   // 联网: 时效性问题自动检索并注入
+            working.addAll(historySnapshot());
+            return working;
+        });
+    }
+
+    /**
+     * 把一次可能阻塞的外部检索包成 Mono。{@code blocking=false}(该能力未启用)时就地执行 —— 此时被包的方法
+     * 只做几个判空就返回 null, 没有 IO, 不值得切线程。返回 null 统一映射成 {@code Optional.empty()}。
+     */
+    private static Mono<Optional<String>> offload(boolean blocking, Supplier<String> fetch) {
+        if (!blocking) {
+            return Mono.fromSupplier(() -> Optional.ofNullable(fetch.get()));
+        }
+        return Mono.fromCallable(() -> Optional.ofNullable(fetch.get()))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
     private String webSearchContext(String query) {
         if (!webSearchAuto || webSearch == WebSearchProvider.NOOP
                 || !WebSearchHeuristic.isTimeSensitive(query)) {
@@ -570,55 +625,40 @@ public class ConversationSession {
                 body = musicTurn(song.get(), speak, actionTurn);
             } else {
                 stateMachine.tryTransition(SessionState.THINKING);
-                // 工作消息列表 = [当前时间(每轮新鲜注入)] + 历史快照 + 本回合临时的工具调用/结果(都不进长期历史)。
-                // 时间/日期是廉价上下文, 直接给比靠模型调工具更可靠 —— 模型据此直接答对, 无需也无延迟。
-                List<Message> working = new ArrayList<>();
-                working.add(Message.system(currentTimeContext()));
-                String mem = memoryContext(userText);   // 用当轮问题做语义召回
-                if (mem != null) {
-                    working.add(Message.system(mem));   // 长期记忆: 让助手记得用户(跨会话)
-                }
-                String kb = knowledgeContext(userText);   // RAG: 自动检索知识库并注入(不依赖模型自调工具)
-                if (kb != null) {
-                    working.add(Message.system(kb));
-                }
-                String web = webSearchContext(userText);   // 联网: 时效性问题自动检索并注入
-                if (web != null) {
-                    working.add(Message.system(web));
-                }
-                working.addAll(historySnapshot());
-                // 视觉多模态: 只要上下文窗口内还有图片(本轮新图或此前几轮的图, 支持追问), 本轮就切视觉模型;
-                // 图片随历史滑窗滑出后自然回到普通文本模型。
-                boolean vision = working.stream().anyMatch(Message::hasImage);
-                LlmConfig turnCfg = llmConfigFor(vision);
-                if (vision) {
-                    log.info("带图回合: 改用视觉模型 vendor={}, model={}, session={}",
-                            turnCfg == null ? "-" : turnCfg.vendor(),
-                            turnCfg == null ? "-" : turnCfg.model(), context.sessionId());
-                }
-                // 多步 Agent: 命中复杂任务先让模型出一份分步计划, 再逐步执行(步骤间口播进度)+反思补步+整合答复;
-                // 未开启/未命中/规划为空都按原路直接进 runLlmRound(零额外延迟)。带图回合不走 Agent
-                // (规划/反思用的常规模型读不了图, 视觉多步任务留作后续)。
-                if (!vision && agentEnabled && !skills.isEmpty() && AgentTriage.isComplex(userText)) {
-                    final List<Message> base = working;
-                    body = planner.plan(llm, base, activeLlmConfig)
-                            .flatMapMany(plan -> {
-                                if (plan.isEmpty()) {
-                                    return runLlmRound(base, 0, turnCfg, speak, reply, actionTurn,
-                                            firstToken, firstAudio, startNanos);
-                                }
-                                log.info("Agent 规划: {} 步, session={}", plan.steps().size(), context.sessionId());
-                                safeNotify(() -> listener.onAgentPlan(plan.descriptions()));
-                                AgentRun run = new AgentRun(
-                                        System.nanoTime() + Duration.ofMillis(AGENT_DEADLINE_MS).toNanos(),
-                                        MAX_AGENT_TOOL_CALLS);
-                                agentRunRef.set(run);
-                                return runAgent(base, plan, run, speak, reply, firstToken, firstAudio, startNanos);
-                            });
-                } else {
-                    body = runLlmRound(working, 0, turnCfg, speak, reply, actionTurn,
+                // 外部上下文(记忆/知识库/联网)三路并行装配, 且不在订阅线程上阻塞 —— 见 assembleContext。
+                body = assembleContext(userText).flatMapMany(working -> {
+                    // 视觉多模态: 只要上下文窗口内还有图片(本轮新图或此前几轮的图, 支持追问), 本轮就切视觉模型;
+                    // 图片随历史滑窗滑出后自然回到普通文本模型。
+                    boolean vision = working.stream().anyMatch(Message::hasImage);
+                    LlmConfig turnCfg = llmConfigFor(vision);
+                    if (vision) {
+                        log.info("带图回合: 改用视觉模型 vendor={}, model={}, session={}",
+                                turnCfg == null ? "-" : turnCfg.vendor(),
+                                turnCfg == null ? "-" : turnCfg.model(), context.sessionId());
+                    }
+                    // 多步 Agent: 命中复杂任务先让模型出一份分步计划, 再逐步执行(步骤间口播进度)+反思补步+整合答复;
+                    // 未开启/未命中/规划为空都按原路直接进 runLlmRound(零额外延迟)。带图回合不走 Agent
+                    // (规划/反思用的常规模型读不了图, 视觉多步任务留作后续)。
+                    if (!vision && agentEnabled && !skills.isEmpty() && AgentTriage.isComplex(userText)) {
+                        return planner.plan(llm, working, activeLlmConfig)
+                                .flatMapMany(plan -> {
+                                    if (plan.isEmpty()) {
+                                        return runLlmRound(working, 0, turnCfg, speak, reply, actionTurn,
+                                                firstToken, firstAudio, startNanos);
+                                    }
+                                    log.info("Agent 规划: {} 步, session={}", plan.steps().size(), context.sessionId());
+                                    safeNotify(() -> listener.onAgentPlan(plan.descriptions()));
+                                    AgentRun run = new AgentRun(
+                                            System.nanoTime() + Duration.ofMillis(AGENT_DEADLINE_MS).toNanos(),
+                                            MAX_AGENT_TOOL_CALLS);
+                                    agentRunRef.set(run);
+                                    return runAgent(working, plan, run, speak, reply, firstToken, firstAudio,
+                                            startNanos);
+                                });
+                    }
+                    return runLlmRound(working, 0, turnCfg, speak, reply, actionTurn,
                             firstToken, firstAudio, startNanos);
-                }
+                });
             }
 
             return body
