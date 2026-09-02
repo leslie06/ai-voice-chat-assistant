@@ -36,6 +36,7 @@ import com.vca.orchestrator.recorder.ConversationRecorder;
 import com.vca.orchestrator.recorder.TurnRecord;
 import com.vca.orchestrator.pipeline.SentenceSplitter;
 import com.vca.orchestrator.skill.MusicIntent;
+import com.vca.orchestrator.skill.VolumeIntent;
 import com.vca.orchestrator.skill.PlayMusicSkill;
 import com.vca.orchestrator.skill.RememberSkill;
 import com.vca.orchestrator.skill.Skill;
@@ -673,7 +674,17 @@ public class ConversationSession {
             Optional<String> control = musicIntent.parseControl(userText)
                     .filter(this::musicControlAllowed);
             if (control.isPresent()) {
-                return musicControlTurn(control.get(), userText, notifyAsr, startNanos);
+                final String action = control.get();
+                return silentActionTurn("控歌命令", action, userText, notifyAsr, startNanos,
+                        () -> listener.onMusicRequest(action, ""));
+            }
+
+            // 音量命令: 不设状态门闸 —— 没在放歌时"声音大点"指的是助手说话的音量, 同样成立
+            Optional<String> volume = VolumeIntent.parse(userText);
+            if (volume.isPresent()) {
+                final String direction = volume.get();
+                return silentActionTurn("音量命令", direction, userText, notifyAsr, startNanos,
+                        () -> listener.onVolumeRequest(direction));
             }
 
             // 取走待附加图片(有则本轮为带图回合); 点歌快路径不吃图, 留给下一个 LLM 回合
@@ -1114,19 +1125,20 @@ public class ConversationSession {
      * @param actionTurn 置位标记本轮为动作回合, 由调用方在收尾时撤掉本轮用户消息(动作不留对话历史)
      */
     /**
-     * 控歌回合(下一首/切歌): 只给前端下发一个动作, <b>不合成语音、不写历史</b>。
+     * 静默动作回合(控歌、调音量): 只给前端下发一个动作, <b>不合成语音、不写历史</b>。
      *
-     * <p>不念确认语是有意的: 歌还在响, TTS 会盖在音乐上(两条播放通道各走各的), 而且用户马上就听见
-     * 下一首起播 —— 那就是最直接的反馈, 再念一句"好的"只是噪音和延迟。
+     * <p>不念确认语是有意的: 这些命令的效果<b>本身就是反馈</b> —— 下一首起播、音量变大, 用户当场就听见了。
+     * 而且歌还在响时 TTS 会盖在音乐上(两条播放通道各走各的), 再念一句"好的"只是噪音和延迟。
      *
      * <p>不写历史同 {@link #musicTurn}: 这是副作用而非对话内容, 留在历史里会诱导模型仿写确认语。
      */
-    private Flux<AudioChunk> musicControlTurn(String action, String userText, boolean notifyAsr, long startNanos) {
-        log.info("控歌命令命中: action={}, 原句={}, session={}", action, userText, context.sessionId());
+    private Flux<AudioChunk> silentActionTurn(String label, String action, String userText,
+                                              boolean notifyAsr, long startNanos, Runnable dispatch) {
+        log.info("{}命中: action={}, 原句={}, session={}", label, action, userText, context.sessionId());
         if (notifyAsr) {
             safeNotify(() -> listener.onAsrFinal(userText));   // 字幕仍要显示用户这句
         }
-        safeNotify(() -> listener.onMusicRequest(action, ""));
+        safeNotify(dispatch);
         return Flux.<AudioChunk>empty()
                 .doFinally(sig -> {
                     Duration total = elapsed(startNanos);

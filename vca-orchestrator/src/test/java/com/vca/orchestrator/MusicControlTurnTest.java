@@ -67,6 +67,9 @@ class MusicControlTurnTest {
     private record Action(String action, String query) {
     }
 
+    /** 音量动作单独记, 走的是另一条端口。 */
+    private static final List<String> VOLUME = new CopyOnWriteArrayList<>();
+
     private static ConversationSession session(List<Action> actions) {
         SessionContext ctx = SessionContext.pipeline(
                 "s-music", "u-1",
@@ -79,6 +82,11 @@ class MusicControlTurnTest {
             @Override
             public void onMusicRequest(String action, String query) {
                 actions.add(new Action(action, query));
+            }
+
+            @Override
+            public void onVolumeRequest(String direction) {
+                VOLUME.add(direction);
             }
         });
         return s;
@@ -183,5 +191,39 @@ class MusicControlTurnTest {
 
         // 控歌排在点歌之前, 但不能把点歌也吃掉
         assertThat(actions).containsExactly(new Action("play", "七里香"));
+    }
+
+    @Test
+    void volumeCommandsWorkRegardlessOfPlaybackState() {
+        // 音量不设状态门闸: 没在放歌时"声音大点"指的是助手说话的音量, 同样成立
+        for (boolean active : new boolean[]{true, false}) {
+            VOLUME.clear();
+            LLM_CALLS.set(0);
+            List<Action> actions = new CopyOnWriteArrayList<>();
+            ConversationSession session = session(actions);
+            session.setMusicState(active, active);
+
+            List<AudioChunk> audio = session.handleTextTurn("声音大点").collectList().block();
+
+            assertThat(VOLUME).as("active=" + active).containsExactly("up");
+            assertThat(actions).isEmpty();       // 不是控歌动作
+            assertThat(LLM_CALLS).hasValue(0);   // 不经模型
+            assertThat(audio).isEmpty();         // 不念确认语: 音量变了本身就是反馈
+            assertThat(session.historyView().stream().filter(m -> m.role() != Message.Role.SYSTEM))
+                    .isEmpty();                  // 副作用不进历史
+        }
+    }
+
+    @Test
+    void volumeQuestionIsNotHijacked() {
+        VOLUME.clear();
+        LLM_CALLS.set(0);
+        ConversationSession session = session(new CopyOnWriteArrayList<>());
+        session.setMusicState(true, true);
+
+        session.handleTextTurn("怎么调音量").collectList().block();
+
+        assertThat(VOLUME).isEmpty();
+        assertThat(LLM_CALLS).hasValue(1);   // 原样交给模型回答
     }
 }

@@ -789,6 +789,7 @@ function renderFullLyrics(){
 }
 function updateLyrics(time){
   if(!musicLyrics.length){
+    updateMediaLyric('');   // 这首没歌词: 锁屏第三行退回"完整播放/30秒试听"
     if(musicLyricsVisible) showLyricsStatus();
     return;
   }
@@ -802,6 +803,7 @@ function updateLyrics(time){
   musicLyricIndex=index;
   const current=index>=0?musicLyrics[index]:null;
   const next=musicLyrics[index+1]||(!current?musicLyrics[0]:null);
+  updateMediaLyric(current ? current.text : '');   // 同步到锁屏/通知栏
   musicLyricCurrent.textContent=current?current.text:'♪';
   musicLyricNext.textContent=next?next.text:'';
   lyricsFullList.querySelectorAll('.lyrics-full-line.active').forEach(line=>line.classList.remove('active'));
@@ -909,6 +911,8 @@ function playMusicAt(index, remember){
   fetchTrackLyrics(track);
   musicMini.hidden=false;
   musicPlayAttempt++;
+  mediaLyricLine = '';         // 清掉上一首的残留歌词, 别挂到新歌上
+  applyVolume();               // 对齐当前音量(本地存的可能是上次会话调过的)
   updateMediaSession(track);   // 先换锁屏上的歌名/封面, 不等新歌缓冲出 metadata
   mediaPosAt=0;
   musicPlayer.src=track.url;
@@ -950,13 +954,35 @@ function mediaArtwork(track){
     .map(sizes => ({src, sizes, type}));
 }
 
+/* 锁屏歌词。媒体卡片<b>没有</b>歌词字段(MediaMetadata 只有 title/artist/album/artwork),
+   专辑那一行是唯一能随播放进度改写的文本位, 所以把当前歌词写在那里: 标题仍是歌名, 第三行滚歌词。
+   代价是每换一行歌词要整体重设一次 metadata(不能只改一个字段) —— 个别机型可能出现封面重取/闪动,
+   真机上若观感不好, 把下面这个开关关掉即可回到显示"完整播放/30秒试听"。 */
+const LOCKSCREEN_LYRICS = true;
+let mediaLyricLine = '';
+
+function mediaAlbumText(track){
+  if(LOCKSCREEN_LYRICS && mediaLyricLine) return mediaLyricLine;
+  return track.full ? '完整播放' : '30秒试听';
+}
+
+// 歌词行变了才刷锁屏。updateLyrics 只在换行时才调到这里(它自己有 index 相同就 return 的守卫),
+// 所以这里天然是每句一次, 不会跟着 timeupdate 每秒刷 4 遍。
+function updateMediaLyric(line){
+  if(!LOCKSCREEN_LYRICS) return;
+  const text = (line || '').trim();
+  if(text === mediaLyricLine) return;
+  mediaLyricLine = text;
+  if(musicIndex >= 0) updateMediaSession(musicTracks[musicIndex]);
+}
+
 function updateMediaSession(track){
   if(!hasMediaSession || !track) return;
   try{
     navigator.mediaSession.metadata = new MediaMetadata({
       title: track.title || '未知歌曲',
       artist: track.artist || '未知歌手',
-      album: track.full ? '完整播放' : '30秒试听',
+      album: mediaAlbumText(track),
       artwork: mediaArtwork(track)
     });
   }catch(e){}
@@ -1462,6 +1488,49 @@ async function changePassword(){
 }
 
 /* ---------- AudioContext ---------- */
+/* ---------- 全局音量(语音可调: "声音大点/小点") ----------
+   两条出声通道各有各的限制, 故用一个音量值同时作用于两者:
+   · 助手语音走 Web Audio → 插一个 GainNode, 全平台可调, 且增益可 >1 (还有放大余量);
+   · 音乐是 <audio> 元素 → 只能设 .volume, 上限 1.0, 而且 <b>iOS 上是只读的</b>(WebKit 有意禁用,
+     必须用系统音量键)。想绕开就得把 <audio> 也接进 Web Audio, 但音乐地址是跨域的(OSS 签名/iTunes),
+     接进去会因 CORS 污染直接变哑 —— 风险远大于收益, 不做。
+   于是 iOS 上说"声音大点": 助手语音会变大, 音乐那半得用系统音量键。 */
+const VOLUME_STEP = 0.25, VOLUME_MAX = 2, VOLUME_MIN = 0;
+let volumeLevel = (()=>{ const v = Number(localStorage.getItem('vca_volume'));
+                         return Number.isFinite(v) && v >= VOLUME_MIN && v <= VOLUME_MAX ? v : 1; })();
+let masterGain = null;
+
+// 助手语音的总增益; audioCtx 是首次用户手势时才建的, 故懒接
+function ensureGain(){
+  if(!audioCtx) return null;
+  if(!masterGain){                       // 每个音频块都会调到这里, 只在首次建节点, 不重复写 gain
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = volumeLevel;
+    masterGain.connect(audioCtx.destination);
+  }
+  return masterGain;
+}
+
+function applyVolume(){
+  if(masterGain) masterGain.gain.value = volumeLevel;
+  try{ musicPlayer.volume = Math.min(1, volumeLevel); }catch(e){}   // iOS 上无效, 静默忽略
+  localStorage.setItem('vca_volume', String(volumeLevel));
+}
+
+function adjustVolume(direction){
+  const before = volumeLevel;
+  const next = direction === 'up' ? volumeLevel + VOLUME_STEP : volumeLevel - VOLUME_STEP;
+  volumeLevel = Math.max(VOLUME_MIN, Math.min(VOLUME_MAX, Math.round(next * 100) / 100));
+  applyVolume();
+  if(volumeLevel === before){
+    addSys(direction === 'up' ? '🔊 已经是最大音量' : '🔈 已经是最小音量');
+  }else{
+    addSys((direction === 'up' ? '🔊' : '🔈') + ' 音量 ' + Math.round(volumeLevel * 100) + '%');
+  }
+}
+
+applyVolume();   // 载入即套用上次存的音量(音乐侧立刻生效; 助手侧等 audioCtx 建好由 ensureGain 取值)
+
 let audioCtx=null;
 async function ensureAudio(){ if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)();
   if(audioCtx.state==='suspended') await audioCtx.resume(); D.sr=audioCtx.sampleRate; paint(); return audioCtx; }
@@ -1519,6 +1588,7 @@ function connect(){
         case 'flush_playback': // 持久 S2S 全双工打断: 冲掉已缓冲/在播的音频止声, 但继续接收随后的新回复
                            stopPlayback(); acceptAudio=true; if(botBubble) botFinish(); D.last='flush'; break;
         case 'error':      stopPlayback(); stopMusic(); acceptAudio=false; botFinish(); addSys('⚠ '+m.message); D.last='error'; break;
+        case 'volume':     adjustVolume(m.action); D.last='volume:'+(m.action||''); break;
         case 'music':      // 语音控歌: 后端已判过播放状态, 这里直接执行
                            if(m.action==='play') addMusic(m);
                            else if(m.action==='next') nextMusic();
@@ -1548,7 +1618,7 @@ function playPCM(buf){
   const v=new DataView(buf), f=new Float32Array(n);
   for(let i=0;i<n;i++) f[i]=v.getInt16(i*2,true)/32768;
   const b=audioCtx.createBuffer(1,n,24000); b.copyToChannel(f,0);
-  const s=audioCtx.createBufferSource(); s.buffer=b; s.connect(audioCtx.destination);
+  const s=audioCtx.createBufferSource(); s.buffer=b; s.connect(ensureGain() || audioCtx.destination);
   const t=Math.max(nextTime,audioCtx.currentTime); s.start(t); nextTime=t+b.duration; D.played++;
   playing.push(s); s.onended=()=>{ playing=playing.filter(x=>x!==s); };
 }

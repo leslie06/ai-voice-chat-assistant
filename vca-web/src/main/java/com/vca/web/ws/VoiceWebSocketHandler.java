@@ -214,6 +214,12 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             }
 
             @Override
+            public void onVolumeRequest(String direction) {
+                // 步长与上下限由前端决定 —— 后端不知道播放器现在多大声
+                pushJson(session, outbound, Map.of("type", "volume", "action", direction));
+            }
+
+            @Override
             public void onUserSpeechStarted() {
                 // 持久 S2S 全双工打断: 服务端 VAD 判定用户开口 → 让前端立即冲掉播放缓冲、止住机器人当前回复
                 pushJson(session, outbound, Map.of("type", "flush_playback"));
