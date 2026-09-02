@@ -20,6 +20,7 @@ import com.vca.store.eval.EvaluationRoute;
 import com.vca.store.mapper.AppUserMapper;
 import com.vca.store.mapper.ChatConversationMapper;
 import com.vca.store.mapper.ChatMessageMapper;
+import com.vca.store.embed.CachingEmbedder;
 import com.vca.store.embed.DashScopeEmbedder;
 import com.vca.store.embed.Embedder;
 import com.vca.store.knowledge.KnowledgeRoutes;
@@ -315,6 +316,9 @@ public class StoreAutoConfiguration {
 
     // ---- Embedding(向量化长期记忆 + RAG 共用): 配了 key 才建 embedder, 否则功能降级 ----
 
+    /** query embedding 缓存条数上限。查询短、复用率高(同一句在记忆与 RAG 两路各用一次), 几百条足够。 */
+    private static final int EMBEDDING_CACHE_ENTRIES = 512;
+
     /**
      * 文本向量化器。仅当 {@code embedding-enabled} 且配了 key 时建; 否则返回 null(不注册 Bean)——
      * 下游经 {@code ObjectProvider} 取不到即降级: 记忆退回关键词级、RAG 检索返回空。
@@ -327,8 +331,12 @@ public class StoreAutoConfiguration {
             return null;
         }
         log.info("Embedding 已启用: model={}, dim={}", props.getEmbeddingModel(), props.getEmbeddingDim());
-        return new DashScopeEmbedder(props.getEmbeddingBaseUrl(), props.getEmbeddingKey(),
-                props.getEmbeddingModel(), props.getEmbeddingDim(), props.getEmbeddingProxy());
+        // 套一层缓存/在途去重: 同一回合里长期记忆召回与 RAG 检索 embed 的是同一句用户输入,
+        // 不收口就是同时打两次一模一样的请求(多一份配额、更易吃 429)。见 CachingEmbedder。
+        return new CachingEmbedder(
+                new DashScopeEmbedder(props.getEmbeddingBaseUrl(), props.getEmbeddingKey(),
+                        props.getEmbeddingModel(), props.getEmbeddingDim(), props.getEmbeddingProxy()),
+                EMBEDDING_CACHE_ENTRIES);
     }
 
     // ---- 长期记忆(跨会话个性化): remember 工具写入, 每轮对话回灌上下文(语义召回) ----
