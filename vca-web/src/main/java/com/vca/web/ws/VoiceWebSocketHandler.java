@@ -103,6 +103,8 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
     private final boolean s2sPersistent;
     /** 当前在线连接数。handler 是单例 Bean, 此计数全局生效。 */
     private final AtomicInteger activeConnections = new AtomicInteger();
+    /** 并发发射冲突时的自旋次数上限(见 {@link #emitOutbound}); 冲突窗口是一次入队, 自旋几十次绰绰有余。 */
+    private static final int MAX_EMIT_SPINS = 256;
 
     public VoiceWebSocketHandler(ConversationSessionFactory sessionFactory, ObjectMapper mapper, VadConfig vadConfig,
                                  Supplier<VoiceActivityDetector> vadDetectorFactory, MusicProvider musicProvider,
@@ -312,10 +314,42 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
     /** 序列化并推送一条 JSON 文本消息 */
     private void pushJson(WebSocketSession session, Sinks.Many<WebSocketMessage> outbound, Map<String, Object> obj) {
         try {
-            outbound.tryEmitNext(session.textMessage(mapper.writeValueAsString(obj)));
+            emitOutbound(outbound, session.textMessage(mapper.writeValueAsString(obj)), session.getId());
         } catch (Exception e) {
             log.warn("序列化出站消息失败: {}", e.toString());
         }
+    }
+
+    /**
+     * 往出站 sink 发一条消息的<b>唯一入口</b> —— 不要再直接调 {@code tryEmitNext}。
+     *
+     * <p>这条 sink 会被多个线程触碰: netty 入站线程(控制消息回执)、reactor 线程(TTS 音频块)、
+     * ASR/S2S 回调线程(字幕、打断信号)、定时线程(回合结束后的状态回执)、音源订阅线程(点歌结果)。
+     * 而 {@code Sinks.many()} 是"安全"变体: 检测到并发发射时它<b>不写入</b>, 只返回
+     * {@link Sinks.EmitResult#FAIL_NON_SERIALIZED}。此前调用方一律忽略返回值, 于是每一次并发窗口
+     * 都会静默吞掉一条消息 —— 丢的是音频块就是一次听得见的吞字/卡顿, 丢的是事件就是前端状态错乱,
+     * 且不留任何日志, 几乎无法从现场复现。
+     *
+     * <p>这里短自旋重试把并发发射串行化(冲突窗口只有一次入队, 纳秒级)。自旋仍不成功, 或 sink 已满/已终止,
+     * 就明确记一条日志再丢 —— 宁可看得见地丢, 不要静默地丢。
+     */
+    private void emitOutbound(Sinks.Many<WebSocketMessage> outbound, WebSocketMessage msg, String sessionId) {
+        for (int i = 0; i < MAX_EMIT_SPINS; i++) {
+            Sinks.EmitResult result = outbound.tryEmitNext(msg);
+            if (result == Sinks.EmitResult.OK) {
+                return;
+            }
+            if (result == Sinks.EmitResult.FAIL_NON_SERIALIZED) {
+                Thread.onSpinWait();   // 另一个线程正在入队, 让一让再试
+                continue;
+            }
+            // 连接已关闭/已取消: 正常收尾路径, 不是故障, 不值得告警
+            if (result != Sinks.EmitResult.FAIL_TERMINATED && result != Sinks.EmitResult.FAIL_CANCELLED) {
+                log.warn("出站消息丢弃({}), session={}", result, sessionId);
+            }
+            return;
+        }
+        log.warn("出站消息丢弃(并发发射自旋 {} 次仍未成功), session={}", MAX_EMIT_SPINS, sessionId);
     }
 
     private enum Mode { IDLE, HANDSFREE, PTT }
@@ -834,7 +868,8 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                     log.warn("下行音频不是 PCM, 跳过 WAV 录音: format={}, session={}",
                             chunk.format(), session.getId());
                 }
-                outbound.tryEmitNext(session.binaryMessage(factory -> factory.wrap(chunk.data())));
+                emitOutbound(outbound, session.binaryMessage(factory -> factory.wrap(chunk.data())),
+                        session.getId());
             }
             if (chunk.text() != null) {
                 emitJson(Map.of("type", "chunk", "text", chunk.text()));
