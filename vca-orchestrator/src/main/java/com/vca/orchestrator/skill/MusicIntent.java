@@ -43,6 +43,18 @@ public final class MusicIntent {
     public static final String CONTROL_RESUME = "resume";
     public static final String CONTROL_STOP = "stop";
 
+    /** 全部控歌动作。接入层据此判断"这是个动作, 不是要搜的歌"。 */
+    private static final java.util.Set<String> CONTROL_ACTIONS = java.util.Set.of(
+            CONTROL_NEXT, CONTROL_PREVIOUS, CONTROL_PAUSE, CONTROL_RESUME, CONTROL_STOP);
+
+    /**
+     * 是否是控歌动作(而非点歌)。接入层必须先问这一句再决定要不要去音源搜歌 ——
+     * 控歌没有歌名, 拿空串去搜必然搜不到, 用户看到的就是莫名其妙的"没找到《》"。
+     */
+    public static boolean isControl(String action) {
+        return action != null && CONTROL_ACTIONS.contains(action);
+    }
+
     /**
      * 控歌命令的整句模式。<b>刻意用整句锚定(^…$)而不是 find</b>: "下一首歌是什么""你能帮我切歌吗"
      * 都含命令词, 用 find 会把正常提问劫持成命令。前后的客套与语气词由 {@link #stripPolite} 先剥掉。

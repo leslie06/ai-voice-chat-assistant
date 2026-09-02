@@ -14,6 +14,7 @@ import com.vca.orchestrator.session.ConversationSession;
 import com.vca.orchestrator.recorder.AudioRecordingService;
 import com.vca.orchestrator.session.S2sLiveSession;
 import com.vca.orchestrator.session.TurnListener;
+import com.vca.orchestrator.skill.MusicIntent;
 import com.vca.orchestrator.vad.HandsFreeVad;
 import com.vca.orchestrator.vad.PcmAudio;
 import com.vca.orchestrator.vad.VadConfig;
@@ -208,11 +209,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
 
             @Override
             public void onMusicRequest(String action, String query) {
-                // 调音源拿可直接播放的地址, 下发给前端用 <audio> 播放; 找不到则告知前端。
-                musicProvider.playlist(query)
-                        .map(playlist -> musicPlayMessage(playlist, query))
-                        .defaultIfEmpty(Map.of("type", "music", "action", "notfound", "query", query))
-                        .onErrorReturn(Map.of("type", "music", "action", "notfound", "query", query))
+                musicMessage(musicProvider, action, query)
                         .subscribe(msg -> pushJson(session, outbound, msg));
             }
 
@@ -280,8 +277,29 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         return "";
     }
 
+    /**
+     * 把一次音乐请求变成下发给前端的消息。
+     *
+     * <p><b>先按动作分流, 再决定要不要搜歌</b>: 控歌(下一首/上一首/暂停/继续/停止)只是一个动作,
+     * 根本没有要搜的歌, 直接转发即可。此前这里无条件把入参当搜索词去调音源 —— 而控歌的 query 是空串,
+     * 必然搜不到, 于是用户说"下一首"看到的是莫名其妙的"没找到《》"。
+     *
+     * <p>包级静态以便直接单测: 这条分流规则出错的表现在用户侧很难联想到接入层, 值得钉死。
+     */
+    static Mono<Map<String, Object>> musicMessage(MusicProvider musicProvider, String action, String query) {
+        if (MusicIntent.isControl(action)) {
+            return Mono.just(Map.of("type", "music", "action", action));
+        }
+        // 点歌: 调音源拿可直接播放的地址, 下发给前端用 <audio> 播放; 找不到则告知前端。
+        Map<String, Object> notFound = Map.of("type", "music", "action", "notfound", "query", query);
+        return musicProvider.playlist(query)
+                .map(playlist -> musicPlayMessage(playlist, query))
+                .defaultIfEmpty(notFound)
+                .onErrorReturn(notFound);
+    }
+
     /** 组装播放列表消息；前端负责上一首/下一首及顺序/随机播放。 */
-    private Map<String, Object> musicPlayMessage(MusicPlaylist playlist, String query) {
+    private static Map<String, Object> musicPlayMessage(MusicPlaylist playlist, String query) {
         MusicTrack track = playlist.current();
         Map<String, Object> msg = new LinkedHashMap<>();
         msg.put("type", "music");
