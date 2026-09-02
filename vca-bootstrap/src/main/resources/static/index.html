@@ -1019,12 +1019,21 @@ setMediaHandler('seekforward', d=>{
 });
 
 musicPlayer.addEventListener('ended',nextMusic);
+// 把播放状态同步给后端, 后端据此决定控歌命令是否成立(没有当前曲目时一律当普通对话)。
+// active=有当前曲目(迷你播放器开着), playing=正在响 —— 区分开"暂停"与"继续"才各自有意义。
+// 自己算而不是由调用方传参: 单一事实来源, 各调用点也就不会传错。
+function reportMusicState(){
+  const active = musicIndex>=0 && !musicMini.hidden;
+  send({type:'music_state', active:active, playing:active && !musicPlayer.paused});
+}
+
 musicPlayer.addEventListener('play',()=>{
   // 点击免提时会先播放一段静音来解锁移动端媒体权限，此时并没有选中歌曲。
   if(musicIndex>=0){
     musicMini.hidden=false;
     updateMediaSession(musicTracks[musicIndex]);   // 开播这一刻写 metadata, 锁屏才认
     setMediaPlaybackState('playing');
+    reportMusicState();
   }
   musicMiniToggle.innerHTML=MUSIC_PAUSE_ICON;
   if(musicCatalogTracks.length) renderMusicLibrary();
@@ -1042,7 +1051,7 @@ musicPlayer.addEventListener('playing',()=>{
 });
 musicPlayer.addEventListener('pause',()=>{
   musicMiniToggle.innerHTML=MUSIC_PLAY_ICON;
-  if(musicIndex>=0) setMediaPlaybackState('paused');   // 锁屏按钮跟着变回"播放"
+  if(musicIndex>=0){ setMediaPlaybackState('paused'); reportMusicState(); }   // 锁屏按钮跟着变回"播放"
   if(musicCatalogTracks.length) renderMusicLibrary();
 });
 function musicTime(value){
@@ -1079,6 +1088,7 @@ function closeMusicMini(){
   musicPlayer.pause();
   clearMediaSession();   // 收起播放器就撤掉锁屏卡片, 否则会留一张点不动的
   musicMini.hidden=true;
+  reportMusicState();    // 显式上报, 不依赖 pause 事件与 hidden 赋值的先后顺序
   closeInlineLyrics();
   closeFullLyrics();
 }
@@ -1475,7 +1485,9 @@ function connect(){
   const t = authed() ? token : getToken();
   const q=t?('?token='+encodeURIComponent(t)):'';
   ws=new WebSocket(`${proto}://${location.host}/ws/voice${q}`); ws.binaryType='arraybuffer';
-  ws.onopen=()=>{ D.ws='已连接'; dot.className='dot on'; paint(); sendModel(); sendVoice(); sendEngine(); sendHistory(); };
+  ws.onopen=()=>{ D.ws='已连接'; dot.className='dot on'; paint(); sendModel(); sendVoice(); sendEngine(); sendHistory();
+    // 重连后补报播放状态: 手机切后台会断线重连, 不补报的话后端以为没在放歌, 语音控歌就失灵了
+    reportMusicState(); };
   ws.onclose=(ev)=>{
     if(ev.code===1008){ // 鉴权失败
       if(authed()){ // 登录令牌失效(密钥变更/过期): 回登录页, 不重连
@@ -1507,7 +1519,14 @@ function connect(){
         case 'flush_playback': // 持久 S2S 全双工打断: 冲掉已缓冲/在播的音频止声, 但继续接收随后的新回复
                            stopPlayback(); acceptAudio=true; if(botBubble) botFinish(); D.last='flush'; break;
         case 'error':      stopPlayback(); stopMusic(); acceptAudio=false; botFinish(); addSys('⚠ '+m.message); D.last='error'; break;
-        case 'music':      if(m.action==='play') addMusic(m); else addSys('🎵 没找到《'+(m.query||'')+'》');
+        case 'music':      // 语音控歌: 后端已判过播放状态, 这里直接执行
+                           if(m.action==='play') addMusic(m);
+                           else if(m.action==='next') nextMusic();
+                           else if(m.action==='previous') previousMusic();
+                           else if(m.action==='pause') musicPlayer.pause();
+                           else if(m.action==='resume') musicPlayer.play().catch(()=>{});
+                           else if(m.action==='stop') closeMusicMini();
+                           else addSys('🎵 没找到《'+(m.query||'')+'》');
                            D.last='music:'+(m.action||''); break;
         case 'state':      D.state=m.label||m.value; hint.textContent=m.label||''; D.last='state:'+m.value;
                            // 三段式免提开口: 摄像头开着就抓一帧随本句发出(赶在 ASR final 前送达即可附加成功)

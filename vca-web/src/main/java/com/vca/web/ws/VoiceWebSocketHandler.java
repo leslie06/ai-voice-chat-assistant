@@ -475,6 +475,9 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                 case "load_history" -> onLoadHistory(msg.get("conversationId"), msg.get("messages"));
                 case "image" -> onImage(str(msg.get("data")), str(msg.get("mime")));
                 case "video_frame" -> onVideoFrame(str(msg.get("data")));
+                // 前端播放状态: 只用于给控歌命令开门(没有当前曲目时不劫持提问)
+                case "music_state" -> conversation.setMusicState(
+                        Boolean.TRUE.equals(msg.get("active")), Boolean.TRUE.equals(msg.get("playing")));
                 default -> log.debug("未知控制消息: {}", json);
             }
         }

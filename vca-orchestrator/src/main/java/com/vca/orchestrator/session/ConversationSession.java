@@ -154,6 +154,13 @@ public class ConversationSession {
     /** 本会话回合序号(落库用, 从 1 递增) */
     private final AtomicInteger turnSeq = new AtomicInteger();
     /**
+     * 前端播放器是否有当前曲目(迷你播放器开着), 由接入层按 music_state 上报同步。
+     * 控歌命令的<b>总开关</b>: 没有当前曲目时"下一首""继续"这些话多半是正常对话的一部分, 不该被当成命令吞掉。
+     */
+    private volatile boolean musicActive;
+    /** 当前曲目是否正在响(相对于已暂停)。区分它才能让"暂停"与"继续"各自只在有意义的状态下生效。 */
+    private volatile boolean musicPlaying;
+    /**
      * 最近一次识别到的用户文本。S2S(每轮/持久)路径里"用户说了什么"与"机器人回了什么"是<b>分离的异步事件</b>,
      * 落库需要把二者配成一轮 —— 故在用户转写到达时暂存, 机器人回复收尾时取它配对。三段式 {@code respond}
      * 直接有 userText 参数, 不读它。
@@ -429,6 +436,38 @@ public class ConversationSession {
         return sb.toString();
     }
 
+    /**
+     * 同步前端播放状态; 仅影响控歌命令是否生效。
+     *
+     * @param active  是否有当前曲目(迷你播放器开着)
+     * @param playing 当前曲目是否正在响(暂停时为 false)
+     */
+    public void setMusicState(boolean active, boolean playing) {
+        this.musicActive = active;
+        this.musicPlaying = playing && active;
+    }
+
+    /**
+     * 某个控歌命令在当前播放状态下是否成立。把"句式"与"状态"分开判, 是为了让每条规则都有说得出的理由:
+     * <ul>
+     *   <li><b>没有当前曲目</b> → 一律不认。"上一首""继续"这些话在没放歌时几乎都是正常对话的一部分;</li>
+     *   <li><b>继续</b> → 只在<b>已暂停</b>时认。"继续"是日常高频词("继续说""继续讲"), 音乐正响着时
+     *       用户说"继续"几乎不可能是指音乐, 那种情况必须放给模型;</li>
+     *   <li><b>暂停</b> → 只在<b>正在响</b>时认。已经停了还说"暂停", 更可能是在讲别的事;</li>
+     *   <li>上一首/下一首/停止播放 → 有曲目即可(暂停状态下切歌也是合理操作)。</li>
+     * </ul>
+     */
+    private boolean musicControlAllowed(String action) {
+        if (!musicActive) {
+            return false;
+        }
+        return switch (action) {
+            case MusicIntent.CONTROL_RESUME -> !musicPlaying;
+            case MusicIntent.CONTROL_PAUSE -> musicPlaying;
+            default -> true;
+        };
+    }
+
     /** 设置对话存档端口(数据飞轮); 不设则不落库。 */
     public void setRecorder(ConversationRecorder recorder) {
         this.recorder = recorder == null ? ConversationRecorder.NOOP : recorder;
@@ -609,6 +648,14 @@ public class ConversationSession {
             AtomicBoolean actionTurn = new AtomicBoolean(false);
             // 多步 Agent 运行态(预算+统计); 仅 agent 分支创建, 收尾时据它落 agentSteps/agentReplans
             AtomicReference<AgentRun> agentRunRef = new AtomicReference<>();
+
+            // 控歌命令(下一首/上一首/暂停/继续/停止): 必须排在点歌解析之前 ——
+            // "我想听下一首"两边都能沾边, 先到先得。句式命中后还要过状态门闸, 不成立就原样落到普通对话。
+            Optional<String> control = musicIntent.parseControl(userText)
+                    .filter(this::musicControlAllowed);
+            if (control.isPresent()) {
+                return musicControlTurn(control.get(), userText, notifyAsr, startNanos);
+            }
 
             // 取走待附加图片(有则本轮为带图回合); 点歌快路径不吃图, 留给下一个 LLM 回合
             Optional<String> song = musicIntent.parsePlay(userText);
@@ -1033,6 +1080,29 @@ public class ConversationSession {
      * @param speak      是否合成语音确认
      * @param actionTurn 置位标记本轮为动作回合, 由调用方在收尾时撤掉本轮用户消息(动作不留对话历史)
      */
+    /**
+     * 控歌回合(下一首/切歌): 只给前端下发一个动作, <b>不合成语音、不写历史</b>。
+     *
+     * <p>不念确认语是有意的: 歌还在响, TTS 会盖在音乐上(两条播放通道各走各的), 而且用户马上就听见
+     * 下一首起播 —— 那就是最直接的反馈, 再念一句"好的"只是噪音和延迟。
+     *
+     * <p>不写历史同 {@link #musicTurn}: 这是副作用而非对话内容, 留在历史里会诱导模型仿写确认语。
+     */
+    private Flux<AudioChunk> musicControlTurn(String action, String userText, boolean notifyAsr, long startNanos) {
+        log.info("控歌命令命中: action={}, 原句={}, session={}", action, userText, context.sessionId());
+        if (notifyAsr) {
+            safeNotify(() -> listener.onAsrFinal(userText));   // 字幕仍要显示用户这句
+        }
+        safeNotify(() -> listener.onMusicRequest(action, ""));
+        return Flux.<AudioChunk>empty()
+                .doFinally(sig -> {
+                    Duration total = elapsed(startNanos);
+                    metrics.recordTurnTotal(total);
+                    metrics.countTurn("voice", outcomeOf(sig));
+                    recordTurn(userText, null, mode.name(), outcomeOf(sig), total.toMillis());
+                });
+    }
+
     private Flux<AudioChunk> musicTurn(String query, boolean speak, AtomicBoolean actionTurn) {
         // 动作回合: 不写助手历史; 调用方据 actionTurn 撤掉用户那句, 整轮不留痕(避免模型仿写确认语跳过工具)
         actionTurn.set(true);
