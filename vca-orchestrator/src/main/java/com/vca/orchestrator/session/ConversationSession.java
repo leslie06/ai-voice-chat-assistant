@@ -154,6 +154,13 @@ public class ConversationSession {
     /** 本会话回合序号(落库用, 从 1 递增) */
     private final AtomicInteger turnSeq = new AtomicInteger();
     /**
+     * 用户<b>真正闭嘴</b>的墙钟时刻(ms), 由接入层在 VAD 判停时写入(= 判停时刻 - 实际等待的句尾静音);
+     * 0 表示本回合不是语音输入(打字)。体感延迟的起点只能是它 —— 从 ASR final 起表会漏掉最大的一段。
+     */
+    private final java.util.concurrent.atomic.AtomicLong userSpeechEndAtMs =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
      * 前端播放器是否有当前曲目(迷你播放器开着), 由接入层按 music_state 上报同步。
      * 控歌命令的<b>总开关</b>: 没有当前曲目时"下一首""继续"这些话多半是正常对话的一部分, 不该被当成命令吞掉。
      */
@@ -434,6 +441,18 @@ public class ConversationSession {
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * 接入层在 VAD 判停时调用, 交出体感延迟的起点与本轮判停依据。
+     *
+     * @param speechEndAtMs     用户真正闭嘴的墙钟时刻(判停时刻 - 实际等待的静音)
+     * @param endpointSilenceMs 本轮实际等待的句尾静音
+     * @param endpointReason    判停依据: complete/incomplete/neutral/fixed
+     */
+    public void markUserSpeechEnd(long speechEndAtMs, int endpointSilenceMs, String endpointReason) {
+        userSpeechEndAtMs.set(speechEndAtMs);
+        metrics.recordEndpointSilence(Duration.ofMillis(Math.max(0, endpointSilenceMs)), endpointReason);
     }
 
     /**
@@ -721,6 +740,7 @@ public class ConversationSession {
                         if (actionTurn.get()) {
                             removeFromHistory(userMsg);
                         }
+                        userSpeechEndAtMs.set(0);   // 本轮没出音频也要清, 免得这次闭嘴被算进下一轮
                         Duration total = elapsed(startNanos);
                         metrics.recordTurnTotal(total);
                         metrics.countTurn(speak ? "voice" : "text", outcomeOf(sig));
@@ -782,6 +802,7 @@ public class ConversationSession {
                             if (firstAudio.compareAndSet(false, true)) {
                                 Duration ttfa = elapsed(startNanos);
                                 metrics.recordTtsFirstAudio(ttfa);
+                                recordPerceivedFirstAudio();
                                 log.info("TTS 首音频耗时: {} ms, session={}", ttfa.toMillis(), context.sessionId());
                                 stateMachine.tryTransition(SessionState.SPEAKING);
                             }
@@ -1050,6 +1071,18 @@ public class ConversationSession {
     }
 
 	    /** 自起点到现在的耗时 */
+    /**
+     * 记一次体感延迟: 用户闭嘴 → 第一帧音频。语音回合才有(打字回合 userSpeechEndAtMs 为 0)。
+     * 取走即清零, 避免同一次闭嘴被后续回合重复计入。
+     */
+    private void recordPerceivedFirstAudio() {
+        long endedAt = userSpeechEndAtMs.getAndSet(0);
+        if (endedAt > 0) {
+            metrics.recordPerceivedFirstAudio(
+                    Duration.ofMillis(Math.max(0, System.currentTimeMillis() - endedAt)));
+        }
+    }
+
 	    private static Duration elapsed(long startNanos) {
 	        return Duration.ofNanos(System.nanoTime() - startNanos);
 	    }

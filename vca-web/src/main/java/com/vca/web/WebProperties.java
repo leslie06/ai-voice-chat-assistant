@@ -412,7 +412,7 @@ public class WebProperties {
     public static class Vad {
         private double speechThreshold = 0.015;
         private int onsetMs = 150;
-        private int silenceMs = 800;
+        private int silenceMs = 900;
         private double bargeThreshold = 0.020;
         private int bargeMs = 250;
         // 预滚默认 > barge-ms: 打断确认的实际墙钟时间会超过 barge-ms(音量起伏致累减),
@@ -428,7 +428,7 @@ public class WebProperties {
         /** 半双工: 机器人说话时不收麦/不语音打断, 外放无回声消除时靠它断掉自打断死循环。默认开, 戴耳机可关。 */
         private boolean halfDuplex = true;
         /** 语义端点判定: 句尾静音阈值随 ASR 中间转写完整度自适应(没说完拉长、说完缩短)。仅三段式生效。 */
-        private boolean semanticEndpoint = false;
+        private boolean semanticEndpoint = true;
         /** 自适应下限(ms): "已说完"时句尾静音最短不低于此。 */
         private int minSilenceMs = 400;
         /** 自适应上限(ms): "没说完"时句尾静音最长不超过此。 */

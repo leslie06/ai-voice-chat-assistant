@@ -104,6 +104,10 @@ public final class CallSession {
 
             @Override
             public void onSpeechEnd() {
+                // 同浏览器链路: 体感延迟从客户闭嘴那一刻起算, 判停等待的静音要减掉
+                conversation.markUserSpeechEnd(
+                        System.currentTimeMillis() - vad.lastEndpointSilenceMs(),
+                        vad.lastEndpointSilenceMs(), vad.lastEndpointReason());
                 commitTurn();
             }
 

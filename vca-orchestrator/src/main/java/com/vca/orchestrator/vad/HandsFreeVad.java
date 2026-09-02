@@ -66,6 +66,13 @@ public class HandsFreeVad {
 
     private double speechMs;
     private double silenceMs;
+    /**
+     * 上一次判停时实际累计的句尾静音(ms)与判定依据。接入层据此还原"用户真正闭嘴的时刻"
+     * (= 判停时刻 - 本值), 那才是体感延迟的起点; reason 用来观察语义端点判定是否真在起作用。
+     * 必须在 {@link #resetCounters()} 抹掉计数之前抓下来。
+     */
+    private int lastEndpointSilenceMs;
+    private String lastEndpointReason = "fixed";
     private double bargeMs;
     /** 机器人本次连续说话已持续的时长(ms), 用于起播保护期判定 */
     private double botSpeakingMs;
@@ -175,10 +182,15 @@ public class HandsFreeVad {
                     silenceMs += frameMs;
                     // 语义端点判定: 句尾静音阈值随 ASR 中间转写的完整度自适应(没说完拉长、说完缩短);
                     // 关闭时退回固定 silenceMs。
-                    int required = cfg.semanticEndpoint()
-                            ? EndpointPolicy.requiredSilenceMs(interimText, cfg.silenceMs(),
-                                    cfg.minSilenceMs(), cfg.maxSilenceMs())
-                            : cfg.silenceMs();
+                    int required;
+                    if (cfg.semanticEndpoint()) {
+                        required = EndpointPolicy.requiredSilenceMs(interimText, cfg.silenceMs(),
+                                cfg.minSilenceMs(), cfg.maxSilenceMs());
+                        lastEndpointReason = EndpointPolicy.classify(interimText).name().toLowerCase();
+                    } else {
+                        required = cfg.silenceMs();
+                        lastEndpointReason = "fixed";
+                    }
                     if (silenceMs >= required) {
                         end();
                     }
@@ -223,9 +235,20 @@ public class HandsFreeVad {
 
     /** 句尾静音 → 提交本轮, 转入等待机器人回复 */
     private void end() {
+        lastEndpointSilenceMs = (int) Math.round(silenceMs);   // 须在 resetCounters 抹掉之前抓
         state = State.WAIT;
         resetCounters();
         listener.onSpeechEnd();
+    }
+
+    /** 上一次判停实际等待的句尾静音(ms)。接入层用它反推用户真正闭嘴的时刻。 */
+    public int lastEndpointSilenceMs() {
+        return lastEndpointSilenceMs;
+    }
+
+    /** 上一次判停的依据: complete/incomplete/neutral(语义端点判定) 或 fixed(未开启)。 */
+    public String lastEndpointReason() {
+        return lastEndpointReason;
     }
 
     /** 打断判定: 机器人在说话且人声持续够久 → 打断, 并把这次插话当作新一轮开始(含预滚, 不丢开头) */

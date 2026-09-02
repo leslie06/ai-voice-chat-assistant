@@ -412,6 +412,10 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
 
                 @Override
                 public void onSpeechEnd() {
+                    // 体感延迟的起点是用户闭嘴那一刻, 不是这里 —— 判停本身就等了一段静音, 减掉它。
+                    conversation.markUserSpeechEnd(
+                            System.currentTimeMillis() - vad.lastEndpointSilenceMs(),
+                            vad.lastEndpointSilenceMs(), vad.lastEndpointReason());
                     commitTurn();
                     pushState("wait");
                 }

@@ -56,4 +56,24 @@ class EndpointPolicyTest {
         assertThat(complete).isLessThan(base).isGreaterThanOrEqualTo(min);
         assertThat(EndpointPolicy.requiredSilenceMs("查天气", base, min, max)).isEqualTo(base);
     }
+
+    @Test
+    void defaultTuningProducesTheThreeAdvertisedTiers() {
+        // 与 application.yml 的默认值一致(base=900, min=400, max=1600)。
+        // 这三个数就是注释里承诺给用户的效果, 改动任一默认值都应该在这里先被打醒。
+        int base = 900, min = 400, max = 1600;
+        assertThat(EndpointPolicy.requiredSilenceMs("今天天气怎么样？", base, min, max)).isEqualTo(405);
+        assertThat(EndpointPolicy.requiredSilenceMs("今天天气怎么样", base, min, max)).isEqualTo(base);
+        assertThat(EndpointPolicy.requiredSilenceMs("我想问一下然后", base, min, max)).isEqualTo(1440);
+    }
+
+    @Test
+    void everyTierStaysFasterOrSaferThanTheOldFixedThreshold() {
+        // 老配置是固定 1200ms。下调基线到 900 之所以安全, 靠的是"没说完"这一档反而等得更久 ——
+        // 当初把基线抬到 1200 就是为了这个场景, 现在由专门的检测兜住, 基线不必再为它整体加高。
+        int base = 900, min = 400, max = 1600, oldFixed = 1200;
+        assertThat(EndpointPolicy.requiredSilenceMs("说完了。", base, min, max)).isLessThan(oldFixed);
+        assertThat(EndpointPolicy.requiredSilenceMs("普通一句话", base, min, max)).isLessThan(oldFixed);
+        assertThat(EndpointPolicy.requiredSilenceMs("这个嗯那个", base, min, max)).isGreaterThan(oldFixed);
+    }
 }
