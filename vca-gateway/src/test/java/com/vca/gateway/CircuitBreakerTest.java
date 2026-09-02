@@ -45,4 +45,35 @@ class CircuitBreakerTest {
         assertThat(cb.state()).isEqualTo(CircuitBreaker.State.OPEN);
         assertThat(cb.allowRequest()).isFalse();
     }
+
+    @Test
+    void halfOpenAdmitsOnlyOneProbe() throws InterruptedException {
+        CircuitBreaker cb = new CircuitBreaker(1, Duration.ofMillis(50));
+        cb.recordFailure();
+        Thread.sleep(80);
+
+        assertThat(cb.allowRequest()).isTrue();    // 第一个试探放行
+        assertThat(cb.allowRequest()).isFalse();   // 其余照旧拒绝, 由调用方转移到下一候选
+        assertThat(cb.allowRequest()).isFalse();
+        assertThat(cb.state()).isEqualTo(CircuitBreaker.State.HALF_OPEN);
+
+        cb.recordSuccess();
+        assertThat(cb.allowRequest()).isTrue();    // 试探成功 → 闭合, 恢复正常放行
+        assertThat(cb.allowRequest()).isTrue();
+    }
+
+    @Test
+    void abandonedProbeDoesNotLockTheBreakerForever() throws InterruptedException {
+        // 打断会取消整条流, 取消既不算成功也不算失败 —— 试探可能永远不报回。
+        // 若只用布尔标志锁门, 该厂商就再也不会被试探, 等于永久熔断。
+        CircuitBreaker cb = new CircuitBreaker(1, Duration.ofMillis(50));
+        cb.recordFailure();
+        Thread.sleep(80);
+
+        assertThat(cb.allowRequest()).isTrue();    // 试探发出后就此失联
+        assertThat(cb.allowRequest()).isFalse();
+
+        Thread.sleep(80);                          // 超过一个 openDuration 仍无回音
+        assertThat(cb.allowRequest()).isTrue();    // 允许下一次试探, 不会卡死
+    }
 }
