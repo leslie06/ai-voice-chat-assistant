@@ -36,20 +36,44 @@ public class AliyunAsrProvider implements AsrProvider {
         this.props = props;
     }
 
+    /** 热词不支持的告警只打一次, 免得每轮识别刷屏。 */
+    private final java.util.concurrent.atomic.AtomicBoolean hotWordsWarned =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
     @Override
     public VendorType vendor() {
         return VendorType.ALIYUN;
     }
 
+    /**
+     * 配了 {@code AsrConfig.hotWords} 却没配 vocabulary-id: 这些热词<b>不会生效</b>。
+     * 以前是静默忽略 —— 配了热词却发现专有名词还是识别不准, 根本无从查起。
+     */
+    private void warnHotWordsUnsupported(int count) {
+        if (hotWordsWarned.compareAndSet(false, true)) {
+            log.warn("配置了 {} 个热词, 但阿里云 DashScope 不支持随请求内联热词, 这些词不会生效。"
+                    + "请先用 DashScope 的 vocabulary 接口注册热词表, 再设 "
+                    + "vca.providers.asr.aliyun.vocabulary-id", count);
+        }
+    }
+
     @Override
     public Flux<AsrEvent> transcribe(Flux<AudioFrame> audio, AsrConfig cfg) {
         return Flux.defer(() -> {
-            RecognitionParam param = RecognitionParam.builder()
+            // punctuation_prediction_enabled 必须显式下发: 语义端点判定(EndpointPolicy)靠中间转写里的
+            // 句末标点判"已说完", 标点没了就只剩无标点规则可用, 判停会整体变慢。
+            RecognitionParam.RecognitionParamBuilder<?, ?> builder = RecognitionParam.builder()
                     .model(props.getModel())
                     .format("pcm")
                     .sampleRate(cfg.sampleRate())
                     .apiKey(props.getApiKey())
-                    .build();
+                    .parameter("punctuation_prediction_enabled", cfg.enablePunctuation());
+            if (!props.getVocabularyId().isBlank()) {
+                builder.vocabularyId(props.getVocabularyId());
+            } else if (!cfg.hotWords().isEmpty()) {
+                warnHotWordsUnsupported(cfg.hotWords().size());
+            }
+            RecognitionParam param = builder.build();
 
             // 上行: Reactor Flux<AudioFrame> → RxJava Flowable<ByteBuffer>(滤掉 endOfSpeech 空帧)
             Flowable<ByteBuffer> audioFlow = Flowable.fromPublisher(

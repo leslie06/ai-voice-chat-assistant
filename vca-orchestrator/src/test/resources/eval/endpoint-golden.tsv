@@ -1,0 +1,141 @@
+# 语义端点判定评测集(句尾判停)。
+#
+# 格式: <标签>\t<ASR 中间转写>
+#   END  = 用户这句已经说完, 应当尽快断句(等太久 = 体感迟钝)
+#   CONT = 用户还没说完(停顿找词/半句), 断了就是把人打断(最伤体验的错误)
+#
+# 注意"有无标点"这一维: 真实 ASR 的<b>中间</b>转写常常不带标点, 而 EndpointPolicy 的
+# COMPLETE 分支正是靠句末标点判定的。所以两种写法都要收, 报告按这一维分片 ——
+# 若不带标点那一片的 COMPLETE 命中率是 0, 说明语义端点在线上只会加延迟、不会减。
+#
+# 想换成自己的真实语料: 从 conversation_recording 里导出中间转写, 人工标 END/CONT 覆盖掉本文件即可。
+# 每行一条, # 开头为注释。
+
+# ---- END: 完整问句(不带标点, 贴近真实中间转写) ----
+END	今天天气怎么样
+END	明天上海会下雨吗
+END	现在几点了
+END	北京到上海高铁要多久
+END	你叫什么名字
+END	这个周末有什么好玩的
+END	番茄炒蛋怎么做
+END	怎么去最近的地铁站
+END	冰箱里的鸡蛋能放多久
+END	帮我查一下明天飞北京的航班
+END	给我讲个笑话
+END	帮我放一首周杰伦的晴天
+END	我想听点轻音乐
+END	把音量调大一点
+END	提醒我下午三点开会
+END	帮我定个明天早上七点的闹钟
+END	下一首
+END	停止播放
+END	我知道了
+END	谢谢你
+END	好的没问题
+END	不用了
+END	再见
+END	你能做什么
+END	帮我算一下三百二十乘以十五
+END	这道题该怎么解
+END	推荐几部好看的电影
+END	附近有什么好吃的川菜馆
+END	明天限号吗
+END	帮我把空调温度调到二十六度
+END	今天有什么新闻
+END	这首歌是谁唱的
+END	我想请三天假该怎么申请
+END	帮我翻译一下这句话
+END	那本书讲的是什么
+END	他为什么要这么做
+END	这个方案你觉得可行吗
+END	我们几点出发
+END	密码忘了怎么办
+END	帮我看看快递到哪了
+
+# ---- END: 完整问句(带句末标点) ----
+END	今天天气怎么样？
+END	现在几点了？
+END	给我讲个笑话。
+END	帮我放一首周杰伦的晴天。
+END	我知道了。
+END	这个周末有什么好玩的？
+END	把音量调大一点。
+END	停止播放。
+END	你能做什么？
+END	番茄炒蛋怎么做？
+END	明天限号吗？
+END	谢谢你！
+END	帮我定个明天早上七点的闹钟。
+END	附近有什么好吃的川菜馆？
+END	我们几点出发？
+
+# ---- END: 中英混说 ----
+END	帮我打开 wifi
+END	播放 taylor swift 的歌
+END	什么是 machine learning
+END	帮我订一张去 tokyo 的机票
+END	这个 bug 该怎么修
+END	play some jazz
+END	what time is it now
+
+# ---- CONT: 连词/结构助词收尾(明显半句) ----
+CONT	我想问一下那个
+CONT	帮我把
+CONT	因为
+CONT	然后呢就是
+CONT	我昨天去了一个
+CONT	如果明天
+CONT	你能不能帮我
+CONT	这个东西它的
+CONT	我觉得吧
+CONT	就是说
+CONT	但是
+CONT	所以我打算
+CONT	而且他还
+CONT	虽然这样
+CONT	不过我觉得
+CONT	比如说
+CONT	首先我们要
+CONT	另外还有一个
+CONT	或者我们可以
+CONT	我想把这个文件发给
+CONT	帮我跟
+CONT	明天我要去
+CONT	这件事情对
+CONT	我准备从
+CONT	他让我
+CONT	需要用
+CONT	麻烦你给
+CONT	我在
+CONT	等一下我先
+CONT	那我们就
+
+# ---- CONT: 口头停顿/迟疑 ----
+CONT	那个
+CONT	这个
+CONT	嗯
+CONT	呃
+CONT	那个什么来着
+CONT	嗯那个我想说的是
+CONT	呃就是
+CONT	怎么说呢
+CONT	我想想啊
+
+# ---- CONT: 语义未完但无明显尾词(最难的一类) ----
+CONT	我想听
+CONT	帮我搜一下
+CONT	我要
+CONT	昨天我跟同事
+CONT	他跟我说
+CONT	明天早上
+CONT	下个星期三
+CONT	我上次买的那个
+CONT	你有没有听说过
+CONT	能不能帮我看看
+
+# ---- CONT: 中英混说半句 ----
+CONT	帮我搜一下 the latest
+CONT	这个 function 的
+CONT	我想用 python 写一个
+CONT	can you help me

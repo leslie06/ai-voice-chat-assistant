@@ -63,8 +63,28 @@ class EndpointPolicyTest {
         // 这三个数就是注释里承诺给用户的效果, 改动任一默认值都应该在这里先被打醒。
         int base = 900, min = 400, max = 1600;
         assertThat(EndpointPolicy.requiredSilenceMs("今天天气怎么样？", base, min, max)).isEqualTo(405);
-        assertThat(EndpointPolicy.requiredSilenceMs("今天天气怎么样", base, min, max)).isEqualTo(base);
+        // 无标点也要走快档: 真实 ASR 的中间转写基本不带标点, 只认标点等于线上永远提不了速。
+        // (这里原本断言的是 base —— 那正是当时的局限, 评测报告把它量化出来后才补上无标点规则。)
+        assertThat(EndpointPolicy.requiredSilenceMs("今天天气怎么样", base, min, max)).isEqualTo(405);
+        assertThat(EndpointPolicy.requiredSilenceMs("明天限号吗", base, min, max)).isEqualTo(405);
+        // 既无完整信号也无未完信号 → 基线档
+        assertThat(EndpointPolicy.requiredSilenceMs("查一下航班", base, min, max)).isEqualTo(base);
         assertThat(EndpointPolicy.requiredSilenceMs("我想问一下然后", base, min, max)).isEqualTo(1440);
+        // 句首连词 + 短句: 从句起了头, 主句还没来 → 慢档
+        assertThat(EndpointPolicy.requiredSilenceMs("如果明天", base, min, max)).isEqualTo(1440);
+        // 但说得够长就不该再按半句等
+        assertThat(EndpointPolicy.requiredSilenceMs("虽然下雨了但是我还是想出去走走", base, min, max))
+                .isEqualTo(base);
+    }
+
+    @Test
+    void ambiguousParticlesAreNotTreatedAsComplete() {
+        // 吧/呢 既能收尾也能做停顿词("我觉得吧""怎么说呢")。把它们当"说完了"会当场切断用户,
+        // 是代价最高的一类判错 —— 宁可退回基线也不赌。
+        int base = 900, min = 400, max = 1600;
+        assertThat(EndpointPolicy.classify("我觉得吧")).isNotEqualTo(EndpointPolicy.Completeness.COMPLETE);
+        assertThat(EndpointPolicy.classify("怎么说呢")).isNotEqualTo(EndpointPolicy.Completeness.COMPLETE);
+        assertThat(EndpointPolicy.requiredSilenceMs("我觉得吧", base, min, max)).isGreaterThanOrEqualTo(base);
     }
 
     @Test

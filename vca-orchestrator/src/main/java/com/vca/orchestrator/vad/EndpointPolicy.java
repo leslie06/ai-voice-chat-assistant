@@ -25,6 +25,46 @@ public final class EndpointPolicy {
             "and", "or", "but", "so", "because", "if", "then", "that", "which", "to", "the", "a", "an", "of", "with"
     };
 
+    /**
+     * <b>不带标点</b>时判"已说完"的句末信号。加这一组的原因是实测出来的:
+     * 真实 ASR 的中间转写基本不带标点, 而原先判 COMPLETE 只认句末标点 —— 于是线上永远判不出
+     * COMPLETE, 语义端点只会<b>加</b>延迟不会减(评测报告里"不带标点"那一片提速命中率是 0%)。
+     *
+     * <p>选词标准是<b>语法功能</b>而非常用度, 只收在句末几乎不可能后接成分的:
+     * <ul>
+     *   <li>{@code 吗} —— 是非疑问句的句末语气词, 出现即整句问完;</li>
+     *   <li>{@code 了} —— 句末的完成/变化语气词("几点了""我知道了""快递到哪了");</li>
+     *   <li>疑问谓词收尾({@code 怎么样/怎么办/为什么/多久/多远/多少/哪里/哪儿}) —— 问句的落点;</li>
+     *   <li>寒暄收尾({@code 再见/谢谢/拜拜}) —— 独立成句。</li>
+     * </ul>
+     *
+     * <p>刻意<b>不收</b> {@code 吧} 和 {@code 呢}: 它们同样能做停顿词("我觉得吧""怎么说呢"),
+     * 收进来会把没说完的人当场切断 —— 那是所有判错里代价最高的一种, 不值得为几十毫秒去赌。
+     */
+    private static final String[] COMPLETE_TAILS = {
+            "吗", "了", "怎么样", "怎么办", "为什么", "多久", "多远", "多少", "哪里", "哪儿",
+            "再见", "谢谢", "拜拜"
+    };
+
+    /**
+     * 句首连词: 命中且整句还很短时判"没说完"。
+     *
+     * <p>补的是原实现的一个结构性盲区 —— 它只看句<b>尾</b>, 而"如果明天…""虽然这样…""所以我打算…"
+     * 这类半句, 提示词全在句<b>首</b>, 尾部什么特征都没有, 于是全被判成 NEUTRAL 按基线等。
+     * 这些词引出的是从句或并列的第一支, 主句还没来。
+     */
+    private static final String[] LEADING_CONNECTIVES = {
+            "如果", "虽然", "因为", "即使", "尽管", "不但", "不仅", "首先", "其次", "另外",
+            "而且", "所以", "或者", "比如", "既然", "要是", "假如", "除了", "一方面"
+    };
+
+    /**
+     * 句首连词规则的长度上限(字数)。超过它就不再据句首判"没说完" ——
+     * 说得够长时, 从句多半已经说完、主句也跟上了("虽然下雨了但是我还是想出去走走"),
+     * 再按半句多等就是白等。取 10 是让它覆盖"连词 + 几个字"的真半句, 不误伤成型的长句。
+     */
+    private static final int LEADING_CONNECTIVE_MAX_CHARS = 10;
+
     private EndpointPolicy() {
     }
 
@@ -69,12 +109,35 @@ public final class EndpointPolicy {
             return Completeness.INCOMPLETE;
         }
         String lower = core.toLowerCase();
+        // 先判"没说完": 切错的代价远高于多等一会, 冲突时让保守的一方赢。
         for (String tail : INCOMPLETE_TAILS) {
             if (endsWithWord(lower, core, tail)) {
                 return Completeness.INCOMPLETE;
             }
         }
+        if (startsWithConnectiveAndShort(core)) {
+            return Completeness.INCOMPLETE;
+        }
+        // 再判"已说完": 无标点时靠句末语气词/疑问谓词, 覆盖真实中间转写没有标点的常态。
+        for (String tail : COMPLETE_TAILS) {
+            if (endsWithWord(lower, core, tail)) {
+                return Completeness.COMPLETE;
+            }
+        }
         return Completeness.NEUTRAL;
+    }
+
+    /** 句首是连词且整句还短: 从句刚起头, 主句没来。 */
+    private static boolean startsWithConnectiveAndShort(String core) {
+        if (core.codePointCount(0, core.length()) > LEADING_CONNECTIVE_MAX_CHARS) {
+            return false;
+        }
+        for (String c : LEADING_CONNECTIVES) {
+            if (core.startsWith(c)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 中文直接后缀匹配; 英文需是独立单词收尾(前面是词边界), 避免 "to" 误命中 "Tokyo/auto"。 */
