@@ -193,6 +193,42 @@ public class ConversationSession {
     /** 延迟埋点; 测试/未注入时为 noop */
     private final TurnMetrics metrics;
 
+    /**
+     * 被打断的助手消息落历史时附加的标记。加它是因为模型看到的是<b>文本</b>, 而"这句只说了一半"
+     * 是纯粹的时序事实, 文本本身带不出来 —— 不标注, 模型会以为自己已经完整表达过, 用户下一句
+     * "你刚说的那个"它就接不上, 或者把没说完的部分当成已说过而不再重复。
+     *
+     * <p>用中文括注而不是自造符号(如 {@code <cut/>}): 模型对自然语言注释的理解比对私有标记稳,
+     * 且这段文本可能进入任意厂商的模型, 不能指望它们认同一套约定。
+     */
+    private static final String INTERRUPTED_SUFFIX = "（这段回复被用户打断了，用户多半只听到了开头一部分）";
+
+    /**
+     * 本回合助手已经"说出口"的文本。存在的唯一目的是<b>兜住打断</b>: 正常收尾走 {@code doOnComplete}
+     * 落历史, 而打断走的是 {@code takeUntilOther} 的 cancel, {@code doOnComplete} 根本不触发 ——
+     * 没有它, 被打断的半句会整段蒸发。
+     *
+     * <p><b>累计粒度按回合类型分</b>, 这是准确性的关键:
+     * <ul>
+     *   <li>语音回合累计<b>交给 TTS 合成的句子</b>。不能用 LLM 的 token —— 模型生成远快于语音播放,
+     *       一段五句话的回复往往在第一句还没播完时就整段生成好了, 按 token 记会把"说过的话"
+     *       夸大好几倍, 模型下一轮就会以为四句没说的话已经说过。</li>
+     *   <li>打字回合没有 TTS, 字幕即所见, 按 token 累计就是准的。</li>
+     * </ul>
+     *
+     * <p><b>语音回合拿到的仍是上界, 不是精确值</b>, 这是刻意接受的: 分句流被 TTS 的 concatMap
+     * 按 prefetch 提前拉取, 前端还有一段播放缓冲会在打断时冲掉。要做到精确, 得把 TTS 调用改成
+     * 一句一次、在首个音频块回来时才记账 —— 那会让 {@code QwenTtsProvider} 退化成一句一条连接,
+     * 丢掉流式输入(它正是延迟最低的那条路), 为了历史里几个字的精度不值当。
+     *
+     * <p>所以标记({@link #INTERRUPTED_SUFFIX})的措辞只说"多半只听到开头一部分", 不报具体位置 ——
+     * 宁可让模型知道自己不确定, 也不能给它一个精确但错误的边界。
+     *
+     * <p>会话内回合串行(同一时刻只有一个 {@code currentInterrupt}), 一个会话共用一份即可;
+     * 增量可能来自不同线程, 用自身做锁。
+     */
+    private final StringBuilder spokenThisTurn = new StringBuilder();
+
     public ConversationSession(SessionContext context,
                                AsrProvider asr, LlmProvider llm, TtsProvider tts, S2sProvider s2s,
                                SentenceSplitter splitter) {
@@ -608,6 +644,7 @@ public class ConversationSession {
 
     /** 开启一轮: 建新的打断信号并转入 LISTENING */
     private Sinks.One<Void> beginTurn() {
+        takeSpokenThisTurn();   // 上一回合若异常收尾有残留, 不能算到这一回合头上
         Sinks.One<Void> interrupt = Sinks.one();
         currentInterrupt.set(interrupt);
         stateMachine.tryTransition(SessionState.LISTENING);
@@ -747,19 +784,33 @@ public class ConversationSession {
                         }
                     })
                     .doFinally(sig -> {
+                        // 本回合助手说出口的内容; 取走即清空, 无论如何收尾都不能留给下一回合
+                        String spoken = takeSpokenThisTurn();
+                        String archived = reply.get();
                         // 动作型回合不留对话痕迹: 撤掉本轮先行写入的用户消息(助手侧本就没写)
                         if (actionTurn.get()) {
                             removeFromHistory(userMsg);
+                        } else if (sig == reactor.core.publisher.SignalType.CANCEL) {
+                            // 打断走 cancel, 上面的 doOnComplete 不触发 —— 不在这里补, 助手这半句会整段蒸发,
+                            // 模型下一轮完全不知道自己开过口(用户说"你刚说的那个"就接不上)。
+                            // 优先用实际逐字播出去的 spoken; 若答复是整段一次性合成的(终结型技能), 它才是用户听的内容。
+                            String partial = !spoken.isBlank() ? spoken.strip()
+                                    : (archived == null ? "" : archived.strip());
+                            if (!partial.isEmpty()) {
+                                archived = partial;
+                                appendHistory(Message.assistant(partial + INTERRUPTED_SUFFIX));
+                            }
                         }
                         userSpeechEndAtMs.set(0);   // 本轮没出音频也要清, 免得这次闭嘴被算进下一轮
                         Duration total = elapsed(startNanos);
                         metrics.recordTurnTotal(total);
                         metrics.countTurn(speak ? "voice" : "text", outcomeOf(sig));
                         // 落库: 动作型回合(点歌)reply 为空, 仍存用户那句作为档案; agent 回合附带步数/反思补步数
+                        // 被打断的回合存的是"用户实际听到的那部分"(不含上面的标记 —— 标记是给模型的, 不是语料)
                         AgentRun run = agentRunRef.get();
                         Integer aSteps = run == null ? null : run.stepsExecuted();
                         Integer aReplans = run == null ? null : run.replans();
-                        recordTurn(userText, reply.get(), mode.name(), outcomeOf(sig),
+                        recordTurn(userText, archived, mode.name(), outcomeOf(sig),
                                 total.toMillis(), aSteps, aReplans);
                     });
         });
@@ -798,7 +849,7 @@ public class ConversationSession {
                             logLlmFirstToken(speak ? "voice" : "text", cfg, ttft);
                         }
                         roundText.append(td.text());
-                        safeNotify(() -> listener.onAssistantDelta(td.text()));
+                        emitAssistantDelta(td.text(), !speak);
                         return Flux.just(td.text());
                     }
                     if (ev instanceof LlmEvent.ToolCalls tc) {
@@ -808,7 +859,9 @@ public class ConversationSession {
                 });
 
         Flux<AudioChunk> speech = speak
-                ? tts.synthesize(splitter.split(tokens), activeTtsConfig)
+                // doOnNext 挂在分句流上而不是 token 流上: 这里的每一句都是真的被送去合成了,
+                // 是服务端能拿到的、离"用户听到"最近的一个信号(见 spokenThisTurn 的说明)。
+                ? tts.synthesize(splitter.split(tokens).doOnNext(this::noteSpoken), activeTtsConfig)
                         .doOnNext(chunk -> {
                             if (firstAudio.compareAndSet(false, true)) {
                                 Duration ttfa = elapsed(startNanos);
@@ -1207,12 +1260,18 @@ public class ConversationSession {
                         stateMachine.tryTransition(SessionState.SPEAKING);
                     }
                 })
-                .doOnComplete(() -> {
-                    if (!assistant.isEmpty()) {
-                        appendHistory(Message.assistant(assistant.toString()));
-                        safeNotify(() -> listener.onAssistantText(assistant.toString()));
-                        recordTurn(lastUserText, assistant.toString(), "s2s", "complete", null);
+                // 用 doFinally 而不是 doOnComplete: 打断走的是 cancel, 只挂 onComplete 会让被打断的
+                // 那半句整段丢失(三段式 respond 里是同一个坑)。被打断的消息带标记进历史, 落库仍存原文。
+                .doFinally(sig -> {
+                    if (assistant.isEmpty()) {
+                        return;
                     }
+                    String full = assistant.toString();
+                    String outcome = outcomeOf(sig);
+                    boolean interrupted = sig == reactor.core.publisher.SignalType.CANCEL;
+                    appendHistory(Message.assistant(interrupted ? full + INTERRUPTED_SUFFIX : full));
+                    safeNotify(() -> listener.onAssistantText(full));
+                    recordTurn(lastUserText, full, "s2s", outcome, null);
                 });
     }
 
@@ -1340,7 +1399,10 @@ public class ConversationSession {
     private void flushAssistant(LiveResponse resp, String outcome) {
         if (!resp.assistant.isEmpty()) {
             String full = resp.assistant.toString();
-            appendHistory(Message.assistant(full));
+            // 全双工打断在这里是<b>常态</b>而非异常, 更要标注: 服务端 VAD 一听到用户开口就切,
+            // 助手往往只说了几个字。不标, 模型会以为整段已经说完。
+            boolean interrupted = "interrupted".equals(outcome);
+            appendHistory(Message.assistant(interrupted ? full + INTERRUPTED_SUFFIX : full));
             safeNotify(() -> listener.onAssistantText(full));
             // 持久 S2S 每次回复结束/被打断算一轮; 用户那句来自之前的 UserTranscript 事件(lastUserText)
             recordTurn(lastUserText, full, "s2s-persistent", outcome, null);
@@ -1438,6 +1500,39 @@ public class ConversationSession {
             r.run();
         } catch (Exception e) {
             log.warn("TurnListener 回调出错: {}", e.toString());
+        }
+    }
+
+    /**
+     * 回传一段助手文本增量给接入层做字幕; {@code accumulate=true} 时同时计入 {@link #spokenThisTurn}。
+     * 语音回合传 false —— 它的"说出口"以句子进 TTS 为准, 见 {@link #noteSpoken}。
+     */
+    private void emitAssistantDelta(String delta, boolean accumulate) {
+        if (delta == null || delta.isEmpty()) {
+            return;
+        }
+        if (accumulate) {
+            noteSpoken(delta);
+        }
+        safeNotify(() -> listener.onAssistantDelta(delta));
+    }
+
+    /** 记下一段已经"说出口"的文本(语音回合: 一句刚被交给 TTS 合成)。 */
+    private void noteSpoken(String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        synchronized (spokenThisTurn) {
+            spokenThisTurn.append(text);
+        }
+    }
+
+    /** 取走本回合已说出口的文本并清空(回合收尾时调用一次, 不留给下一回合)。 */
+    private String takeSpokenThisTurn() {
+        synchronized (spokenThisTurn) {
+            String s = spokenThisTurn.toString();
+            spokenThisTurn.setLength(0);
+            return s;
         }
     }
 

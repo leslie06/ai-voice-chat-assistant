@@ -144,10 +144,14 @@ class ConversationSessionTest {
         awaitState(session, SessionState.IDLE, Duration.ofSeconds(1));
         assertThat(session.state()).isEqualTo(SessionState.IDLE);
 
-        // 被打断的回合不应把(不完整的)assistant 回复写进历史
+        // 被打断的回合<b>要</b>把已说出的部分写进历史, 并标注没说完。
+        // (早先这里断言的是"不写历史" —— 那样模型下一轮完全不知道自己开过口, 用户说
+        //  "你刚说的那个"就接不上。完整性质见 InterruptedHistoryTest。)
         List<Message> h = session.historyView();
-        assertThat(h).hasSize(2); // system + user
+        assertThat(h).hasSize(3); // system + user + 被打断的 assistant
         assertThat(h.get(1).role()).isEqualTo(Message.Role.USER);
+        assertThat(h.get(2).role()).isEqualTo(Message.Role.ASSISTANT);
+        assertThat(h.get(2).content()).startsWith("第一句。").contains("被用户打断");
     }
 
     // ---- 持久 S2S(P2): 长连 + 服务端 VAD ----
@@ -266,7 +270,9 @@ class ConversationSessionTest {
         assertThat(listener.userSpeechStarted).isTrue();
         // 打断时已说出的部分回复落历史(模型被截断, 部分内容仍是上下文)
         List<Message> h = session.historyView();
-        assertThat(h).anyMatch(m -> m.role() == Message.Role.ASSISTANT && m.content().equals("正在说"));
+        // 内容带"被打断"标记(见 InterruptedHistoryTest), 故用 startsWith 而不是 equals
+        assertThat(h).anyMatch(m -> m.role() == Message.Role.ASSISTANT
+                && m.content().startsWith("正在说") && m.content().contains("被用户打断"));
     }
 
     private static void awaitState(ConversationSession session, SessionState target, Duration timeout) {
