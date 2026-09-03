@@ -961,9 +961,23 @@ function mediaArtwork(track){
 const LOCKSCREEN_LYRICS = true;
 let mediaLyricLine = '';
 
-function mediaAlbumText(track){
-  if(LOCKSCREEN_LYRICS && mediaLyricLine) return mediaLyricLine;
-  return track.full ? '完整播放' : '30秒试听';
+function mediaBadge(track){ return track.full ? '完整播放' : '30秒试听'; }
+
+/* 歌词放哪一行, 是这个功能成不成的关键。
+   起初放在 album, 结果锁屏上什么都看不到 —— <b>album 这一行很多机型压根不渲染</b>:
+   iOS 锁屏通常只给"歌名 + 歌手"两行, 安卓的紧凑媒体控件也是。
+   两个平台<b>必然</b>渲染的只有 title 和 artist, 所以歌词改占 artist 行, 歌手名往下挪到 album,
+   信息一条不丢, 只是换位:
+       晴天              ← title  歌名(始终不变, 这是用户最需要认出来的)
+       故事的小黄花       ← artist 当前歌词
+       周杰伦 · 完整播放  ← album  歌手(能显示的机型上还看得到)
+   没有歌词(这首没歌词/还没唱到第一句)时一切照旧。 */
+function mediaLines(track){
+  const lyric = (LOCKSCREEN_LYRICS && mediaLyricLine) ? mediaLyricLine : '';
+  const artist = track.artist || '未知歌手';
+  return lyric
+      ? {artist: lyric, album: artist + ' · ' + mediaBadge(track)}
+      : {artist: artist, album: mediaBadge(track)};
 }
 
 // 歌词行变了才刷锁屏。updateLyrics 只在换行时才调到这里(它自己有 index 相同就 return 的守卫),
@@ -979,16 +993,17 @@ function updateMediaLyric(line){
 function updateMediaSession(track){
   if(!hasMediaSession || !track) return;
   try{
+    const lines = mediaLines(track);
     navigator.mediaSession.metadata = new MediaMetadata({
       title: track.title || '未知歌曲',
-      artist: track.artist || '未知歌手',
-      album: mediaAlbumText(track),
+      artist: lines.artist,
+      album: lines.album,
       artwork: mediaArtwork(track)
     });
   }catch(e){}
-  // 只有一首时摘掉切歌处理器, 系统就不会画出点了没反应的按钮(iOS 会换回 ±15 秒)
-  setMediaHandler('previoustrack', musicTracks.length>1 ? previousMusic : null);
-  setMediaHandler('nexttrack',     musicTracks.length>1 ? nextMusic     : null);
+  // 本函数每换一行歌词就被调一次, 所以这里绝不能反复增删处理器(那会让按钮忽隐忽现);
+  // 但切歌处理器又必须等到开播后才注册才生效 —— ensureTrackHandlers 内部只认第一次, 两个约束都满足。
+  ensureTrackHandlers();
 }
 
 function setMediaHandler(action, fn){
@@ -1024,7 +1039,18 @@ function clearMediaSession(){
   setMediaPlaybackState('none');
 }
 
-// 播放/暂停/停止/拖动进度: 锁屏按钮直接驱动同一个 <audio>, 与页面内按钮走同一条路径
+/* 动作处理器。踩过两个坑, 都记在这里, 别再改回去:
+
+   ① <b>切歌处理器必须在开播之后注册, 不能在脚本加载时注册</b>。
+      系统的 Now Playing 会话是<b>播放开始时</b>才建立的; 在那之前调 setActionHandler,
+      有的平台不会把这个能力算进去, 表现就是锁屏上根本不出现上一首/下一首按钮。
+      最早能用的那版正是在 updateMediaSession 里注册的(开播才会走到), 后来我图"干净"挪到
+      加载时集中注册, 按钮就没了。现在改回开播时注册, 但用 mediaTrackHandlersReady 保证只注册一次 ——
+      既回到能用的时机, 又不会像歌词那版一样每换一行就反复增删。
+
+   ② <b>不要注册 seekbackward / seekforward</b>。
+      注册了它们, 系统会认为这是"可快进快退的长音频"(播客那类), 于是锁屏上给的是 ±15 秒跳转按钮,
+      把上一首/下一首<b>挤掉</b>。我们要的是切歌, 所以这两个不注册; 拖动进度由 seekto 提供(进度条还在)。 */
 setMediaHandler('play',  ()=>musicPlayer.play().catch(()=>{}));
 setMediaHandler('pause', ()=>musicPlayer.pause());
 setMediaHandler('stop',  ()=>closeMusicMini());
@@ -1034,15 +1060,15 @@ setMediaHandler('seekto', d=>{
   else{ musicPlayer.currentTime = d.seekTime; }
   updateMediaPosition(true);
 });
-setMediaHandler('seekbackward', d=>{
-  musicPlayer.currentTime = Math.max(0, musicPlayer.currentTime - ((d&&d.seekOffset)||10));
-  updateMediaPosition(true);
-});
-setMediaHandler('seekforward', d=>{
-  const end = Number.isFinite(musicPlayer.duration) ? musicPlayer.duration : Infinity;
-  musicPlayer.currentTime = Math.min(end, musicPlayer.currentTime + ((d&&d.seekOffset)||10));
-  updateMediaPosition(true);
-});
+
+let mediaTrackHandlersReady = false;
+// 开播后再注册切歌处理器(见上文①); 只注册一次(见上文歌词那版的教训)
+function ensureTrackHandlers(){
+  if(!hasMediaSession || mediaTrackHandlersReady) return;
+  mediaTrackHandlersReady = true;
+  setMediaHandler('previoustrack', ()=>previousMusic());
+  setMediaHandler('nexttrack',     ()=>nextMusic());
+}
 
 musicPlayer.addEventListener('ended',nextMusic);
 // 把播放状态同步给后端, 后端据此决定控歌命令是否成立(没有当前曲目时一律当普通对话)。
