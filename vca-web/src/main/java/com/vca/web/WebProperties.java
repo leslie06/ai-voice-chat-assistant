@@ -427,6 +427,15 @@ public class WebProperties {
         private int bargeGraceMs = 0;
         /** 半双工: 机器人说话时不收麦/不语音打断, 外放无回声消除时靠它断掉自打断死循环。默认开, 戴耳机可关。 */
         private boolean halfDuplex = true;
+        /**
+         * 回声感知打断: 开启后外放场景也能语音打断 —— 由 EchoGuard 分辨麦克风里的声音是用户
+         * 还是机器人自己绕回来的, 而不是像半双工那样一刀切地在机器人说话期间不判打断。
+         *
+         * <p><b>默认关</b>: 算法在合成信号上验证过(见 EchoGuardTest, 准确率 99%+), 但真实声学环境
+         * (房间混响、扬声器非线性失真、手机自带 AEC 的残留特性)只能上真机确认。
+         * 现在的半双工是能用的, 不拿没验证过的东西去换。真机验证通过后再改默认值。
+         */
+        private boolean echoAware = false;
         /** 语义端点判定: 句尾静音阈值随 ASR 中间转写完整度自适应(没说完拉长、说完缩短)。仅三段式生效。 */
         private boolean semanticEndpoint = true;
         /** 自适应下限(ms): "已说完"时句尾静音最短不低于此。 */
@@ -453,7 +462,7 @@ public class WebProperties {
                 }
             }
             return new VadConfig(speech, onsetMs, silenceMs, barge, bargeMs, prerollMs, targetSampleRate,
-                    useSilero, sileroModelPath, bargeGraceMs, halfDuplex,
+                    useSilero, sileroModelPath, bargeGraceMs, halfDuplex, echoAware,
                     semanticEndpoint, minSilenceMs, maxSilenceMs);
         }
 
@@ -543,6 +552,14 @@ public class WebProperties {
 
         public void setHalfDuplex(boolean halfDuplex) {
             this.halfDuplex = halfDuplex;
+        }
+
+        public boolean isEchoAware() {
+            return echoAware;
+        }
+
+        public void setEchoAware(boolean echoAware) {
+            this.echoAware = echoAware;
         }
 
         public boolean isSemanticEndpoint() {

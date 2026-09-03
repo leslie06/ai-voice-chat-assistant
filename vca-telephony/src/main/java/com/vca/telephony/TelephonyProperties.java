@@ -290,7 +290,10 @@ public class TelephonyProperties {
                 vad.getSpeechThreshold(), vad.getOnsetMs(), vad.getSilenceMs(),
                 vad.getBargeThreshold(), vad.getBargeMs(), vad.getPrerollMs(),
                 16_000, vad.isUseSilero(), "", vad.getBargeGraceMs(),
-                false, false, 400, 1600);
+                // halfDuplex=false: 电话线路本就是全双工, 打断照常判
+                // echoAware=false: 回声判别依赖"服务端知道下行音频"的时序模型, 电话侧下行走
+                //                  AudioSocket 的定速缓冲(PacingBuffer), 时间轴与 Web 不同, 未验证
+                false, false, false, 400, 1600);
     }
 
     // ---- getters / setters ----

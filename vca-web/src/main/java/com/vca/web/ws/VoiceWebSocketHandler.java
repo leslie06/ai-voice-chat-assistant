@@ -105,6 +105,13 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
     /** 当前在线连接数。handler 是单例 Bean, 此计数全局生效。 */
     private final AtomicInteger activeConnections = new AtomicInteger();
     /** 并发发射冲突时的自旋次数上限(见 {@link #emitOutbound}); 冲突窗口是一次入队, 自旋几十次绰绰有余。 */
+    /**
+     * 下行音频采样率(Hz)。前端固定按 24k 单声道 16bit 播放(index.html 的 createBuffer(1,n,24000)),
+     * TTS/S2S 两条路的输出都对齐到它。播放时长推算、WAV 录音、回声参考信号都依赖这个数, 收口在此
+     * 免得几处各写各的再慢慢对不上。
+     */
+    private static final int DOWNLINK_SAMPLE_RATE = 24_000;
+
     private static final int MAX_EMIT_SPINS = 256;
 
     public VoiceWebSocketHandler(ConversationSessionFactory sessionFactory, ObjectMapper mapper, VadConfig vadConfig,
@@ -892,9 +899,13 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                 // 按音频时长把"预计播完时刻"往后推(24k 单声道 16bit: bytes/2/24000 秒 = bytes/48 ms),
                 // 从首块的 max(now, 上次预计) 累加, 使打断窗口覆盖整段前端播放, 而非只覆盖后端下发那一小段。
                 long now = System.currentTimeMillis();
-                playbackEndsAtMs = Math.max(now, playbackEndsAtMs) + chunk.size() / 48L;
+                playbackEndsAtMs = Math.max(now, playbackEndsAtMs)
+                        + chunk.size() * 1000L / (DOWNLINK_SAMPLE_RATE * 2);
                 if (chunk.format() == AudioFormat.PCM) {
-                    recording.appendAssistantAudio(chunk.data(), 24_000);
+                    recording.appendAssistantAudio(chunk.data(), DOWNLINK_SAMPLE_RATE);
+                    // 同一段音频交给 VAD 作为回声判别的参考信号(未开回声感知时是空操作)。
+                    // 必须在这里下发 —— 这是服务端唯一确切知道"用户即将听到什么"的地方。
+                    vad.onPlayback(chunk.data(), DOWNLINK_SAMPLE_RATE);
                 } else {
                     log.warn("下行音频不是 PCM, 跳过 WAV 录音: format={}, session={}",
                             chunk.format(), session.getId());

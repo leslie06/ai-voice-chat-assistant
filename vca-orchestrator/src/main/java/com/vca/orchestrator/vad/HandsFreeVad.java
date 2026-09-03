@@ -58,6 +58,13 @@ public class HandsFreeVad {
     private final Listener listener;
     /** 逐帧人声打分器: 能量法或 Silero, 状态机逻辑对其无感。 */
     private final VoiceActivityDetector detector;
+    /**
+     * 回声判别器; 未开启({@code echoAware=false})时为 null, 行为与从前完全一致。
+     * 开启后接管"机器人说话期间要不要判打断"这个决定 —— 见 WAIT 分支。
+     */
+    private final EchoGuard echoGuard;
+    /** 墙钟来源; 见带 clock 的构造函数说明。 */
+    private final java.util.function.LongSupplier clock;
 
     private State state = State.OFF;
     private int inputSampleRate = 48000;
@@ -96,9 +103,31 @@ public class HandsFreeVad {
     }
 
     public HandsFreeVad(VadConfig cfg, Listener listener, VoiceActivityDetector detector) {
+        this(cfg, listener, detector, System::currentTimeMillis);
+    }
+
+    /**
+     * @param clock 墙钟(ms)。回声判别要把下行与上行放到同一条时间轴上比对, 因此必须可注入 ——
+     *              测试要按 20ms 一帧推进虚拟时间, 用真实时钟的话几百帧会挤在同一毫秒里,
+     *              包络塌成一个点, 测的就不是算法而是调度速度了。
+     */
+    public HandsFreeVad(VadConfig cfg, Listener listener, VoiceActivityDetector detector,
+                        java.util.function.LongSupplier clock) {
         this.cfg = cfg;
         this.listener = listener;
         this.detector = detector == null ? new EnergyVad() : detector;
+        this.clock = clock == null ? System::currentTimeMillis : clock;
+        this.echoGuard = cfg.echoAware() ? new EchoGuard() : null;
+    }
+
+    /**
+     * 记入一段即将发给前端播放的下行音频, 作为回声判别的参考信号。
+     * 未开启回声感知时是空操作。接入层在下发每个音频块时调用。
+     */
+    public void onPlayback(byte[] pcm16le, int sampleRate) {
+        if (echoGuard != null) {
+            echoGuard.onPlayback(pcm16le, sampleRate, clock.getAsLong());
+        }
     }
 
     /** 开启免提: 进入"等你开口"。inputSampleRate 为前端上行 PCM 的采样率。 */
@@ -108,6 +137,9 @@ public class HandsFreeVad {
         resetCounters();
         clearPreroll();
         detector.reset();
+        if (echoGuard != null) {
+            echoGuard.reset();
+        }
     }
 
     /** 关闭免提 */
@@ -140,12 +172,22 @@ public class HandsFreeVad {
         double frameMs = frame.length * 1000.0 / cfg.targetSampleRate();
         pushPreroll(frame, frameMs);
 
+        if (echoGuard != null) {
+            echoGuard.onMic(frame, cfg.targetSampleRate(), clock.getAsLong());
+        }
+
         switch (state) {
-            // 半双工: 机器人说话期间不判打断(回声进不来), 彻底断掉自打断死循环; 手动按钮仍可打断
             case WAIT -> {
-                if (!cfg.halfDuplex()) {
-                    bargeDetect(level, frameMs, botSpeaking);
+                if (echoGuard != null) {
+                    // 回声感知: 半双工与否都照常判打断, 但机器人说话期间要先问一句
+                    // "这股声音是用户还是我自己绕回来的" —— 判定为回声的帧不计入打断累计。
+                    boolean echo = botSpeaking && !echoGuard.userSpeechLikely(clock.getAsLong());
+                    bargeDetect(level, frameMs, botSpeaking, echo);
+                } else if (!cfg.halfDuplex()) {
+                    bargeDetect(level, frameMs, botSpeaking, false);
                 }
+                // 半双工且未开回声感知: 机器人说话期间完全不判打断(回声进不来),
+                // 彻底断掉自打断死循环; 手动按钮仍可打断。
             }
             case AWAIT -> {
                 // 诊断: 每 ~2s 打印 AWAIT 期间峰值人声 + 当前真正在用的检测器(Silero 还是降级回的能量法)
@@ -252,7 +294,10 @@ public class HandsFreeVad {
     }
 
     /** 打断判定: 机器人在说话且人声持续够久 → 打断, 并把这次插话当作新一轮开始(含预滚, 不丢开头) */
-    private void bargeDetect(double level, double frameMs, boolean botSpeaking) {
+    /**
+     * @param echoSuppressed 本帧被判定为"机器人自己的回声": 照常做窗口记账与诊断, 但<b>不累计</b>打断时长
+     */
+    private void bargeDetect(double level, double frameMs, boolean botSpeaking, boolean echoSuppressed) {
         if (!botSpeaking) {
             // 一段机器人说话窗口结束: 分别报告"全程峰值"和"过保护期后峰值", 以及打断累计达到过的峰值。
             // 若"过保护期后峰值"<阈值, 说明你的插话高电平都落在保护期内被忽略了 → 调小 bargeGraceMs;
@@ -278,7 +323,7 @@ public class HandsFreeVad {
             return;
         }
         bargePostGracePeak = Math.max(bargePostGracePeak, level);
-        if (level > cfg.bargeThreshold()) {
+        if (!echoSuppressed && level > cfg.bargeThreshold()) {
             bargeMs += frameMs;
         } else {
             bargeMs = Math.max(0, bargeMs - frameMs);

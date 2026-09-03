@@ -155,8 +155,23 @@ vca:
       #
       # 注意上面 barge-* 三项是按"外放不自打断"调钝过的(阈值 0.05/持续 400ms/起播保护 600ms),
       # 戴耳机的用户会觉得打断很迟钝。以耳机场景为主时可调回 0.025 / 250 / 200,
-      # 但外放会更容易被自己的回声打断 —— 两者不可兼得, 除非做回声消除(AEC)。
+      # 但外放会更容易被自己的回声打断 —— 两者不可兼得, 除非做回声判别(见下面 echo-aware)。
       half-duplex: ${VCA_VAD_HALF_DUPLEX:false}
+      # --- 回声感知打断(默认关): 让外放场景也能语音打断 ---
+      # 开启后, half-duplex=true 也照常判打断, 但由 EchoGuard 先分辨"麦克风里这股声音是用户,
+      # 还是机器人自己绕回来的": 服务端两端信号都有(下行 TTS 是它发的, 上行麦克风是它收的),
+      # 用功率包络互相关估出回声延迟与增益, 再看麦克风能量里有多少是下行解释不了的(残差)——
+      # 纯回声残差接近 0, 有人插话就立刻抬起来。这是双讲检测, 不是完整 AEC(不消除, 只判别)。
+      #
+      # 为什么默认关: 算法在合成信号上验证过(EchoGuardTest, 跨 40 组语料准确率 99%+),
+      # 但真实声学环境(房间混响、扬声器非线性失真、手机自带 AEC 的残留特性)只能上真机确认。
+      # 现在的 half-duplex 是能用的, 不拿没真机验证过的东西去换。
+      #
+      # 真机怎么验: 手机外放开着免提, 让它念一长段, 然后
+      #   1) 你不出声 —— 它应该一直说完(说明回声没被当成打断);
+      #   2) 你插一句 —— 应该当场被打断(说明用户声音没被当成回声压掉)。
+      # 两条都稳定成立, 再把它设成默认。日志里 EchoGuard 的 TRACE 会打出延迟/增益/残差占比。
+      echo-aware: ${VCA_VAD_ECHO_AWARE:false}
 
   # 电话接入(外呼/呼入): Asterisk 经 AudioSocket(裸 TCP)把通话音频接进来, 复用同一套编排。
   # 默认关闭 —— 关闭时不监听端口、不建任何 bean, 对浏览器链路零影响。
@@ -347,6 +362,9 @@ vca:
         enabled: ${ALIYUN_ASR_ENABLED:false}
         api-key: ${DASHSCOPE_API_KEY:}
         model: paraformer-realtime-v2
+        # 热词表 id(可选)。DashScope v2 不吃内联热词数组, 必须先注册成表再引用 ——
+        # 只配 AsrConfig.hotWords 是不生效的(provider 会打一次 warn 提示)。
+        vocabulary-id: ${ALIYUN_ASR_VOCABULARY_ID:}
     tts:
       aliyun:
         # 真实阿里云 TTS(CosyVoice): ALIYUN_TTS_ENABLED=true + DASHSCOPE_API_KEY=sk-...

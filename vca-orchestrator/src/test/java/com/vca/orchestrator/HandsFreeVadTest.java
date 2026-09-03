@@ -83,7 +83,7 @@ class HandsFreeVadTest {
     @Test
     void bargeGracePeriodSuppressesEarlyBargeIn() {
         // grace=600ms; 其余沿用默认(barge 阈值 0.020, bargeMs 250), 全双工以便验证打断
-        VadConfig cfg = new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 600, false, false, 400, 1600);
+        VadConfig cfg = new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 600, false, false, false, 400, 1600);
         HandsFreeVad v = new HandsFreeVad(cfg, new HandsFreeVad.Listener() {
             @Override public void onSpeechStart() { events.add("start"); }
             @Override public void onAudio(byte[] pcm16le) { events.add("audio"); }
@@ -111,7 +111,7 @@ class HandsFreeVadTest {
     /** 半双工: 机器人说话期间即使有持续人声(回声)也绝不打断, 从根上断掉自打断死循环。 */
     @Test
     void halfDuplexNeverBargesWhileBotSpeaking() {
-        VadConfig cfg = new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 0, true, false, 400, 1600);
+        VadConfig cfg = new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 0, true, false, false, 400, 1600);
         HandsFreeVad v = new HandsFreeVad(cfg, new HandsFreeVad.Listener() {
             @Override public void onSpeechStart() { events.add("start"); }
             @Override public void onAudio(byte[] pcm16le) { events.add("audio"); }
@@ -126,5 +126,119 @@ class HandsFreeVadTest {
         // 机器人说话时持续灌入响亮人声(模拟回声), 半双工下绝不打断
         feed20ms(v, loud(), 60, true);
         assertTrue(events.isEmpty(), "半双工下机器人说话期间不应有任何打断");
+    }
+
+    // ---- 回声感知打断(echoAware): 让外放场景也能语音打断 ----
+
+    private static VadConfig echoAwareConfig() {
+        // halfDuplex=true 但 echoAware=true: 半双工的"一刀切不判打断"应当被回声判别接管
+        return new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000,
+                false, "", 0, true, true, false, 400, 1600);
+    }
+
+    /** 虚拟时钟: 按帧推进, 让回声判别拿到真实的时间轴(见 HandsFreeVad 带 clock 的构造函数)。 */
+    private static final class FakeClock implements java.util.function.LongSupplier {
+        long nowMs = 1_000_000;
+
+        @Override
+        public long getAsLong() {
+            return nowMs;
+        }
+    }
+
+    private HandsFreeVad echoAwareVad(FakeClock clock) {
+        return new HandsFreeVad(echoAwareConfig(), new HandsFreeVad.Listener() {
+            @Override public void onSpeechStart() { events.add("start"); }
+            @Override public void onAudio(byte[] pcm16le) { events.add("audio"); }
+            @Override public void onSpeechEnd() { events.add("end"); }
+            @Override public void onBargeIn() { events.add("barge"); }
+        }, null, clock);
+    }
+
+    /** 造一段音节起伏的幅度包络(恒定音量没有可对齐的形状, 见 EchoGuard 说明)。 */
+    private static double[] envelope(int frames, long seed) {
+        java.util.Random r = new java.util.Random(seed);
+        double[] a = new double[frames];
+        int t = 0;
+        while (t < frames) {
+            int len = 2 + r.nextInt(4);
+            double amp = r.nextInt(4) == 0 ? 0.015 : 0.10 + 0.25 * r.nextDouble();
+            for (int k = 0; k < len && t < frames; k++, t++) {
+                a[t] = amp;
+            }
+        }
+        return a;
+    }
+
+    private static byte[] noise(double amp, java.util.Random rnd) {
+        short[] s = new short[FRAME];
+        for (int i = 0; i < FRAME; i++) {
+            s[i] = (short) (amp * 32767 * (rnd.nextDouble() * 2 - 1));
+        }
+        return PcmAudio.encodeLe(s);
+    }
+
+    /** 把 v 推到 WAIT 状态(开口 → 句尾静音提交), 时钟同步推进。 */
+    private void toWaitState(HandsFreeVad v, FakeClock clock) {
+        for (int i = 0; i < 8; i++) {
+            v.accept(loud(), false);
+            clock.nowMs += 20;
+        }
+        for (int i = 0; i < 40; i++) {
+            v.accept(silent(), false);
+            clock.nowMs += 20;
+        }
+        events.clear();
+    }
+
+    /**
+     * 回声不该打断: 机器人在说话, 麦克风收到的是它自己声音的延迟衰减副本。
+     * 这正是外放时把半双工逼出来的那个场景 —— 现在应当由回声判别挡住, 而不是靠"干脆不判"。
+     */
+    @Test
+    void echoAwareIgnoresItsOwnEcho() {
+        FakeClock clock = new FakeClock();
+        HandsFreeVad v = echoAwareVad(clock);
+        v.start(RATE);
+        toWaitState(v, clock);
+
+        int frames = 150;
+        double[] bot = envelope(frames, 11);
+        java.util.Random rnd = new java.util.Random(5);
+        int delay = 15;   // 15 帧 × 20ms = 300ms 回声延迟
+        for (int t = 0; t < frames; t++) {
+            v.onPlayback(noise(bot[t], rnd), RATE);
+            double echo = t >= delay ? 0.5 * bot[t - delay] : 0;
+            v.accept(noise(echo, rnd), true);
+            clock.nowMs += 20;
+        }
+        assertTrue(events.isEmpty(), "自己的回声不应触发打断, 实际事件: " + events);
+    }
+
+    /**
+     * 用户说话必须能打断 —— 这是开回声感知的<b>全部意义</b>。
+     * 同样是半双工配置, 换成与下行无关的独立声源就该正常打断。
+     */
+    @Test
+    void echoAwareStillAllowsRealBargeIn() {
+        FakeClock clock = new FakeClock();
+        HandsFreeVad v = echoAwareVad(clock);
+        v.start(RATE);
+        toWaitState(v, clock);
+
+        int frames = 150;
+        double[] bot = envelope(frames, 11);
+        double[] human = envelope(frames, 29);
+        java.util.Random rnd = new java.util.Random(5);
+        int delay = 15;
+        for (int t = 0; t < frames; t++) {
+            v.onPlayback(noise(bot[t], rnd), RATE);
+            // 双讲: 回声 + 用户, 两个不相关声源功率相加
+            double echo = t >= delay ? 0.5 * bot[t - delay] : 0;
+            double user = human[t];
+            v.accept(noise(Math.sqrt(echo * echo + user * user), rnd), true);
+            clock.nowMs += 20;
+        }
+        assertTrue(events.contains("barge"), "用户插话必须能打断, 实际事件: " + events);
     }
 }
