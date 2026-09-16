@@ -1572,8 +1572,18 @@ async function changePassword(){
      接进去会因 CORS 污染直接变哑 —— 风险远大于收益, 不做。
    于是 iOS 上说"声音大点": 助手语音会变大, 音乐那半得用系统音量键。 */
 const VOLUME_STEP = 0.25, VOLUME_MAX = 2, VOLUME_MIN = 0;
-let volumeLevel = (()=>{ const v = Number(localStorage.getItem('vca_volume'));
-                         return Number.isFinite(v) && v >= VOLUME_MIN && v <= VOLUME_MAX ? v : 1; })();
+/* 存储键带 _v2: 旧键 vca_volume 里的值不可信 —— 曾有一版把"从未设置过"读成了音量 0,
+   并在加载时把这个 0 写回 localStorage, 于是设备一旦中招就永久静音, 刷新也救不回来。
+   换个键等于让所有被写坏的设备自动回到默认音量, 而不必要求用户去清站点数据。 */
+const VOLUME_KEY = 'vca_volume_v2';
+let volumeLevel = (()=>{
+  const raw = localStorage.getItem(VOLUME_KEY);
+  // 必须先判 null/空串: Number(null) 和 Number('') 都是 0, 而 0 能通过下面所有的范围检查,
+  // 于是"没存过"会被当成"用户把音量调到了 0"。这正是上一版静音 bug 的成因。
+  if(raw === null || raw === '') return 1;
+  const v = Number(raw);
+  return Number.isFinite(v) && v >= VOLUME_MIN && v <= VOLUME_MAX ? v : 1;
+})();
 let masterGain = null;
 
 // 助手语音的总增益; audioCtx 是首次用户手势时才建的, 故懒接
@@ -1590,7 +1600,7 @@ function ensureGain(){
 function applyVolume(){
   if(masterGain) masterGain.gain.value = volumeLevel;
   try{ musicPlayer.volume = Math.min(1, volumeLevel); }catch(e){}   // iOS 上无效, 静默忽略
-  localStorage.setItem('vca_volume', String(volumeLevel));
+  localStorage.setItem(VOLUME_KEY, String(volumeLevel));
 }
 
 function adjustVolume(direction){
