@@ -48,9 +48,13 @@ vca:
     tts-vendor: aliyun
     tts-voice: longanhuan_v3.6   # Qwen-Audio-3.0 音色; 换 CosyVoice 老音色(_v3)会自动切回 cosyvoice 模型
     # 声音复刻: 用户录 10~20 秒自己的声音换一个专属音色, 之后可用指令说方言。
-    # 默认关。开启还需要账号系统(vca-store)在场 —— 音色必须归属到人, 否则谁都能用别人的声音。
+    #
+    # 默认开。安全前提不是这个开关, 而是 WebAutoConfiguration 里的三个依赖检查 ——
+    # 缺了复刻能力(provider)、归属存储(vca-store)或登录校验(TokenAuthenticator)中的任何一个,
+    # 整条路由就不注册, 只打一行 warn。所以默认开不会在缺账号系统的部署里暴露任何东西。
+    # 要关掉: VCA_VOICE_CLONE_ENABLED=false。
     voice-clone:
-      enabled: ${VCA_VOICE_CLONE_ENABLED:false}
+      enabled: ${VCA_VOICE_CLONE_ENABLED:true}
       max-per-user: ${VCA_VOICE_CLONE_MAX:3}      # 厂商账号总上限 1000 个, 要按用户分配额
       create-per-day: ${VCA_VOICE_CLONE_PER_DAY:5}
     # 端到端模式(mode=s2s)厂商/模型/音色; model/voice 留空用 provider 默认。
