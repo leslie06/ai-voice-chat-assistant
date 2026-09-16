@@ -60,7 +60,7 @@ java -Xms512m -Xmx1g -Duser.timezone=Asia/Shanghai -jar ...jar
 |------|------|------|
 | `vca.web.path` | `/ws/voice` | WebSocket 端点路径 |
 | `vca.web.asr-vendor` / `llm-vendor` / `tts-vendor` | aliyun / deepseek / aliyun | 主选厂商 |
-| `vca.web.tts-voice` | longxiaochun | 发音人 |
+| `vca.web.tts-voice` | longanhuan_v3.6 | 发音人。音色决定用哪个 TTS 模型，别把 CosyVoice 音色和 Qwen-Audio-3.0 音色混着写 |
 | `vca.web.system-prompt` | （内置口语化提示）| LLM 系统提示 |
 
 ### VAD / 断句打断（`vca.web.vad.*`）

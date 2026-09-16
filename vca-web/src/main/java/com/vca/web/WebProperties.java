@@ -23,7 +23,7 @@ public class WebProperties {
     /** LLM 模型; 留空则用 gateway 候选里配置的 model */
     private String llmModel = "";
     private VendorType ttsVendor = VendorType.ALIYUN;
-    private String ttsVoice = "longxiaochun";
+    private String ttsVoice = "longanhuan_v3.6";
 
     /** 端到端模式厂商(mode=s2s 时生效) */
     private VendorType s2sVendor = VendorType.QWEN;

@@ -22,7 +22,7 @@ VCA（Voice Chat Assistant）是一个**实时、可打断**的语音对话系�
 
 ```
 Java 17 · Spring Boot 4.0.6 · Spring WebFlux(Reactor Netty) · Project Reactor
-阿里云 DashScope SDK 2.22.18 (ASR=paraformer / TTS=CosyVoice) · DeepSeek(OpenAI 兼容 SSE)
+阿里云 DashScope SDK 2.23.0 (ASR=paraformer / TTS=Qwen-Audio-3.0-TTS+CosyVoice) · DeepSeek(OpenAI 兼容 SSE)
 Web Audio API + WebSocket (前端纯原生 JS, 无框架)
 ```
 

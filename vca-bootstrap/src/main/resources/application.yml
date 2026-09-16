@@ -46,7 +46,7 @@ vca:
     llm-vendor: ${VCA_LLM_VENDOR:deepseek}    # deepseek / qwen / moonshot
     llm-model: ${VCA_LLM_MODEL:}
     tts-vendor: aliyun
-    tts-voice: longxiaochun
+    tts-voice: longanhuan_v3.6   # Qwen-Audio-3.0 音色; 换 CosyVoice 老音色(_v3)会自动切回 cosyvoice 模型
     # 端到端模式(mode=s2s)厂商/模型/音色; model/voice 留空用 provider 默认。
     s2s-vendor: qwen
     s2s-model: ${VCA_S2S_MODEL:}
@@ -367,10 +367,20 @@ vca:
         vocabulary-id: ${ALIYUN_ASR_VOCABULARY_ID:}
     tts:
       aliyun:
-        # 真实阿里云 TTS(CosyVoice): ALIYUN_TTS_ENABLED=true + DASHSCOPE_API_KEY=sk-...
+        # 真实阿里云 TTS: ALIYUN_TTS_ENABLED=true + DASHSCOPE_API_KEY=sk-...
         # 输出 PCM 24kHz, 前端按此播放。
+        #
+        # 一个 provider 承载两个模型族(同一套 SpeechSynthesizer 协议, 但音色表互不通用),
+        # 每句具体用哪个模型由音色反推(见 AliyunTtsProperties#modelFor):
+        #   Qwen-Audio-3.0 的 12 个 flash 音色(longanhuan_v3.6 等) -> qwen-audio-flash-model
+        #   Qwen-Audio-3.0 的 2 个 plus 音色(longanlingxin/longanlufeng) -> qwen-audio-plus-model
+        #   其余(CosyVoice 的 _v3 音色、声音复刻 id) -> model
         enabled: ${ALIYUN_TTS_ENABLED:false}
         api-key: ${DASHSCOPE_API_KEY:}
+        # 主线: CosyVoice-v3.5 的后继(2026-07 上线), 首包~300ms, 16 语种 + 20 方言, 支持情绪标签。
+        qwen-audio-flash-model: ${QWEN_AUDIO_TTS_MODEL:qwen-audio-3.0-tts-flash}
+        qwen-audio-plus-model: ${QWEN_AUDIO_TTS_PLUS_MODEL:qwen-audio-3.0-tts-plus}
+        # 老音色兜底: 粤语/闽南/台湾/东北/陕北/日语/韩语等方言外语音色目前只有 CosyVoice 有。
         model: ${COSYVOICE_MODEL:cosyvoice-v3-flash}
       qwen:
         # Qwen-TTS(通义千问语音, Realtime 流式; 音色如 Cherry/Ethan/Chelsie)。

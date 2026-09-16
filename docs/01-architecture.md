@@ -15,7 +15,7 @@ vca-domain                 纯契约: 领域模型(record) + SPI 接口 + 枚举
 ├─ vca-orchestrator        编排核心: 会话/状态机/分句/后端 VAD
 ├─ vca-provider-llm-openai-compatible  OpenAI 兼容 LLM 实现(DeepSeek/Qwen/Kimi)
 ├─ vca-provider-asr-aliyun     阿里云 ASR 实现(DashScope paraformer)
-├─ vca-provider-tts-aliyun     阿里云 TTS 实现(DashScope CosyVoice)
+├─ vca-provider-tts-aliyun     阿里云 TTS 实现(DashScope Qwen-Audio-3.0-TTS / CosyVoice)
 ├─ vca-web                 接入层: WebSocket 处理器 + 会话工厂 + 自动装配
 └─ vca-bootstrap           启动模块: 打可执行 jar; 含开发桩 provider + 静态页面
 ```

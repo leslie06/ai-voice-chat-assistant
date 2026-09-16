@@ -11,7 +11,7 @@
 
 	<artifactId>vca-provider-tts-aliyun</artifactId>
 	<name>vca-provider-tts-aliyun</name>
-	<description>阿里云 DashScope 流式语音合成(CosyVoice)实现 TtsProvider SPI。</description>
+	<description>阿里云 DashScope 流式语音合成(Qwen-Audio-3.0-TTS / CosyVoice)实现 TtsProvider SPI。</description>
 
 	<dependencies>
 		<dependency>
@@ -34,6 +34,16 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-configuration-processor</artifactId>
 			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.assertj</groupId>
+			<artifactId>assertj-core</artifactId>
+			<scope>test</scope>
 		</dependency>
 	</dependencies>
 
