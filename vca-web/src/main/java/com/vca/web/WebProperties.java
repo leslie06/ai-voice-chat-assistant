@@ -19,6 +19,14 @@ public class WebProperties {
     private String mode = "pipeline";
 
     private VendorType asrVendor = VendorType.ALIYUN;
+
+    /**
+     * 识别语种。会转成厂商的 {@code language_hints} 下发, 把语种钉死, 不让模型在中英之间自己猜。
+     *
+     * <p>中文的各地方言(陕西话、四川话、河南话…)都归在 {@code zh} 下, 没有逐方言的取值;
+     * 粤语是唯一例外, 写 {@code yue}。留空则回到模型自动判别(默认 zh+en), 方言场景下明显更差。
+     */
+    private String asrLanguage = "zh";
     private VendorType llmVendor = VendorType.DEEPSEEK;
     /** LLM 模型; 留空则用 gateway 候选里配置的 model */
     private String llmModel = "";
@@ -150,6 +158,14 @@ public class WebProperties {
 
     public void setAsrVendor(VendorType asrVendor) {
         this.asrVendor = asrVendor;
+    }
+
+    public String getAsrLanguage() {
+        return asrLanguage;
+    }
+
+    public void setAsrLanguage(String asrLanguage) {
+        this.asrLanguage = asrLanguage;
     }
 
     public VendorType getLlmVendor() {

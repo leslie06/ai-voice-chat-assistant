@@ -43,6 +43,10 @@ vca:
     # 当前仅开放三段式链路: ASR → LLM → TTS。
     mode: pipeline
     asr-vendor: aliyun
+    # 识别语种, 转成厂商的 language_hints 下发。留空=模型自动判别(默认 zh+en), 方言场景明显更差:
+    # 陕西话这类方言声学上离普通话较远, 不钉死语种时模型会在中英之间摇摆或按普通话硬套。
+    # 各地方言都归在 zh 下, 没有逐方言取值; 粤语例外, 写 yue。
+    asr-language: ${VCA_ASR_LANGUAGE:zh}
     llm-vendor: ${VCA_LLM_VENDOR:deepseek}    # deepseek / qwen / moonshot
     llm-model: ${VCA_LLM_MODEL:}
     tts-vendor: aliyun

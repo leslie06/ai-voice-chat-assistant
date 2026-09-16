@@ -93,7 +93,8 @@ public class ConversationSessionFactory {
      * 端到端模型只吃音频, 打字时回退到这份 LLM 出文字回复(不发声), s2s 下也能打字提问。
      */
     private SessionContext combinedContext(String sessionId) {
-        AsrConfig asr = AsrConfig.defaults(props.getAsrVendor());
+        AsrConfig asr = new AsrConfig(props.getAsrVendor(), props.getAsrLanguage(),
+                16000, java.util.List.of(), true);
         LlmConfig llm = new LlmConfig(
                 props.getLlmVendor(), props.getLlmModel(), props.getSystemPrompt(), 0.7, 1024);
         TtsConfig tts = TtsConfig.defaults(props.getTtsVendor(), props.getTtsVoice());
