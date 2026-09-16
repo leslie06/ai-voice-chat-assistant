@@ -45,6 +45,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.web.reactive.HandlerMapping;
 import org.springframework.web.reactive.function.server.RouterFunction;
+import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import org.springframework.web.reactive.handler.SimpleUrlHandlerMapping;
 import org.springframework.web.reactive.config.WebFluxConfigurer;
@@ -314,18 +315,44 @@ public class WebAutoConfiguration {
                 ossMusicProvider, uploads.getIfAvailable(), authenticator.getIfAvailable());
     }
 
+    /**
+     * 声音复刻 REST。三个条件都满足才注册: 开关打开、厂商侧复刻能力在场(provider 模块装配了
+     * {@link com.vca.domain.spi.VoiceCloner})、落库模块给出了归属存储。少任何一个都装不出
+     * 一个安全可用的复刻功能, 所以宁可整条不注册。
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "vca.web.voice-clone", name = "enabled", havingValue = "true")
+    RouterFunction<ServerResponse> voiceCloneRoute(
+            WebProperties props, ProviderGateway gateway,
+            ObjectProvider<com.vca.domain.spi.VoiceCloner> cloner,
+            ObjectProvider<com.vca.domain.spi.VoiceCloneStore> store,
+            ObjectProvider<com.vca.orchestrator.auth.TokenAuthenticator> authenticator) {
+        com.vca.domain.spi.VoiceCloner c = cloner.getIfAvailable();
+        com.vca.domain.spi.VoiceCloneStore s = store.getIfAvailable();
+        com.vca.orchestrator.auth.TokenAuthenticator auth = authenticator.getIfAvailable();
+        if (c == null || s == null || auth == null) {
+            log.warn("声音复刻已开启但缺少依赖(cloner={}, store={}, auth={}), 该功能不注册",
+                    c != null, s != null, auth != null);
+            return RouterFunctions.route().build();
+        }
+        return com.vca.web.voice.VoiceCloneRoute.create(c, s, gateway.tts(), auth,
+                props.getVoiceClone().getMaxPerUser(), props.getVoiceClone().getCreatePerDay());
+    }
+
     @Bean
     @ConditionalOnMissingBean
     VoiceWebSocketHandler voiceWebSocketHandler(ConversationSessionFactory factory, ObjectMapper objectMapper,
                                                 WebProperties props, MusicProvider musicProvider,
                                                 java.util.function.Supplier<VoiceActivityDetector> vadDetectorFactory,
                                                 ObjectProvider<com.vca.orchestrator.auth.TokenAuthenticator> authenticator,
-                                                ObjectProvider<AudioRecordingService> audioRecordingService) {
+                                                ObjectProvider<AudioRecordingService> audioRecordingService,
+                                                ObjectProvider<com.vca.domain.spi.VoiceCloneStore> voiceClones) {
         // 账号系统(vca-store)在场时注入用户令牌校验器, WS 即用用户登录令牌鉴权; 否则回退共享 token。
         return new VoiceWebSocketHandler(factory, objectMapper, props.getVad().toConfig(), vadDetectorFactory,
                 musicProvider, props.getAuthToken(), props.getMaxSessionSeconds(), props.getMaxConnections(),
                 props.isS2sPersistent(), authenticator.getIfAvailable(),
-                audioRecordingService.getIfAvailable(() -> AudioRecordingService.NOOP));
+                audioRecordingService.getIfAvailable(() -> AudioRecordingService.NOOP),
+                voiceClones.getIfAvailable());
     }
 
     /** 把 WS 端点路径映射到 handler。order 取较高优先级, 先于注解控制器匹配。 */

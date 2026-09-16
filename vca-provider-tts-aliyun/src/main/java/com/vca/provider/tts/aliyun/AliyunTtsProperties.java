@@ -55,8 +55,17 @@ public class AliyunTtsProperties {
     private String qwenAudioPlusModel = "qwen-audio-3.0-tts-plus";
 
     /**
-     * 按音色反推该用哪个模型。音色不在任何已知表里(例如声音复刻出来的 id)时退回 {@link #model},
-     * 保持与升级前一致的行为。
+     * 按音色反推该用哪个模型。
+     *
+     * <p>两类音色:
+     * <ol>
+     *   <li><b>系统音色</b>: 查上面两张表;</li>
+     *   <li><b>声音复刻音色</b>: 厂商返回的 id 就以创建时的 target_model 打头, 实测形如
+     *       {@code qwen-audio-3.0-tts-flash-u1a-9528a83e439a428eb1b202e307f1eb24}, 所以直接
+     *       拿配置里的模型名做前缀匹配即可 —— 换成快照版模型名(…-2026-07-20)也一样成立。</li>
+     * </ol>
+     *
+     * <p>都不匹配时退回 {@link #model}, 保持与升级前一致的行为。
      */
     public String modelFor(String voice) {
         if (voice == null || voice.isBlank()) {
@@ -69,7 +78,29 @@ public class AliyunTtsProperties {
         if (QWEN_AUDIO_PLUS_VOICES.contains(v)) {
             return qwenAudioPlusModel;
         }
+        // 复刻音色: 先比更长的前缀, 避免 a-b 与 a-b-c 这类互为前缀的模型名判错
+        for (String m : longestFirst(qwenAudioPlusModel, qwenAudioFlashModel, model)) {
+            if (m != null && !m.isBlank() && v.startsWith(m.toLowerCase(Locale.ROOT) + "-")) {
+                return m;
+            }
+        }
         return model;
+    }
+
+    /** 该音色是否支持指令控制(方言)。Qwen-Audio-3.0 全系支持, CosyVoice 这边只对复刻音色开放。 */
+    public boolean supportsInstruction(String voice) {
+        String m = modelFor(voice);
+        return m != null && m.startsWith("qwen-audio-");
+    }
+
+    private static String[] longestFirst(String... models) {
+        String[] copy = models.clone();
+        java.util.Arrays.sort(copy, (a, b) -> {
+            int la = a == null ? 0 : a.length();
+            int lb = b == null ? 0 : b.length();
+            return Integer.compare(lb, la);
+        });
+        return copy;
     }
 
     public boolean isEnabled() {

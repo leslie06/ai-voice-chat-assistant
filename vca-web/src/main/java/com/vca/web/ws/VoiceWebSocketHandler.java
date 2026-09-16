@@ -83,6 +83,9 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
 
     private static final Logger log = LoggerFactory.getLogger(VoiceWebSocketHandler.class);
 
+    /** 声音复刻音色的归属表; 未启用该功能时为 null, 此时任何复刻格式的音色一律拒绝。 */
+    private final com.vca.domain.spi.VoiceCloneStore voiceClones;
+
     private final ConversationSessionFactory sessionFactory;
     private final ObjectMapper mapper;
     private final VadConfig vadConfig;
@@ -118,7 +121,8 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                                  Supplier<VoiceActivityDetector> vadDetectorFactory, MusicProvider musicProvider,
                                  String authToken, int maxSessionSeconds, int maxConnections, boolean s2sPersistent,
                                  com.vca.orchestrator.auth.TokenAuthenticator authenticator,
-                                 AudioRecordingService audioRecordingService) {
+                                 AudioRecordingService audioRecordingService,
+                                 com.vca.domain.spi.VoiceCloneStore voiceClones) {
         this.sessionFactory = sessionFactory;
         this.mapper = mapper;
         this.vadConfig = vadConfig;
@@ -127,6 +131,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
         this.authToken = authToken == null ? "" : authToken;
         this.maxSessionSeconds = maxSessionSeconds;
         this.maxConnections = maxConnections;
+        this.voiceClones = voiceClones;
         this.s2sPersistent = s2sPersistent;
         this.authenticator = authenticator;
         this.audioRecordingService = audioRecordingService == null ? AudioRecordingService.NOOP : audioRecordingService;
@@ -495,6 +500,41 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
             }
         }
 
+        /**
+         * 切换音色。复刻音色(id 以合成模型名打头)必须验归属 —— voice_id 在前端是明文,
+         * 厂商的音色表又是账号级的, 不在这里拦住, 任何登录用户猜到别人的 id 就能用别人的声音。
+         */
+        private void onVoice(String vendor, String value, String dialect) {
+            if (value == null || value.isBlank()) {
+                return;
+            }
+            if (isCloned(value) && !ownsVoice(value)) {
+                log.warn("拒绝使用非本人的复刻音色: userId={}, voice={}", userId, value);
+                emitJson(Map.of("type", "voice_rejected", "reason", "该音色不属于当前账号"));
+                return;
+            }
+            conversation.selectVoice(parseVendor(vendor), value,
+                    com.vca.web.voice.VoiceCloneRoute.dialectInstruction(dialect));
+        }
+
+        /** 复刻音色的 id 形如 {@code <target_model>-<prefix>-<32位hex>}, 系统音色不含这种结构。 */
+        private boolean isCloned(String voice) {
+            return voice.startsWith("qwen-audio-") || voice.startsWith("cosyvoice-");
+        }
+
+        private boolean ownsVoice(String voice) {
+            if (voiceClones == null || userId == null) {
+                return false;
+            }
+            try {
+                long uid = Long.parseLong(userId);
+                return voiceClones.find(voice).filter(c -> c.userId() == uid && c.active()).isPresent();
+            } catch (Exception e) {
+                log.warn("校验音色归属失败: voice={}, err={}", voice, e.toString());
+                return false;
+            }
+        }
+
         private synchronized void onControl(String json) {
             Map<?, ?> msg = parse(json);
             String type = str(msg.get("type"));
@@ -504,7 +544,7 @@ public class VoiceWebSocketHandler implements WebSocketHandler {
                 case "ptt" -> onPtt(str(msg.get("value")));
                 case "text" -> onText(str(msg.get("text")));
                 case "model" -> onModel(str(msg.get("vendor")), str(msg.get("model")));
-                case "voice" -> conversation.selectVoice(parseVendor(str(msg.get("vendor"))), str(msg.get("value")));
+                case "voice" -> onVoice(str(msg.get("vendor")), str(msg.get("value")), str(msg.get("dialect")));
                 case "engine" -> onEngine(str(msg.get("value")));
                 case "barge_in" -> manualBarge();
                 case "load_history" -> onLoadHistory(msg.get("conversationId"), msg.get("messages"));

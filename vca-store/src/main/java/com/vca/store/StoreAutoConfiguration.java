@@ -2,6 +2,7 @@ package com.vca.store;
 
 import com.vca.orchestrator.auth.TokenAuthenticator;
 import com.vca.domain.spi.MusicUploadStore;
+import com.vca.domain.spi.VoiceCloneStore;
 import com.vca.orchestrator.knowledge.KnowledgeStore;
 import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.recorder.ConversationRecorder;
@@ -34,10 +35,12 @@ import com.vca.store.mapper.KnowledgeDocMapper;
 import com.vca.store.mapper.UserMemoryMapper;
 import com.vca.store.mapper.UserMusicPlayMapper;
 import com.vca.store.mapper.UserMusicUploadMapper;
+import com.vca.store.mapper.UserVoiceCloneMapper;
 import com.vca.store.memory.MyBatisMemoryStore;
 import com.vca.store.music.MusicPlayRoutes;
 import com.vca.store.music.MusicPlayService;
 import com.vca.store.music.MyBatisMusicUploadStore;
+import com.vca.store.voice.MyBatisVoiceCloneStore;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.apache.ibatis.session.SqlSessionFactory;
@@ -286,6 +289,19 @@ public class StoreAutoConfiguration {
     @ConditionalOnMissingBean(MusicUploadStore.class)
     MusicUploadStore musicUploadStore(UserMusicUploadMapper mapper) {
         return new MyBatisMusicUploadStore(mapper);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    UserVoiceCloneMapper userVoiceCloneMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, UserVoiceCloneMapper.class);
+    }
+
+    /** 声音复刻音色的归属与配额记录。音色本体在厂商侧, 这里只存元数据。 */
+    @Bean
+    @ConditionalOnMissingBean(VoiceCloneStore.class)
+    VoiceCloneStore voiceCloneStore(UserVoiceCloneMapper mapper) {
+        return new MyBatisVoiceCloneStore(mapper);
     }
 
     @Bean

@@ -490,6 +490,7 @@
       <div class="field">
         <label for="voice">语音音色（三段式 TTS）</label>
         <select class="modelsel" id="voice">
+          <optgroup label="我的音色（声音复刻）" id="myVoiceGroup" hidden></optgroup>
           <optgroup label="Qwen-Audio-3.0·普通话（推荐·最新）">
             <option value="aliyun|longanhuan_v3.6" selected>龙安欢 V3.6（欢脱元气女·默认）</option>
             <option value="aliyun|longanfengyue">龙安风悦（自然亲切女）</option>
@@ -590,6 +591,32 @@
         <label>账号</label>
         <button class="modelsel" id="changePwBtn" style="cursor:pointer;text-align:left">🔑 修改密码（发送邮件）</button>
         <div class="field-hint">点此向你注册邮箱发送一封密码重置邮件，按邮件里的令牌设置新密码。</div>
+      </div>
+      <div class="field" id="fDialect" hidden>
+        <label for="dialect">口音 / 方言</label>
+        <select class="modelsel" id="dialect">
+          <option value="">普通话（默认）</option>
+          <option value="粤语">粤语</option>
+          <option value="四川话">四川话</option>
+          <option value="东北话">东北话</option>
+          <option value="上海话">上海话</option>
+          <option value="河南话">河南话</option>
+          <option value="陕西话">陕西话</option>
+          <option value="山东话">山东话</option>
+          <option value="湖南话">湖南话</option>
+          <option value="湖北话">湖北话</option>
+          <option value="天津话">天津话</option>
+          <option value="重庆话">重庆话</option>
+          <option value="云南话">云南话</option>
+        </select>
+        <div class="field-hint">用指令让当前音色改说方言。复刻音色和 Qwen-Audio-3.0 系统音色支持；CosyVoice 老音色不支持，选了也不生效。</div>
+      </div>
+      <div class="field authonly" id="fVoiceClone" hidden>
+        <label>我的音色（声音复刻）</label>
+        <button class="modelsel" id="cloneRecBtn" style="cursor:pointer;text-align:left">🎙 录一段我的声音（约 15 秒）</button>
+        <div id="cloneRecState" class="field-hint" style="display:none"></div>
+        <div id="cloneList" style="margin:6px 0"></div>
+        <div class="field-hint">录 10~20 秒平稳朗读，安静环境效果最好。仅限本人声音，录完在上面的音色列表里选用。</div>
       </div>
       <div class="field authonly">
         <label>知识库（RAG）</label>
@@ -1440,6 +1467,7 @@ async function enterApp(){
   document.getElementById('meName').textContent=maskedUser(me);
   await refreshConvs();
   if(convs.length) await openConv(convs[0].id); else await newChat();
+  loadVoiceClones();   // 我的音色要等拿到登录令牌才查得到
   connect();   // 连 WS(onopen 会按当前会话 sendHistory)
 }
 async function boot(){
@@ -1634,6 +1662,10 @@ function connect(){
         case 'flush_playback': // 持久 S2S 全双工打断: 冲掉已缓冲/在播的音频止声, 但继续接收随后的新回复
                            stopPlayback(); acceptAudio=true; if(botBubble) botFinish(); D.last='flush'; break;
         case 'error':      stopPlayback(); stopMusic(); acceptAudio=false; botFinish(); addSys('⚠ '+m.message); D.last='error'; break;
+        case 'voice_rejected': // 后端校验音色归属不过: 退回默认音色, 免得用户以为已经切过去了
+                           addSys('⚠ '+(m.reason||'音色不可用')+'，已退回默认音色');
+                           voiceSel.value='aliyun|longanhuan_v3.6'; syncDialectVisibility(); sendVoice();
+                           D.last='voice_rejected'; break;
         case 'volume':     adjustVolume(m.action); D.last='volume:'+(m.action||''); break;
         case 'music':      // 语音控歌: 后端已判过播放状态, 这里直接执行
                            if(m.action==='play') addMusic(m);
@@ -1909,9 +1941,169 @@ const voiceSel=document.getElementById('voice');
 // 恢复上次选择; 若存的音色已不在下拉里(如旧的 v2 longxiaochun), 丢弃并回落到默认项。
 const savedVoice=localStorage.getItem('vca_voice');
 if(savedVoice){ voiceSel.value=savedVoice; if(voiceSel.value!==savedVoice) localStorage.removeItem('vca_voice'); }
+const dialectSel=document.getElementById('dialect');
+const fDialect=document.getElementById('fDialect');
+const savedDialect=localStorage.getItem('vca_dialect')||'';
+if(savedDialect) dialectSel.value=savedDialect;
+
+// 方言靠 instruction 实现, 只有 Qwen-Audio-3.0 系列(含基于它的复刻音色)认这个参数。
+// CosyVoice 老音色选了也不生效, 干脆把选择器藏起来, 免得用户以为坏了。
+function voiceSupportsDialect(v){
+  return v.startsWith('longan')&&!v.endsWith('_v3') || v.endsWith('_v3.6')
+      || v.startsWith('loongmary')||v.startsWith('loongeva')||v.startsWith('loongjohn')
+      || v.startsWith('qwen-audio-');
+}
+function syncDialectVisibility(){
+  const voice=(voiceSel.value.split('|')[1]||'');
+  const on=voiceSel.value.startsWith('aliyun|')&&voiceSupportsDialect(voice);
+  fDialect.hidden=!on;
+  if(!on&&dialectSel.value){ dialectSel.value=''; localStorage.removeItem('vca_dialect'); }
+}
 function sendVoice(){ const [vendor,voice]=voiceSel.value.split('|');
-  localStorage.setItem('vca_voice',voiceSel.value); send({type:'voice',vendor,value:voice}); }
-voiceSel.onchange=()=>{ sendVoice(); addSys('— 已切换音色：'+voiceSel.options[voiceSel.selectedIndex].text+'，下一句生效 —'); };
+  localStorage.setItem('vca_voice',voiceSel.value);
+  const dialect=fDialect.hidden?'':dialectSel.value;
+  send({type:'voice',vendor,value:voice,dialect}); }
+voiceSel.onchange=()=>{ syncDialectVisibility(); sendVoice();
+  addSys('— 已切换音色：'+voiceSel.options[voiceSel.selectedIndex].text+'，下一句生效 —'); };
+dialectSel.onchange=()=>{ localStorage.setItem('vca_dialect',dialectSel.value); sendVoice();
+  addSys('— 已切换口音：'+(dialectSel.value||'普通话')+'，下一句生效 —'); };
+syncDialectVisibility();
+
+/* ---------- 声音复刻: 录一段自己的声音, 换一个专属音色 ---------- */
+const cloneBox=document.getElementById('fVoiceClone');
+const cloneBtn=document.getElementById('cloneRecBtn');
+const cloneState=document.getElementById('cloneRecState');
+const cloneList=document.getElementById('cloneList');
+const myVoiceGroup=document.getElementById('myVoiceGroup');
+const CLONE_SECONDS=15, CLONE_RATE=16000;
+let cloneRecording=false;
+
+// 采到的 Float32 帧拼起来 -> 降到 16k -> 编成 16bit 单声道 WAV。
+// 厂商要求 WAV(16bit)/≥16kHz, 浏览器的 MediaRecorder 只给 webm/opus, 所以自己编。
+function encodeWav(float32, srcRate, dstRate){
+  const ratio=srcRate/dstRate, outLen=Math.floor(float32.length/ratio);
+  const pcm=new Int16Array(outLen);
+  for(let i=0;i<outLen;i++){
+    // 线性插值重采样: 15 秒的量级下足够, 不值得为它引一个重采样库
+    const pos=i*ratio, j=Math.floor(pos), frac=pos-j;
+    const a=float32[j]||0, b=(j+1<float32.length)?float32[j+1]:a;
+    const v=Math.max(-1,Math.min(1,a+(b-a)*frac));
+    pcm[i]=v<0?v*0x8000:v*0x7fff;
+  }
+  const buf=new ArrayBuffer(44+pcm.length*2), dv=new DataView(buf);
+  const ws=(off,str)=>{ for(let i=0;i<str.length;i++) dv.setUint8(off+i,str.charCodeAt(i)); };
+  ws(0,'RIFF'); dv.setUint32(4,36+pcm.length*2,true); ws(8,'WAVE');
+  ws(12,'fmt '); dv.setUint32(16,16,true); dv.setUint16(20,1,true); dv.setUint16(22,1,true);
+  dv.setUint32(24,dstRate,true); dv.setUint32(28,dstRate*2,true);
+  dv.setUint16(32,2,true); dv.setUint16(34,16,true);
+  ws(36,'data'); dv.setUint32(40,pcm.length*2,true);
+  new Int16Array(buf,44).set(pcm);
+  return new Blob([buf],{type:'audio/wav'});
+}
+
+async function recordSample(){
+  const ctx=new (window.AudioContext||window.webkitAudioContext)();
+  const stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,
+    echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  // 关掉三件套: 复刻要的是原始音色, 降噪和自动增益会把音色本身也改掉
+  const src=ctx.createMediaStreamSource(stream);
+  const node=ctx.createScriptProcessor(4096,1,1);
+  const frames=[]; let total=0, peak=0;
+  node.onaudioprocess=e=>{ const d=e.inputBuffer.getChannelData(0);
+    frames.push(new Float32Array(d)); total+=d.length;
+    for(let i=0;i<d.length;i+=32) peak=Math.max(peak,Math.abs(d[i])); };
+  src.connect(node); node.connect(ctx.destination);
+  for(let left=CLONE_SECONDS;left>0;left--){
+    cloneState.textContent='🔴 录音中… 还剩 '+left+' 秒，请平稳朗读一段话';
+    await new Promise(r=>setTimeout(r,1000));
+  }
+  node.disconnect(); src.disconnect(); stream.getTracks().forEach(t=>t.stop());
+  const rate=ctx.sampleRate; ctx.close();
+  const merged=new Float32Array(total); let off=0;
+  for(const f of frames){ merged.set(f,off); off+=f.length; }
+  if(peak<0.02) throw new Error('几乎没录到声音，请检查麦克风后重试');
+  return encodeWav(merged,rate,CLONE_RATE);
+}
+
+cloneBtn.onclick=async()=>{
+  if(cloneRecording) return;
+  cloneRecording=true; cloneBtn.disabled=true; cloneState.style.display='';
+  try{
+    const wav=await recordSample();
+    cloneState.textContent='⏳ 正在生成音色，约十几秒…';
+    const name=(prompt('给这个音色起个名字：','我的声音')||'我的声音').trim().slice(0,32);
+    const fd=new FormData();
+    fd.append('file',wav,'sample.wav'); fd.append('name',name); fd.append('consent','true');
+    const r=await fetch('/api/voices',{method:'POST',headers:authHeaders(),body:fd});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||('创建失败 '+r.status));
+    cloneState.textContent='✅ 已创建：'+j.name;
+    await loadVoiceClones();
+    voiceSel.value='aliyun|'+j.voiceId; syncDialectVisibility(); sendVoice();
+  }catch(e){ cloneState.textContent='❌ '+(e.message||e); }
+  finally{ cloneRecording=false; cloneBtn.disabled=false;
+    setTimeout(()=>{ cloneState.style.display='none'; },6000); }
+};
+
+async function loadVoiceClones(){
+  if(!token){ cloneBox.hidden=true; myVoiceGroup.hidden=true; return; }
+  let data;
+  try{
+    const r=await fetch('/api/voices',{headers:authHeaders()});
+    if(r.status===404){ cloneBox.hidden=true; myVoiceGroup.hidden=true; return; } // 功能未开启
+    if(!r.ok) return;
+    data=await r.json();
+  }catch(e){ return; }
+  cloneBox.hidden=false;
+  const list=data.voices||[];
+  cloneList.innerHTML='';
+  myVoiceGroup.innerHTML='';
+  myVoiceGroup.hidden=list.length===0;
+  for(const v of list){
+    if(v.status==='active'){
+      const op=document.createElement('option');
+      op.value='aliyun|'+v.voiceId; op.textContent=v.name+'（我的声音）';
+      myVoiceGroup.appendChild(op);
+    }
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;gap:6px;align-items:center;margin:4px 0';
+    const label=document.createElement('span');
+    label.style.cssText='flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    label.textContent=(v.status==='active'?'':'⚠ ')+v.name+'（'+v.seconds+' 秒）';
+    if(v.status!=='active') label.title='音色已失效，请删除后重新复刻';
+    const play=document.createElement('button'); play.textContent='▶'; play.title='试听';
+    play.onclick=async()=>{
+      play.disabled=true;
+      try{
+        const d=fDialect.hidden?'':dialectSel.value;
+        const r=await fetch('/api/voices/'+encodeURIComponent(v.voiceId)+'/preview'
+          +(d?('?dialect='+encodeURIComponent(d)):''),{method:'POST',headers:authHeaders()});
+        if(!r.ok) throw new Error('试听失败');
+        const a=new Audio(URL.createObjectURL(await r.blob())); a.play();
+      }catch(e){ alert(e.message||e); } finally{ play.disabled=false; }
+    };
+    const del=document.createElement('button'); del.textContent='🗑'; del.title='删除';
+    del.onclick=async()=>{
+      if(!confirm('删除音色「'+v.name+'」？删除后不可恢复。')) return;
+      await fetch('/api/voices/'+encodeURIComponent(v.voiceId),{method:'DELETE',headers:authHeaders()});
+      if(voiceSel.value==='aliyun|'+v.voiceId){
+        voiceSel.selectedIndex=[...voiceSel.options].findIndex(o=>o.value==='aliyun|longanhuan_v3.6');
+        syncDialectVisibility(); sendVoice();
+      }
+      loadVoiceClones();
+    };
+    row.append(label,play,del); cloneList.appendChild(row);
+  }
+  const q=data.quota||{};
+  cloneBtn.disabled=list.length>=(q.max||3);
+  cloneBtn.textContent=cloneBtn.disabled
+    ? ('🎙 已达上限（'+list.length+'/'+q.max+'），请先删除')
+    : ('🎙 录一段我的声音（约 '+CLONE_SECONDS+' 秒）');
+  // 复刻音色可能是上次选的, 等它插进下拉后再恢复一次选择
+  const saved=localStorage.getItem('vca_voice');
+  if(saved&&voiceSel.value!==saved){ voiceSel.value=saved; syncDialectVisibility(); }
+}
+loadVoiceClones();
 
 /* ---------- 对话模式选择(三段式 / 端到端), 前端为准, 连接时下发 ---------- */
 const engineSel=document.getElementById('engine');

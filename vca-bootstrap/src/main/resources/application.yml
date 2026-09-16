@@ -47,6 +47,12 @@ vca:
     llm-model: ${VCA_LLM_MODEL:}
     tts-vendor: aliyun
     tts-voice: longanhuan_v3.6   # Qwen-Audio-3.0 音色; 换 CosyVoice 老音色(_v3)会自动切回 cosyvoice 模型
+    # 声音复刻: 用户录 10~20 秒自己的声音换一个专属音色, 之后可用指令说方言。
+    # 默认关。开启还需要账号系统(vca-store)在场 —— 音色必须归属到人, 否则谁都能用别人的声音。
+    voice-clone:
+      enabled: ${VCA_VOICE_CLONE_ENABLED:false}
+      max-per-user: ${VCA_VOICE_CLONE_MAX:3}      # 厂商账号总上限 1000 个, 要按用户分配额
+      create-per-day: ${VCA_VOICE_CLONE_PER_DAY:5}
     # 端到端模式(mode=s2s)厂商/模型/音色; model/voice 留空用 provider 默认。
     s2s-vendor: qwen
     s2s-model: ${VCA_S2S_MODEL:}

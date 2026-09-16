@@ -175,6 +175,7 @@ flowchart LR
 
 - **`vca-provider-asr-aliyun`**：阿里云 DashScope `paraformer-realtime-v2`，RxJava `Flowable` 与 Reactor `Flux` 桥接。
 - **`vca-provider-tts-aliyun`**：阿里云 DashScope `qwen-audio-3.0-tts-flash`（CosyVoice-v3.5 的后继，2026-07 上线），流式吐 PCM 24kHz。两个模型族共用这一个 provider——Qwen-Audio-3.0 与 CosyVoice 走同一套 `SpeechSynthesizer` 协议，但**音色表互不通用**，配错会直接 418。音色是前端逐句选的、模型却是进程级配置，所以由音色反推模型（`AliyunTtsProperties#modelFor`）：Qwen-Audio-3.0 的 14 个系统音色走新模型，`_v3` 等老音色和声音复刻 id 回落 `cosyvoice-v3-flash`（粤语/闽南/日韩等方言外语音色目前只有它有）。
+- **声音复刻**：`VoiceCloneService` 包 DashScope 的 `VoiceEnrollmentService`，用户录 10~20 秒换一个专属音色。样本**不落对象存储**——官方只演示公网 URL，但实测 `data:audio/wav;base64,...` 内联同样可用，省掉一整套 OSS 依赖。返回的 id 形如 `qwen-audio-3.0-tts-flash-u1a-<32位hex>`，以 target_model 打头，`modelFor` 正是靠这个前缀把它路由回绑定的模型。方言不靠原音口音、而靠指令控制（`TtsConfig.instruction`，如「请用粤语表达。」），指令文本走后端白名单，不透传前端输入。
 - **`vca-provider-llm-openai-compatible`**：OpenAI 兼容文本 LLM（DeepSeek/Qwen/Kimi 等），统一走 `/chat/completions` + `stream=true` SSE；含 `ApiKeyPool`（多 key 轮询）、可选代理与厂商级 extra body 配置。
 
 ### 开发桩（零外部依赖，`vca-bootstrap/.../dev/`）

@@ -99,6 +99,23 @@ CREATE TABLE IF NOT EXISTS user_music_upload (
     KEY idx_music_upload_review (status, created_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户上传歌曲';
 
+-- 用户的声音复刻音色。音色本体在厂商侧(阿里云百炼), 这里只存归属与元数据:
+-- 厂商的音色表是账号级的、不分用户, 不落库就拦不住 A 拿 B 的 voice_id(它在前端是明文);
+-- 另外厂商会自动删除"过去 1 年未用于任何合成"的音色, last_used_at 就是为提前提醒留的。
+CREATE TABLE IF NOT EXISTS user_voice_clone (
+    voice_id         VARCHAR(160) NOT NULL COMMENT '厂商音色 id, 形如 qwen-audio-3.0-tts-flash-u1a-<32位hex>',
+    user_id          BIGINT       NOT NULL,
+    name             VARCHAR(64)  NOT NULL COMMENT '用户起的显示名',
+    target_model     VARCHAR(64)  NOT NULL COMMENT '创建时绑定的合成模型, 合成必须用同一个',
+    sample_seconds   INT          NOT NULL DEFAULT 0,
+    rights_confirmed TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '用户确认是本人声音',
+    status           VARCHAR(16)  NOT NULL DEFAULT 'active' COMMENT 'active / invalid',
+    created_at       DATETIME     NOT NULL,
+    last_used_at     DATETIME,
+    PRIMARY KEY (voice_id),
+    KEY idx_voice_clone_user (user_id, created_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '用户声音复刻音色';
+
 -- 一次 WebSocket 语音通话的原始双轨 + 完整对话录音。音频直接上传 OSS。
 CREATE TABLE IF NOT EXISTS conversation_recording (
     id                    VARCHAR(36)  NOT NULL,

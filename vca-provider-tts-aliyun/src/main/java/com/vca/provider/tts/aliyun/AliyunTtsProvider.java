@@ -62,12 +62,17 @@ public class AliyunTtsProvider implements TtsProvider {
         return Flux.defer(() -> {
             // 模型由音色反推: CosyVoice 与 Qwen-Audio-3.0 的音色表互不通用, 配错直接 418。
             String model = props.modelFor(cfg.voice());
-            SpeechSynthesisParam param = SpeechSynthesisParam.builder()
+            var builder = SpeechSynthesisParam.builder()
                     .model(model)
                     .voice(cfg.voice())
                     .format(SpeechSynthesisAudioFormat.PCM_24000HZ_MONO_16BIT)
-                    .apiKey(props.getApiKey())
-                    .build();
+                    .apiKey(props.getApiKey());
+            // 指令控制(方言/情绪): 只发给认识它的模型, 否则宁可不说方言也别让整句合成失败。
+            String instruction = cfg.instruction();
+            if (instruction != null && !instruction.isBlank() && props.supportsInstruction(cfg.voice())) {
+                builder.instruction(instruction);
+            }
+            SpeechSynthesisParam param = builder.build();
 
             // callback 传 null: 用 Flowable 流式输出模式(非流式输入)
             SpeechSynthesizer synthesizer = new SpeechSynthesizer(param, null);

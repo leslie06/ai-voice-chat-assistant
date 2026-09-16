@@ -83,6 +83,9 @@ public class WebProperties {
     /** 同时在线 WebSocket 连接数上限, 超出直接拒绝新连接。0=不限。 */
     private int maxConnections = 8;
 
+    /** 声音复刻(默认关)。开启还需要账号系统在场 —— 音色必须归属到具体用户。 */
+    private VoiceClone voiceClone = new VoiceClone();
+
     /** 历史滑动窗口: 仅保留最近这么多条 user/assistant 消息(system 提示始终保留)。
      *  防止历史无限膨胀诱导模型把上一轮回复也带出来。≈8 轮对话。 */
     private int historyMaxMessages = 16;
@@ -584,6 +587,53 @@ public class WebProperties {
 
         public void setMaxSilenceMs(int maxSilenceMs) {
             this.maxSilenceMs = maxSilenceMs;
+        }
+    }
+
+    public VoiceClone getVoiceClone() {
+        return voiceClone;
+    }
+
+    public void setVoiceClone(VoiceClone voiceClone) {
+        this.voiceClone = voiceClone;
+    }
+
+    /** {@code vca.web.voice-clone.*} */
+    public static class VoiceClone {
+
+        private boolean enabled = false;
+
+        /**
+         * 每个用户最多几个音色。厂商账号总上限是 1000 个, 不按用户分配额的话,
+         * 一个用户就能把整个账号的配额占满。
+         */
+        private int maxPerUser = 3;
+
+        /** 每人每天最多创建几次(含失败后重试)。 */
+        private int createPerDay = 5;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getMaxPerUser() {
+            return maxPerUser;
+        }
+
+        public void setMaxPerUser(int maxPerUser) {
+            this.maxPerUser = maxPerUser;
+        }
+
+        public int getCreatePerDay() {
+            return createPerDay;
+        }
+
+        public void setCreatePerDay(int createPerDay) {
+            this.createPerDay = createPerDay;
         }
     }
 }

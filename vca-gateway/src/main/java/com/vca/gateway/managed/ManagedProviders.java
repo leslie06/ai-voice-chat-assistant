@@ -142,8 +142,11 @@ public final class ManagedProviders {
                 String voice = (sameVendor && cfg.voice() != null && !cfg.voice().isBlank())
                         ? cfg.voice()
                         : (cand.voice() != null ? cand.voice() : cfg.voice());
+                // 指令(方言)同理只在本厂商内有效, 且参数名各家不同(CosyVoice 是 instruction、
+                // Qwen-TTS 是 instructions), 跨厂商转移时一并丢掉。
+                String instruction = sameVendor ? cfg.instruction() : null;
                 TtsConfig vc = new TtsConfig(cand.vendor(), voice, cfg.format(),
-                        cfg.sampleRate(), cfg.speed());
+                        cfg.sampleRate(), cfg.speed(), instruction);
                 return p.synthesize(textSegments, vc);
             });
         }

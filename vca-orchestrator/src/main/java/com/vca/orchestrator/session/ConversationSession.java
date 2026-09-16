@@ -602,13 +602,21 @@ public class ConversationSession {
      * 会话无 TTS 配置(未注入)或音色为空时忽略。
      */
     public void selectVoice(VendorType vendor, String voice) {
+        selectVoice(vendor, voice, activeTtsConfig == null ? null : activeTtsConfig.instruction());
+    }
+
+    /**
+     * 切换音色, 同时设置指令控制文本(方言)。{@code instruction} 传 null 表示清掉指令,
+     * 所以换音色时前端要把方言选择一起带上 —— 新音色未必支持旧指令。
+     */
+    public void selectVoice(VendorType vendor, String voice, String instruction) {
         TtsConfig base = activeTtsConfig;
         if (base == null || voice == null || voice.isBlank()) {
             return;
         }
         VendorType v = vendor != null ? vendor : base.vendor();
-        this.activeTtsConfig = new TtsConfig(v, voice, base.format(), base.sampleRate(), base.speed());
-        log.debug("切换 TTS 厂商/音色: vendor={}, voice={}", v, voice);
+        this.activeTtsConfig = base.withVoice(v, voice, instruction);
+        log.debug("切换 TTS 厂商/音色: vendor={}, voice={}, instruction={}", v, voice, instruction);
     }
 
     /**

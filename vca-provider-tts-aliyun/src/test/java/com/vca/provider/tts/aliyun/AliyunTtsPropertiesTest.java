@@ -55,6 +55,33 @@ class AliyunTtsPropertiesTest {
         assertThat(props.modelFor("  LongAnHuan_V3.6 ")).isEqualTo("qwen-audio-3.0-tts-flash");
     }
 
+    /** 复刻音色的 id 以创建时的 target_model 打头(真机实测格式), 靠这个前缀路由回同一个模型。 */
+    @Test
+    void 复刻音色按前缀路由回绑定的模型() {
+        assertThat(props.modelFor("qwen-audio-3.0-tts-flash-u1a-9528a83e439a428eb1b202e307f1eb24"))
+                .isEqualTo("qwen-audio-3.0-tts-flash");
+        assertThat(props.modelFor("qwen-audio-3.0-tts-plus-u1a-9528a83e439a428eb1b202e307f1eb24"))
+                .isEqualTo("qwen-audio-3.0-tts-plus");
+        assertThat(props.modelFor("cosyvoice-v3-flash-u1a-9528a83e439a428eb1b202e307f1eb24"))
+                .isEqualTo("cosyvoice-v3-flash");
+    }
+
+    /** 模型名换成快照版时前缀更长, 必须先比长的, 否则 flash 的复刻音色会被判给它的短前缀。 */
+    @Test
+    void 快照版模型名也能前缀路由() {
+        props.setQwenAudioFlashModel("qwen-audio-3.0-tts-flash-2026-07-20");
+        assertThat(props.modelFor("qwen-audio-3.0-tts-flash-2026-07-20-u1a-9528a83e"))
+                .isEqualTo("qwen-audio-3.0-tts-flash-2026-07-20");
+    }
+
+    @Test
+    void 指令控制仅对qwen_audio开放() {
+        assertThat(props.supportsInstruction("longanhuan_v3.6")).isTrue();
+        assertThat(props.supportsInstruction("qwen-audio-3.0-tts-flash-u1a-9528a83e")).isTrue();
+        assertThat(props.supportsInstruction("longanhuan_v3")).isFalse();
+        assertThat(props.supportsInstruction("longjiaxin_v3")).isFalse();
+    }
+
     @Test
     void 配置能覆盖各自的模型名() {
         props.setQwenAudioFlashModel("qwen-audio-3.0-tts-flash-2026-07-20");
