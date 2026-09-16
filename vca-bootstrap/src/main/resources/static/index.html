@@ -614,7 +614,9 @@
       <div class="field authonly" id="fVoiceClone" hidden>
         <label>我的音色（声音复刻）</label>
         <button class="modelsel" id="cloneRecBtn" style="cursor:pointer;text-align:left">🎙 录一段我的声音（约 15 秒）</button>
+        <div id="cloneScript" hidden style="margin:8px 0;padding:10px 12px;border-radius:8px;background:rgba(127,127,127,.12);line-height:1.9;font-size:15px"></div>
         <div id="cloneRecState" class="field-hint" style="display:none"></div>
+        <button class="modelsel" id="cloneCancelBtn" hidden style="cursor:pointer;text-align:center">✕ 取消录音</button>
         <div id="cloneList" style="margin:6px 0"></div>
         <div class="field-hint">录 10~20 秒平稳朗读，安静环境效果最好。仅限本人声音，录完在上面的音色列表里选用。</div>
       </div>
@@ -1975,8 +1977,18 @@ const cloneBtn=document.getElementById('cloneRecBtn');
 const cloneState=document.getElementById('cloneRecState');
 const cloneList=document.getElementById('cloneList');
 const myVoiceGroup=document.getElementById('myVoiceGroup');
+const cloneScriptBox=document.getElementById('cloneScript');
+const cloneCancelBtn=document.getElementById('cloneCancelBtn');
 const CLONE_SECONDS=15, CLONE_RATE=16000;
-let cloneRecording=false;
+let cloneRecording=false, cloneAbort=false;
+
+// 给用户一段现成的话去读。不给文本的话人对着麦克风容易卡壳、说半句停半句,
+// 而复刻要的恰恰是"连续清晰的朗读" —— 厂商明确要求至少 5 秒连续人声。
+// 内容挑日常口语、声调分布均匀的句子, 长度按正常语速约 14 秒, 留一点余量。
+const CLONE_SCRIPT='今天天气不错，我打算下午出门走走，顺路买点水果。晚上简单做两个菜，再煮一锅汤，吃完早点休息。希望明天也顺顺利利。';
+
+/** 取消用的哨兵: 与真正的错误区分开, 上层据此决定是"提示失败"还是"静默收工"。 */
+const CLONE_CANCELLED={cancelled:true};
 
 // 采到的 Float32 帧拼起来 -> 降到 16k -> 编成 16bit 单声道 WAV。
 // 厂商要求 WAV(16bit)/≥16kHz, 浏览器的 MediaRecorder 只给 webm/opus, 所以自己编。
@@ -2013,23 +2025,45 @@ async function recordSample(){
     frames.push(new Float32Array(d)); total+=d.length;
     for(let i=0;i<d.length;i+=32) peak=Math.max(peak,Math.abs(d[i])); };
   src.connect(node); node.connect(ctx.destination);
-  for(let left=CLONE_SECONDS;left>0;left--){
-    cloneState.textContent='🔴 录音中… 还剩 '+left+' 秒，请平稳朗读一段话';
-    await new Promise(r=>setTimeout(r,1000));
+  const rate=ctx.sampleRate;   // 必须在 close() 之前取: 关掉的上下文上再读这个值不可靠
+  try{
+    for(let left=CLONE_SECONDS;left>0;left--){
+      cloneState.textContent='🔴 录音中… 还剩 '+left+' 秒，照着上面的文字念';
+      // 切成 100ms 一小步而不是睡满 1 秒: 点了取消要立刻停, 而不是最多再等一秒
+      for(let t=0;t<10;t++){
+        if(cloneAbort) throw CLONE_CANCELLED;
+        await new Promise(r=>setTimeout(r,100));
+      }
+    }
+  } finally {
+    // 取消也要走到这里: 麦克风音轨不停掉的话, 浏览器标签页会一直亮着录音指示
+    node.disconnect(); src.disconnect();
+    stream.getTracks().forEach(t=>t.stop());
+    ctx.close();
   }
-  node.disconnect(); src.disconnect(); stream.getTracks().forEach(t=>t.stop());
-  const rate=ctx.sampleRate; ctx.close();
   const merged=new Float32Array(total); let off=0;
   for(const f of frames){ merged.set(f,off); off+=f.length; }
   if(peak<0.02) throw new Error('几乎没录到声音，请检查麦克风后重试');
   return encodeWav(merged,rate,CLONE_RATE);
 }
 
+cloneCancelBtn.onclick=()=>{ cloneAbort=true; cloneCancelBtn.disabled=true;
+  cloneCancelBtn.textContent='正在停止…'; };
+
 cloneBtn.onclick=async()=>{
   if(cloneRecording) return;
-  cloneRecording=true; cloneBtn.disabled=true; cloneState.style.display='';
+  cloneRecording=true; cloneAbort=false;
+  cloneBtn.disabled=true; cloneState.style.display='';
+  // 先把要念的文字亮出来, 再开始倒计时 —— 别让人一边找词一边被计时追着
+  cloneScriptBox.textContent=CLONE_SCRIPT; cloneScriptBox.hidden=false;
+  cloneCancelBtn.hidden=false; cloneCancelBtn.disabled=false;
+  cloneCancelBtn.textContent='✕ 取消录音';
+  cloneState.textContent='准备好了就开始念，3…2…1';
   try{
+    await new Promise(r=>setTimeout(r,1200));   // 给一点起念的缓冲
+    if(cloneAbort) throw CLONE_CANCELLED;
     const wav=await recordSample();
+    cloneCancelBtn.hidden=true;
     cloneState.textContent='⏳ 正在生成音色，约十几秒…';
     const name=(prompt('给这个音色起个名字：','我的声音')||'我的声音').trim().slice(0,32);
     const fd=new FormData();
@@ -2040,9 +2074,16 @@ cloneBtn.onclick=async()=>{
     cloneState.textContent='✅ 已创建：'+j.name;
     await loadVoiceClones();
     voiceSel.value='aliyun|'+j.voiceId; syncDialectVisibility(); sendVoice();
-  }catch(e){ cloneState.textContent='❌ '+(e.message||e); }
-  finally{ cloneRecording=false; cloneBtn.disabled=false;
-    setTimeout(()=>{ cloneState.style.display='none'; },6000); }
+  }catch(e){
+    // 取消是用户自己的选择, 不是出错: 只说一句已取消, 不摆 ❌ 也不报错误详情
+    cloneState.textContent = (e===CLONE_CANCELLED) ? '已取消，没有上传任何录音'
+                                                   : ('❌ '+(e.message||e));
+  }
+  finally{
+    cloneRecording=false; cloneAbort=false;
+    cloneBtn.disabled=false; cloneCancelBtn.hidden=true; cloneScriptBox.hidden=true;
+    setTimeout(()=>{ cloneState.style.display='none'; },6000);
+  }
 };
 
 async function loadVoiceClones(){
