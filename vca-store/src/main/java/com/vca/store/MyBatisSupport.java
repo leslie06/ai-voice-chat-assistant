@@ -13,6 +13,7 @@ import com.vca.store.mapper.KnowledgeDocMapper;
 import com.vca.store.mapper.UserMemoryMapper;
 import com.vca.store.mapper.UserMusicPlayMapper;
 import com.vca.store.mapper.UserMusicUploadMapper;
+import com.vca.store.mapper.UserVoiceCloneMapper;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.mybatis.spring.SqlSessionTemplate;
 
@@ -24,6 +25,10 @@ import javax.sql.DataSource;
  *
  * <p>关键: 必须用 MyBatis-Plus 的 {@link MybatisConfiguration}(而非原生 MyBatis Configuration),
  * {@code addMapper} 时才会给 {@code BaseMapper} 注入通用 CRUD 的 SQL。
+ *
+ * <p><b>新增 Mapper 必须在下面登记一行</b>。这里没有包扫描, 漏登记编译不报错、单测也照过,
+ * 只在真正连库启动时炸成 "Type interface … is not known to the MybatisPlusMapperRegistry",
+ * 整个服务起不来。{@code MyBatisSupportTest} 用反射比对 mapper 包与登记表来兜住这件事。
  */
 final class MyBatisSupport {
 
@@ -49,6 +54,7 @@ final class MyBatisSupport {
             factory.getConfiguration().addMapper(KnowledgeChunkMapper.class);
             factory.getConfiguration().addMapper(UserMusicPlayMapper.class);
             factory.getConfiguration().addMapper(UserMusicUploadMapper.class);
+            factory.getConfiguration().addMapper(UserVoiceCloneMapper.class);
             return factory;
         } catch (Exception e) {
             throw new IllegalStateException("构建对话存档 SqlSessionFactory 失败", e);
