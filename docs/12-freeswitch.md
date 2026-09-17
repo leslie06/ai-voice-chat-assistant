@@ -1,0 +1,442 @@
+# 12 · FreeSWITCH 接入（电话怎么接进对话引擎）
+
+一通电话打进来（或系统拨出去），FreeSWITCH 负责电话网那一侧的一切：SIP 信令、RTP 收发、G.711 编解码；
+本项目只拿到**裸 PCM 音频 + 几个信令事件**，交给和浏览器完全相同的对话引擎。
+
+| 事情 | 谁做 | 用的能力 |
+|------|------|----------|
+| SIP 注册、呼叫、RTP、G.711 编解码、录音 | FreeSWITCH | `mod_sofia`、内核 |
+| 通话接进本项目（主叫/被叫、按键、挂机） | FreeSWITCH → 本项目 | 拨号计划里的 `socket` 应用（事件套接字 outbound 模式） |
+| 双向音频 | FreeSWITCH ⇄ 本项目 | 内核自带的 `unicast`（UDP，L16 8k） |
+| 发起外呼 | 本项目 → FreeSWITCH | 事件套接字 inbound 模式（8021）+ `bgapi originate` |
+| 识别、大模型、合成、打断、落库 | 本项目 | 与浏览器共用的 `ConversationSession` |
+
+> **全程不依赖任何第三方 FreeSWITCH 模块。** 社区常用的 `mod_audio_stream` 开源版只能单向推流，
+> 实时回放在闭源商业版里（预编译包限 10 路并发）；`socket` 与 `unicast` 则是任何发行版的
+> FreeSWITCH 包自带的。选型对比见 [10 · 电话接入](./10-telephony-outbound.md) §1。
+
+实现进度：本机软电话**呼入、按键、打断、外呼、FreeSWITCH 重启后自动重连**均已实测通过；
+**真实 SIP 中继还没有联调**（§7）。
+
+---
+
+## 1. 整条链路
+
+```
+            ┌──────────────────────── FreeSWITCH ─────────────────────────┐
+软电话/中继 ─SIP/RTP─▶ mod_sofia ─▶ 拨号计划 ai-agent                        │
+            │           ▲             answer → set 变量 → record_session     │
+            │           │             → socket <VCA>:8084 async full ────────┼──TCP(事件套接字)──┐
+            │           │                                                    │                   │
+            │        RTP(G.711)    unicast: 读帧 ─UDP L16 8k──────────────────┼──────────────┐    │
+            │                               写帧 ◀─UDP L16 8k─────────────────┼───────────┐  │    │
+            └────────────────────────────────────────────────────────────────┘           │  │    │
+                                                                                          │  ▼    ▼
+本项目 vca-telephony                                                          FreeSwitchSocketServer
+  FreeSwitchCallLeg  ── handshake: connect / myevents / linger / sendmsg unicast ◀─────────────┘
+    ├─ pumpSignaling: DTMF → CallEvent.DTMF, CHANNEL_HANGUP → HANGUP
+    ├─ pumpMedia:     首个 UDP 包 → ANSWERED; 之后每包 → inboundAudio
+    └─ writeAudio:    UDP 发回首包来源地址
+  CallSession(每 20ms 一拍)
+    ├─ 上行: inboundAudio → HandsFreeVad(8k→16k) → ConversationSession(ASR→LLM→TTS)
+    └─ 下行: TTS 24k → 降采样 8k → PacingBuffer → tick() 取一帧(没话说就补静音) → writeAudio
+```
+
+**信令和媒体是两条路**：信令走 `socket` 应用建的那条 TCP，媒体走 unicast 的 UDP。
+两条路靠的是同一个 `FreeSwitchCallLeg`——它在 TCP 上下发 unicast 命令时，把自己刚开的 UDP 端口号告诉 FreeSWITCH。
+
+---
+
+## 2. 一通呼入电话的完整过程
+
+以软电话拨 `5000` 为例，按时间顺序：
+
+### 2.1 FreeSWITCH 拨号计划（`deploy/freeswitch/conf/dialplan.xml`）
+
+```xml
+<extension name="vca-inbound">
+  <condition field="destination_number" expression="^5000$">
+    <action application="answer"/>
+    <action application="execute_extension" data="vca-connect XML ai-agent"/>
+  </condition>
+</extension>
+
+<!-- 呼入与外呼共用的接入段 -->
+<extension name="vca-connect">
+  <condition field="destination_number" expression="^vca-connect$">
+    <action application="set" data="vca_media_local_ip=0.0.0.0"/>
+    <action application="set" data="vca_media_remote_host=host.docker.internal"/>
+    <action application="set" data="park_timeout=900"/>
+    <action application="set" data="RECORD_STEREO=true"/>
+    <action application="record_session" data="/recordings/${uuid}.wav"/>
+    <action application="socket" data="host.docker.internal:8084 async full"/>
+    <action application="hangup"/>
+  </condition>
+</extension>
+```
+
+| 动作 | 作用 |
+|------|------|
+| `answer` | 先应答。unicast 要求通道已有媒体 |
+| `vca_media_local_ip` | FreeSWITCH 这一侧 UDP 口绑哪个地址。**容器里必须 `0.0.0.0`**，绑 127.0.0.1 的套接字发不出容器 |
+| `vca_media_remote_host` | FreeSWITCH 眼里本项目的地址。本项目从通道变量里读它，填进 unicast 命令 |
+| `park_timeout=900` | 本项目崩溃、没发挂机指令时的兜底：停泊 15 分钟自动挂断，不留僵尸通道 |
+| `record_session` + `RECORD_STEREO` | 双声道录音，左 = 来电方，右 = 本项目回的声音。文件名是通道 uuid，与日志、落库对得上 |
+| `socket … async full` | 主动连本项目。`async` 模式下 FreeSWITCH 会**停泊**通道（unicast 只在停泊时工作），`full` 允许下发所有命令 |
+
+### 2.2 握手（`FreeSwitchCallLeg.handshake`）
+
+`FreeSwitchSocketServer` 每接到一条 TCP 就建一个 `FreeSwitchCallLeg`，同步完成握手：
+
+```
+本项目 → connect
+FreeSWITCH ← command/reply, 头部平铺整份通道数据(值是 URL 编码的):
+             Unique-ID: 0f08bd0c-…               → callId(也是落库的 sessionId)
+             Caller-Caller-ID-Number: 1000       → peerNumber()
+             Caller-Destination-Number: 5000     → calledNumber()
+             Channel-Read-Codec-Rate: 8000       → 与配置的线路采样率比对, 不一致打告警
+             variable_vca_media_local_ip: 0.0.0.0
+             variable_vca_media_remote_host: host.docker.internal
+本项目 → myevents                 订阅本通道事件(按键、挂机)
+本项目 → linger 10                挂机后连接多留 10 秒, 否则挂机事件来不及送到
+本项目    开 UDP 口(media-bind-address:随机端口)
+本项目 → sendmsg
+         call-command: unicast
+         local-ip: 0.0.0.0             ← 取自通道变量
+         local-port: 0                 ← 让系统分配(见 2.3)
+         remote-ip: host.docker.internal
+         remote-port: <刚开的 UDP 端口>
+         transport: udp
+```
+
+任何一步失败（超时、`-ERR`、握手期间客户就挂了），这路通话直接放弃，**不建会话**。
+
+握手成功后顺序固定：先回调上层建 `CallSession` 并订阅，**再**开信令泵和媒体泵——保证 `ANSWERED` 和第一个音频包都落在订阅之后。
+
+### 2.3 媒体：unicast 的两个性质决定了实现
+
+读 FreeSWITCH 源码（`switch_ivr.c` 的 `switch_ivr_activate_unicast` 与停泊循环）确认：
+
+1. **只有 UDP。** `transport` 写 `tcp` 也会建 UDP 套接字。
+2. **停泊循环里每 20ms 把通道读到的一帧解码成 L16 发出去；另起一个线程收包，收到一包就写进通道一帧。**
+   FreeSWITCH 这一侧不做节流，所以本项目必须按实时节奏发（`PacingBuffer` + `CallSession.tick`）。
+
+本项目据此做了三件事：
+
+- **回包地址按首包来源锁定**（同对称 RTP）。FreeSWITCH 侧端口交给系统分配，不用维护端口池；
+  在 Docker 里首包来源是端口转发后的地址，按它回包正好原路回到容器——**不需要映射任何媒体端口**。
+  锁定之后别处来的包一律丢弃，否则谁知道端口谁就能往通话里灌音频。
+- **收到第一个媒体包才算接通**，此时才 emit `ANSWERED`、开始播开场白。等不到（默认 3 秒）就挂断，
+  并在日志里打出排查提示（多半是 `vca_media_remote_host` 配错）。
+- **机器人没话说时也补静音帧**（`CallLeg.needsContinuousMedia()`）。媒体服务器只在有帧写入时才发 RTP，
+  不补的话客户说话那段线路上一个包都没有：对端抖动缓冲容易吞掉机器人再开口的头几个字，部分运营商还会判媒体超时挂机。
+  实测补之前软电话 35 秒只收到 248 个包，补之后是连续的每秒 50 包。
+
+> ⚠️ **不能用 FreeSWITCH 的 `send_silence_when_idle` 代替补静音。** 停泊循环会**无条件**每 20ms 写一帧静音，
+> 和 unicast 线程写入的语音叠在一起，发包速率翻倍，客户听到的是被搅乱的声音。
+
+### 2.4 通话中与挂机
+
+| 发生了什么 | 事件套接字上收到 | 本项目的反应 |
+|------------|------------------|--------------|
+| 客户按键 | `Event-Name: DTMF` + `DTMF-Digit` | `CallEvent.DTMF`，`CallSession` 目前只打日志 |
+| 客户挂机 | `text/disconnect-notice`（linger）→ `CHANNEL_HANGUP` + `Hangup-Cause` | `HANGUP("hangup:NORMAL_CLEARING")`，会话收尾 |
+| 连接被掐断 | EOF | `HANGUP("peer-closed")` |
+| 本项目要挂（单通超时等） | — | 发 `sendmsg / call-command: hangup`，**半关**连接等 FreeSWITCH 自己断开，3 秒后强关 |
+
+主动挂机**不能发完就 close**：接收缓冲里往往还有没读的事件，此时 close 会发 RST，
+FreeSWITCH 可能在读到挂机指令之前就先收到 RST，通道挂在那里直到 `park_timeout`。
+
+---
+
+## 3. 一通外呼的完整过程
+
+```
+①  POST /telephony/calls {"number":"13800138000","callerId":"01088886666"}
+      → FreeSwitchTelephonyProvider.originate
+          号码白名单校验 [0-9+*#]
+          PendingCalls.register(id)                   ← 先登记再发起
+          EslClient.bgapi(originate …, Job-UUID=id)
+②  FreeSWITCH 拨号; 客户真正接听后, 通道才进拨号计划 vca-outbound
+      → execute_extension vca-connect → socket 连回本项目
+③  FreeSwitchSocketServer 握手, 通道 Unique-ID == id
+      → PendingCalls.attach 命中: 回填客户号码, 唤醒 ①, HTTP 返回 answered
+      → 建 CallSession, 之后与呼入完全相同
+```
+
+发出去的命令（`FreeSwitchTelephonyProvider.originateCommand`）：
+
+```
+bgapi originate {origination_uuid=<id>,originate_timeout=30,ignore_early_media=true,absolute_codec_string=^^:PCMA:PCMU,origination_caller_id_number=01088886666}sofia/gateway/trunk/13800138000 vca-outbound XML ai-agent
+Job-UUID: <id>
+```
+
+| 片段 | 为什么 |
+|------|--------|
+| `origination_uuid=<id>` | 回连时通道的 Unique-ID 就是它，接线台按它配对 |
+| `Job-UUID: <id>` | 空号/关机/拒接时 `BACKGROUND_JOB` 事件带 `-ERR NO_ANSWER` 之类的结果和这个 id，立刻叫醒发起方（实测 30ms），不干等 45 秒 |
+| `ignore_early_media=true` + 目标是拨号计划 extension | 真接听之后才进拨号计划，不会对着彩铃说话 |
+| `absolute_codec_string=^^:PCMA:PCMU` | 锁 G.711。本项目按 8k 解释 unicast 音频，协商到宽带编码会整段变速。值里的逗号会被当变量分隔符，`^^:` 把分隔符换成冒号 |
+| `sofia/gateway/trunk/{number}` | 拨号串模板，配置项 `endpoint`；本地拨软电话用 `user/{number}` |
+
+**号码白名单是安全边界**：号码会被拼进 originate 命令，逗号能多塞一个通道变量，空格能改掉目标 extension，
+换行能在同一条连接上多塞一条命令（比如 `api shutdown`）。一律拒绝，不做"清洗后放行"；
+`EslMessage.command` 对任何带换行的字段再拦一道。
+
+`EslClient` 断线自动重连（1s → 2s → 4s … 封顶 30s）。断开期间发起的外呼立刻失败，不排队；
+只有**首次**连接失败会让应用启动失败，那通常是配置写错了。
+
+---
+
+## 4. 代码结构
+
+```
+vca-telephony/src/main/java/com/vca/telephony/
+├── TelephonyProperties.java            配置(provider 二选一 + freeswitch.* / asterisk 相关项)
+├── TelephonyAutoConfiguration.java     两个嵌套配置: FreeSwitchConfiguration(默认) / AsteriskConfiguration
+├── spi/
+│   ├── CallLeg.java                    一路通话: 上下行音频、事件、主叫/被叫、needsContinuousMedia
+│   ├── CallEvent.java
+│   └── TelephonyProvider.java          originate
+├── session/
+│   ├── CallSession.java                通话编排: VAD 接线、回合、epoch 门闸、打断、节流、补静音
+│   ├── PacingBuffer.java               下行实时节流
+│   └── PendingCalls.java               外呼接线台
+├── media/PromptCache.java              开场白预合成
+├── web/OutboundCallRoute.java          POST /telephony/calls
+└── provider/freeswitch/
+    ├── EslMessage.java                 报文编解码
+    ├── FreeSwitchConfig.java           socket 服务端与媒体参数
+    ├── FreeSwitchSocketServer.java     接 socket 应用连来的通话
+    ├── FreeSwitchCallLeg.java          握手 + 信令泵 + 媒体泵
+    ├── EslConfig.java                  外呼连接参数
+    ├── EslClient.java                  连 8021: 认证、bgapi、事件、断线重连
+    └── FreeSwitchTelephonyProvider.java originate + BACKGROUND_JOB 失败回调
+```
+
+几处容易写错、代码里已经处理的细节：
+
+| 细节 | 处理 |
+|------|------|
+| 事件值 URL 编码，号码可能是 `+86…` | `EslMessage.percentDecode` 只解 `%XX`，**不能用 `URLDecoder`**（它把 `+` 当空格） |
+| `Content-Length` 按字节计，正文可能有中文 | 全程按字节读，不套 Reader |
+| 事件套接字应答不带关联 id | `EslClient` 把"写命令"和"排进等待队列"放在同一把锁里，按顺序配对应答 |
+| async 模式下事件会穿插在命令应答之间 | 握手等应答时，中途到达的事件照常处理（握手期间挂机也能感知） |
+| reactor 的 unicast sink 不允许并发 emit | 信令线程、媒体线程、挂机调用方三处 emit，各自加锁串行化 |
+
+线程模型：每路通话两个阻塞读线程（信令、媒体），加 `CallSession` 一个 20ms 定时拍子。几百路并发没有问题，到数千路再换 NIO，只需替换服务端和两个泵。
+
+与浏览器链路的依赖关系：`vca-telephony` 不依赖 `vca-web`，会话由 `vca-bootstrap` 的 `TelephonyWiring` 转接（复用浏览器那套会话装配）。
+
+---
+
+## 5. 配置
+
+### 5.1 本项目（`vca.telephony.*`，默认关闭）
+
+| 配置项 | 环境变量 | 默认 | 说明 |
+|--------|----------|------|------|
+| `enabled` | `VCA_TELEPHONY_ENABLED` | `false` | 总开关，关闭时不占端口、不建 bean |
+| `provider` | `VCA_TELEPHONY_PROVIDER` | `freeswitch` | `asterisk` 为备选 |
+| `sample-rate` | `VCA_TELEPHONY_SAMPLE_RATE` | `8000` | 线路采样率，G.711 即 8000 |
+| `freeswitch.listen-address` | `VCA_FS_LISTEN_ADDRESS` | `127.0.0.1` | socket 服务端地址。**没有鉴权，只绑回环** |
+| `freeswitch.port` | `VCA_FS_PORT` | `8084` | 拨号计划 `socket` 应用连这里 |
+| `freeswitch.media-bind-address` | `VCA_FS_MEDIA_BIND_ADDRESS` | `127.0.0.1` | 本项目 UDP 媒体口地址 |
+| `freeswitch.media-wait-ms` | `VCA_FS_MEDIA_WAIT_MS` | `3000` | 等首个媒体包的上限 |
+| `freeswitch.handshake-timeout-ms` | — | `5000` | 等握手应答的上限 |
+| `freeswitch.esl.enabled` | `VCA_FS_ESL_ENABLED` | `false` | 外呼开关，不开只能接呼入 |
+| `freeswitch.esl.host` / `port` | `VCA_FS_ESL_HOST` / `VCA_FS_ESL_PORT` | `127.0.0.1` / `8021` | 本地 Docker 版映射在 18021 |
+| `freeswitch.esl.password` | `VCA_FS_ESL_PASSWORD` | 空 | 与 `event_socket.conf` 一致 |
+| `freeswitch.esl.endpoint` | `VCA_FS_ESL_ENDPOINT` | `sofia/gateway/trunk/{number}` | 必须含 `{number}` |
+| `freeswitch.esl.context` / `exten` | `VCA_FS_ESL_CONTEXT` / `VCA_FS_ESL_EXTEN` | `ai-agent` / `vca-outbound` | 接通后进哪段拨号计划 |
+| `freeswitch.esl.ring-timeout-ms` | `VCA_FS_ESL_RING_TIMEOUT_MS` | `30000` | 振铃超时 |
+| `freeswitch.esl.answer-wait-ms` | `VCA_FS_ESL_ANSWER_WAIT_MS` | `45000` | 发起到媒体连入的总上限 |
+| `api-token` | `VCA_TELEPHONY_API_TOKEN` | 空 | 留空则不注册外呼端点 |
+| `greeting` | `VCA_TELEPHONY_GREETING` | 空 | 开场白，启动时预合成 |
+| `max-call-seconds` | `VCA_TELEPHONY_MAX_CALL_SECONDS` | `300` | 单通上限 |
+| `vad.speech-threshold` | `VCA_TELEPHONY_VAD_SPEECH` | `0.02` | 开口判定音量 |
+| `vad.onset-ms` | `VCA_TELEPHONY_VAD_ONSETMS` | `150` | 持续多久算开口 |
+| `vad.silence-ms` | `VCA_TELEPHONY_VAD_SILENCE_MS` | `700` | 句尾静音判停 |
+| `vad.barge-threshold` / `barge-ms` | `VCA_TELEPHONY_VAD_BARGE` / `VCA_TELEPHONY_VAD_BARGE_MS` | `0.025` / `250` | 打断判定 |
+
+完整项以 `TelephonyProperties` 和 `vca-bootstrap/src/main/resources/application.yml` 为准。
+
+### 5.2 FreeSWITCH（`deploy/freeswitch/conf/`，三个文件就是全部）
+
+| 文件 | 内容 |
+|------|------|
+| `freeswitch.xml` | 核心参数、加载的模块、控制台日志、事件套接字、访问名单、SIP profile |
+| `dialplan.xml` | `5000` 接入本项目、`vca-outbound` 外呼回连、`vca-connect` 公共接入段、`6000` 回声测试 |
+| `directory.xml` | 分机 `1000` 与域级 `dial-string` |
+
+`@SIP_PASSWORD@` 这类占位符由 `entrypoint.sh` 在容器启动时用 `.env` 渲染，密码不进仓库。
+
+必须知道的几个参数：
+
+| 参数 | 值 | 不这么配的后果 |
+|------|----|----------------|
+| `event_socket.conf` → `apply-inbound-acl` | `esl-local`（回环 + 私网段） | 默认只放行回环，宿主机经 Docker 端口转发连入会收到 `text/rude-rejection`，外呼启动失败 |
+| sofia → `local-network-acl` | `nobody`（谁都不匹配） | 软电话经 Docker 转发进来的源地址是网桥网关，被当成局域网，SDP 写容器内网 IP，接通但没声音 |
+| sofia → `ext-sip-ip` / `ext-rtp-ip` | `@EXTERNAL_IP@`，本机 127.0.0.1 | 同上 |
+| sofia → `inbound-codec-prefs` / `outbound-codec-prefs` | `PCMA,PCMU` | 协商到宽带编码，unicast 音频变速 |
+| sofia → `force-register-domain` | `vca.local` | 认证域随软电话填的服务器地址变化 |
+| 目录域参数 `dial-string` | `${sofia_contact(*/…)}` | `originate user/1000` 报 `MANDATORY_IE_MISSING` |
+| `rtp-end-port` | 偶数 | 奇数会被取整并打告警 |
+
+---
+
+## 6. 本地跑起来
+
+### 6.1 启动
+
+每行是一条命令，逐行执行：
+
+```bash
+cd /Users/kangyu/AI/ai-voice-chat-assistant/deploy/freeswitch
+[ -f .env ] || printf 'SIP_PASSWORD=%s\nESL_PASSWORD=%s\n' "$(openssl rand -hex 8)" "$(openssl rand -hex 12)" > .env
+docker compose up -d --build
+cd /Users/kangyu/AI/ai-voice-chat-assistant
+VCA_TELEPHONY_ENABLED=true VCA_TELEPHONY_GREETING="您好，这里是智能语音助手，请问有什么可以帮您？" ./run.sh
+```
+
+第 2 行只在第一次生成密码（`.env` 已被 gitignore），第 3 行首次构建约 1 分钟，第 5 行会先打包再启动。
+
+日志出现 `电话接入已启用(FreeSWITCH): socket 127.0.0.1:8084` 即就绪。容器设置了 `restart: unless-stopped`，Docker 重启后会自动起来；不用时 `cd deploy/freeswitch && docker compose down`。
+
+### 6.2 Linphone 添加账号（Linphone 6）
+
+1. 点右上角头像 → **Add an account** → **Third-party SIP account** → 说明页点 **I understand**。
+2. 填写：Username `1000`，Password 为 `deploy/freeswitch/.env` 里的 `SIP_PASSWORD`，Domain `127.0.0.1`，Transport `UDP`，点 **Log in**。
+3. 头像上是绿点就是注册成功。如果还有别的账号，点头像**切换到这个账号**再拨号。
+4. 点右上角拨号盘图标，输入号码，点绿色拨号键。
+
+| 拨号 | 作用 |
+|------|------|
+| `6000` | 回声测试，不经过本项目。能听到自己 = 软电话 ↔ FreeSWITCH 这段没问题 |
+| `5000` | 接入本项目 |
+
+**务必戴耳机**：外放时 AI 的声音被麦克风收回去，会被当成插话，AI 说两个字就自己停。
+
+### 6.3 外呼拨回软电话
+
+软电话保持注册并开自动接听，本项目多加几个变量启动：
+
+```bash
+VCA_TELEPHONY_ENABLED=true VCA_FS_ESL_ENABLED=true VCA_FS_ESL_PORT=18021 \
+VCA_FS_ESL_PASSWORD=<.env 里的 ESL_PASSWORD> VCA_FS_ESL_ENDPOINT='user/{number}' \
+VCA_TELEPHONY_API_TOKEN=local-test-token ./run.sh
+
+curl -X POST http://127.0.0.1:8080/telephony/calls \
+  -H 'X-Telephony-Token: local-test-token' -H 'Content-Type: application/json' \
+  -d '{"number":"1000","callerId":"01088886666"}'
+```
+
+### 6.4 不开软电话的自动化验证
+
+`brew install pjproject` 装命令行软电话 `pjsua`，用 macOS 自带的 `say` 合成提问音频，就能不用人说话把整条链路跑一遍：
+
+```bash
+say -v Tingting -o q.aiff "你好，请问今天是星期几？"
+ffmpeg -f lavfi -t 7 -i anullsrc=r=8000:cl=mono -i q.aiff -f lavfi -t 20 -i anullsrc=r=8000:cl=mono \
+  -filter_complex "[1:a]aresample=8000[q];[0:a][q][2:a]concat=n=3:v=0:a=1" -ac 1 -c:a pcm_s16le in.wav
+
+PW=$(grep ^SIP_PASSWORD deploy/freeswitch/.env | cut -d= -f2)
+perl -e 'sleep 30; print "h\nq\n"' | pjsua --null-audio --no-vad --local-port 5080 \
+  --id sip:1000@127.0.0.1 --registrar sip:127.0.0.1 --realm '*' --username 1000 --password "$PW" \
+  --add-codec pcma --play-file in.wav --auto-play --rec-file out.wav --auto-rec sip:5000@127.0.0.1
+```
+
+然后看本项目日志里的 `ASR final` 和回复落库，或分析 `deploy/freeswitch/recordings/<uuid>.wav` 两个声道的发声时间段来量打断延迟。
+
+---
+
+## 7. 部署到服务器与接真实线路
+
+> 以下是方案，**尚未联调**。第一通真实电话之前，先拨 `6000` 回声测试，再看本项目的 `media-wait-ms` 超时日志。
+
+**同机部署（推荐）**：FreeSWITCH 与本项目在同一台机器上、不用容器（或容器用 host 网络）时，
+把 `dialplan.xml` 里的三处地址都改成 `127.0.0.1`：
+
+```xml
+<action application="set" data="vca_media_local_ip=127.0.0.1"/>
+<action application="set" data="vca_media_remote_host=127.0.0.1"/>
+<action application="socket" data="127.0.0.1:8084 async full"/>
+```
+
+`vca_media_local_ip` 改回 127.0.0.1 很重要：`0.0.0.0` 会让 unicast 口暴露在网卡上，被人往通话里灌音频。
+
+**接 SIP 中继**：在 sofia profile 里加网关，参数以中继厂商给的为准：
+
+```xml
+<gateways>
+  <gateway name="trunk">
+    <param name="proxy" value="<中继地址:端口>"/>
+    <param name="register" value="false"/>   <!-- IP 白名单对接一般不注册 -->
+  </gateway>
+</gateways>
+```
+
+需要同时做的事：
+
+- **呼入。** 中继打进来的呼叫不带分机认证，要给中继 IP 单独放行（profile 的 `apply-inbound-acl`），并把被叫号码路由到 `vca-connect`。
+- **外呼。** `VCA_FS_ESL_ENDPOINT=sofia/gateway/trunk/{number}`。
+- **公网暴露面。** 5060 只对中继 IP 放行（安全组），8021、8084 永远不对外。
+- **多商家。** 按 `CallLeg.calledNumber()` 区分客户打给了哪一家（FreeSWITCH 已提供，路由逻辑还没写）。
+
+---
+
+## 8. 排查
+
+| 现象 | 看哪里 / 原因 |
+|------|---------------|
+| 拨 5000 接通后立刻挂断，本项目没有任何日志 | 本项目没起，或没开 `VCA_TELEPHONY_ENABLED`，或 `provider` 不是 freeswitch |
+| 本项目日志"N ms 内没收到 FreeSWITCH 的媒体包" | `vca_media_remote_host` / `vca_media_local_ip` 配错 |
+| 软电话能接通但两边都没声音 | `EXTERNAL_IP` 不对（本机 127.0.0.1，手机软电话填电脑局域网 IP） |
+| 本项目启动报"FreeSWITCH 拒绝了本机地址" | `apply-inbound-acl` 没放行连入地址 |
+| 外呼报 `MANDATORY_IE_MISSING` | 目录缺 `dial-string` |
+| Linphone 注册成功（绿点）但拨号卡住、报 Call could not be created | **账号 Domain 末尾多了空格**。注册请求带着空格碰巧认证通过，拨号时 Linphone 去掉了空格，找不到保存的密码，不再重发带认证的请求。删掉账号重新手输 `127.0.0.1` |
+| Linphone 拨号报 Call could not be created，顶部挂着"Appel en cours" | 上一通卡住的呼叫还在，Linphone 不让新建。点进去挂断，或 Cmd+Q 重开 |
+| 说了话 AI 没反应，日志"开口诊断"峰值不到 0.02 | 麦克风音量太小，或一个字太短没撑够 `onset-ms`。实测 Linphone 采到的"喂"峰值只有 0.054、超过门槛只有 100ms。调大 macOS 输入音量；本地测试可临时 `VCA_TELEPHONY_VAD_SPEECH=0.01 VCA_TELEPHONY_VAD_ONSETMS=100` |
+| AI 说两个字就自己停 | 外放回声被当成插话，戴耳机 |
+| FreeSWITCH 重启后外呼失败 | 正常，`EslClient` 会在 30 秒内自动重连，日志"已重连" |
+
+常用命令：
+
+```bash
+docker logs -f vca-freeswitch                                  # FreeSWITCH 控制台日志
+P=$(grep ^ESL_PASSWORD deploy/freeswitch/.env | cut -d= -f2)
+docker exec vca-freeswitch fs_cli -p "$P" -x "sofia status profile internal reg"   # 注册情况
+docker exec vca-freeswitch fs_cli -p "$P" -x "show channels"                       # 当前通话
+docker exec vca-freeswitch fs_cli -p "$P" -x "sofia global siptrace on"            # 打开 SIP 报文跟踪(用完 off)
+```
+
+---
+
+## 9. 限制与待办
+
+| 项 | 状态 |
+|----|------|
+| 真实 SIP 中继呼入/外呼 | 未联调 |
+| 按被叫号码路由到不同商家的话术、知识库 | 号码已拿到，路由未实现 |
+| 电话里的知识库检索 | `TelephonyWiring` 传的 userId 为空，知识库与个人记忆绑在一起，电话里暂时没有 |
+| 按键进对话（例如按键输入手机号） | 事件已到 `CallSession`，只打日志 |
+| 转人工 | 未实现（思路：`uuid_transfer` 或 `sendmsg execute bridge`） |
+| 并发路数上限 | 未实现，批量外呼前必须补 |
+| 电话 VAD 阈值 | 默认值是经验起步值，真实线路需用录音回归 |
+
+---
+
+## 10. 关键文件索引
+
+| 用途 | 文件 |
+|------|------|
+| 单路通话：握手、信令、媒体 | `vca-telephony/.../provider/freeswitch/FreeSwitchCallLeg.java` |
+| 接 socket 应用的服务端 | `vca-telephony/.../provider/freeswitch/FreeSwitchSocketServer.java` |
+| 报文编解码与防注入 | `vca-telephony/.../provider/freeswitch/EslMessage.java` |
+| 外呼 | `vca-telephony/.../provider/freeswitch/FreeSwitchTelephonyProvider.java`、`EslClient.java` |
+| 通话编排、补静音 | `vca-telephony/.../session/CallSession.java` |
+| 装配与配置 | `vca-telephony/.../TelephonyAutoConfiguration.java`、`TelephonyProperties.java` |
+| FreeSWITCH 配置 | `deploy/freeswitch/conf/`，接入本项目的地方在 `dialplan.xml` |
+| 本地环境说明 | `deploy/freeswitch/README.md` |
+| 单测（测试替身扮演 FreeSWITCH） | `vca-telephony/src/test/.../provider/freeswitch/` |
+| 选型与整体方案 | [10 · 电话接入](./10-telephony-outbound.md) |

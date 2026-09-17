@@ -1,10 +1,10 @@
-# 10 · 外呼接入方案（电话链路跑通）
+# 10 · 电话接入方案（呼入 / 外呼）
 
-目标：把现有对话引擎接到电话网，实现「系统拨号 → 客户接听 → AI 对话 → 意向判定 → 挂机落库」的闭环。
+目标：把现有对话引擎接到电话网。呼入是「客户来电（或呼叫转移）→ AI 接听对话 → 挂机落库」，外呼是「系统拨号 → 客户接听 → AI 对话 → 意向判定 → 挂机落库」。
 
 本文只解决**链路跑通**。名单管理、话术编辑器、意向分级后台属于产品层，另文再议。
 
-> **实现进度**（Phase 0）
+> **实现进度**
 >
 > | 状态 | 内容 |
 > |---|---|
@@ -19,10 +19,16 @@
 > | ✅ | 真实启动验证：应用起来、端口监听、模拟 Asterisk 接入→UUID→接通→VAD 成轮→挂机 全通 |
 > | ✅ | **外呼（AMI）**：`AmiPacket` / `AmiClient` / `AmiTelephonyProvider` / `PendingCalls` 接线台 |
 > | ✅ | **单拨端点** `POST /telephony/calls`（强制令牌鉴权，号码做 AMI 注入防护） |
-> | ⬜ | Asterisk 侧配置（PJSIP trunk / dialplan）与真机联调 |
-> | ⬜ | DTMF 事件注入（钩子 `CallLeg.injectEvent` 已就位，缺 AMI 事件路由） |
+> | ✅ | **软电话呼入闭环（Asterisk）**（2026-09-17）：Docker 版 Asterisk 20.6 + pjsua，开场白/识别/回复/打断/落库全通，配置在 [`deploy/asterisk/`](../deploy/asterisk/README.md) |
+> | ✅ | **改用 FreeSWITCH 为默认**（2026-09-17）：`provider/freeswitch/` —— 事件套接字（信令）+ 内核 unicast（UDP 媒体），不依赖第三方模块 |
+> | ✅ | FreeSWITCH 呼入实测：主叫/被叫号码直接拿到、开场白/识别/回复/打断（插话后 0.4s 停声）/按键/挂机原因/落库全通，配置在 [`deploy/freeswitch/`](../deploy/freeswitch/README.md) |
+> | ✅ | FreeSWITCH 外呼实测：`POST /telephony/calls` → ESL `bgapi originate` → 软电话自动接听 → 回连配对 → 对话落库；失败 30ms 内返回；FreeSWITCH 重启后自动重连 |
+> | ✅ | 空闲补静音帧，线路 RTP 不断流（§4） |
+> | ✅ | 电话模块 86 个单测，**不需要装 FreeSWITCH/Asterisk**（测试替身按真机抓包扮演媒体服务器，跑真实 TCP/UDP） |
+> | ⬜ | SIP 中继（sofia gateway）与真实电话线路联调 |
+> | ⬜ | 多商家：按被叫号码（`CallLeg.calledNumber()`，FreeSWITCH 已提供）路由话术/知识库 |
+> | ⬜ | 按键进对话（事件已到 `CallSession`，目前只打日志）；Asterisk 侧的按键事件路由 |
 > | ⬜ | CPA 音频特征兜底、转人工 |
-> | ⬜ | 开场白预合成的生成与缓存（`PromptCache`，目前由调用方传入现成 PCM） |
 
 ---
 
@@ -54,11 +60,17 @@ VAD、打断、Skill、RAG、记忆、落库全部零改动。
 
 | 方案 | 媒体通道 | 信令控制 | 评价 |
 |---|---|---|---|
-| **Asterisk + AudioSocket** | TCP（1B 类型 + 2B 长度 + 负载） | AMI / ARI | **推荐**。**官方内置**（Asterisk 16/18+），协议极简，原生双向，负载就是 **8kHz 16bit 单声道 SLIN**——和 `CallLeg` 的契约逐字对上，零转换 |
-| FreeSWITCH + `mod_audio_fork` / `mod_audio_stream` | WebSocket（L16 PCM） | ESL | 媒体走 WS 能复用现有栈，但这两个都是**社区模块、需自行编译**，且以单向转写为主要设计目标，**回灌音频的支持各版本差异很大** |
-| 云呼叫中心（阿里云/腾讯云/容联） | 各家私有 | 各家 API | 最省事，但多数厂商只给"整套机器人"，**不一定开放裸音频流**——签约前必须确认，否则你的引擎接不进去 |
+| **FreeSWITCH + socket 应用 + unicast** | UDP（L16 裸 PCM，20ms 一包） | 事件套接字（同一条 TCP） | **默认**。两样都是 FreeSWITCH **内核/自带模块的能力**，Alpine 等发行版的包直接能用。信令连接里直接带主叫、被叫、按键、挂机原因 |
+| Asterisk + AudioSocket | TCP（1B 类型 + 2B 长度 + 负载） | AMI | **备选**，已实现并实测。协议极简；但 AudioSocket 只有 UUID，**拿不到号码**，按键要另走 AMI 事件 |
+| FreeSWITCH + `mod_audio_stream` | WebSocket | 事件套接字 | 不采用。开源社区版**只能单向推流**；实时回放在闭源商业版里（预编译包限 10 路并发，只有 Debian 包） |
+| 云呼叫中心（阿里云/腾讯云/容联） | 各家私有 | 各家 API | 最省事，但多数厂商只给"整套机器人"，**不一定开放裸音频流**；号码与线路要企业资质（个体户也不行） |
 
-> 先前版本推荐 FreeSWITCH（理由是复用 WebSocket 栈）。把「双向」这条约束摆正之后结论变了：**复用 WS 栈省下的那点代码，远不值得拿整条链路的可行性去赌一个第三方模块的回灌能力。** AudioSocket 是纯 TCP，用 `java.net.Socket` 或 Reactor Netty 都是几十行。
+**为什么从 Asterisk 改成 FreeSWITCH**：国内电话机器人、呼叫中心基本都跑在 FreeSWITCH 上，中继厂商对接资料和运维经验多；事件套接字一条连接就拿到号码和按键，多商家（按被叫号码区分）不需要额外的对账通道。
+
+**unicast 的两个限制与对策**（读源码 `switch_ivr.c` 确认）：
+
+1. **只有 UDP**。`transport` 参数写 `tcp` 也会建 UDP 套接字。本机回环上丢包可忽略；FreeSWITCH 侧端口交给系统分配，VCA 按首包来源回包（同对称 RTP），所以在 Docker 里**不需要映射任何媒体端口**。
+2. **只在通道停泊时生效**。`socket` 应用的 async 模式本身就会停泊通道，正好满足。
 
 两个方案共同的好处：G.711（PCMA/PCMU）编解码由媒体服务器内部完成，你拿到的直接是 PCM，**不用自己实现 G.711**。
 
@@ -66,29 +78,32 @@ VAD、打断、Skill、RAG、记忆、落库全部零改动。
 
 ## 2. 模块划分
 
-新增一个模块，不动现有模块的依赖方向：
-
 ```
 vca-telephony/
 ├── spi/
-│   ├── TelephonyProvider.java   // originate(号码, 主叫) → Mono<CallLeg>；挂断；查状态
-│   ├── CallLeg.java             // 一路通话: 上行 Flux<byte[]> / 下行 write(byte[]) / hangup() / 事件流
+│   ├── TelephonyProvider.java   // originate(号码, 主叫) → Mono<CallLeg>
+│   ├── CallLeg.java             // 一路通话: 上行 Flux<byte[]> / 下行 writeAudio / hangup / 事件流 / 主叫被叫
 │   └── CallEvent.java           // RINGING / EARLY_MEDIA / ANSWERED / DTMF / HANGUP
 ├── session/
-│   ├── CallSession.java         // 通话编排(对应 Connection)：VAD 接线 + 回合 + epoch 门闸
-│   ├── CallStateMachine.java    // 拨号/振铃/彩铃/接通/对话中/转人工/挂机
-│   └── PacingBuffer.java        // ★ 下行实时节流(见 §4)
+│   ├── CallSession.java         // 通话编排(对应浏览器的 Connection)：VAD 接线 + 回合 + epoch 门闸
+│   ├── PacingBuffer.java        // ★ 下行实时节流(见 §4)
+│   └── PendingCalls.java        // 外呼接线台: 发起的呼叫 ↔ 连进来的媒体, 按 id 配对
 ├── media/
-│   ├── CallProgress.java        // CPA: 彩铃/空号/关机/语音信箱判定
 │   └── PromptCache.java         // 开场白预合成缓存(见 §5)
-└── provider/freeswitch/
-    ├── FsMediaWebSocketHandler.java  // 媒体: FreeSWITCH → /ws/call
-    └── FsEslClient.java              // 信令: originate / hangup / 事件订阅
+├── provider/freeswitch/         // 默认
+│   ├── EslMessage.java          //   事件套接字报文编解码(URL 编码、字节级 Content-Length、防命令注入)
+│   ├── FreeSwitchSocketServer.java  // 接 socket 应用连来的通话(呼入/外呼都从这进)
+│   ├── FreeSwitchCallLeg.java   //   握手 + 信令泵 + unicast UDP 媒体泵
+│   ├── EslClient.java           //   外呼用: 连 8021、认证、bgapi、断线重连
+│   └── FreeSwitchTelephonyProvider.java  // originate + BACKGROUND_JOB 失败回调
+├── provider/audiosocket/        // 备选: Asterisk 媒体
+├── provider/ami/                // 备选: Asterisk 外呼
+└── web/OutboundCallRoute.java   // POST /telephony/calls 冒烟端点
 ```
 
-依赖方向：`vca-telephony → vca-orchestrator → vca-domain`。**不依赖 `vca-web`**（浏览器和电话是平级的两个接入层）。
+依赖方向：`vca-telephony → vca-orchestrator → vca-domain`。**不依赖 `vca-web`**（浏览器和电话是平级的两个接入层），会话装配由 `vca-bootstrap` 的 `TelephonyWiring` 转接。
 
-根 `pom.xml` 的 `<modules>` 和 `<dependencyManagement>` 各加一条，照现有模块的样子写。
+`vca.telephony.provider` 二选一，`TelephonyAutoConfiguration` 里两个嵌套配置各管各的 bean。
 
 ---
 
@@ -101,9 +116,7 @@ vca-telephony/
 下行:  TTS ──24k PCM──▶ resample 24k→8k ──▶ PacingBuffer ──▶ FreeSWITCH
 ```
 
-`PcmAudio.resample`（`vca-orchestrator/.../vad/PcmAudio.java:60`）两个方向都已支持，但有一处要改：
-
-> **升采样目前是最近邻**（见该方法注释）。8k→16k 走最近邻会产生阶梯状波形，**Silero VAD 依赖波形结构，精度会掉**。建议改成线性插值——改动约 10 行，收益直接体现在误打断率上。
+`PcmAudio.resample`（`vca-orchestrator/.../vad/PcmAudio.java`）两个方向都已支持。升采样原先是最近邻（8k→16k 会产生阶梯状波形，Silero VAD 精度会掉），**已改成线性插值**。
 
 另外 `VadConfig` 的阈值是按浏览器 48k 麦克风调的。电话窄带 + 线路底噪的电平分布完全不同，**必须为电话场景配一组独立阈值**（`vca.telephony.vad.*`），先按经验值起步，用真实通话录音回归。
 
@@ -131,6 +144,10 @@ void bargeIn()       { pacing.clear(); /* 然后照搬 Connection 的 epoch++ �
 ```
 
 epoch 门闸的逻辑（`epoch++` 必须在 `conversation.bargeIn()` 之前）原样照搬，那条约束在电话上同样成立。
+
+**机器人没话说时也要补静音帧**（`CallLeg.needsContinuousMedia()`，FreeSWITCH 接入开启）。媒体服务器只在有帧写入时才发 RTP，不补的话客户说话那段线路上一个包都没有：对端抖动缓冲在机器人再开口时容易吞掉开头几个字，部分运营商的边界控制器还会按收不到 RTP 判媒体超时挂机。实测补之前软电话 35 秒只收到 248 个包，补之后是连续的每秒 50 包。
+
+> 不能改用 FreeSWITCH 的 `send_silence_when_idle`：停泊循环会**无条件**每 20ms 写一帧静音，和 unicast 线程写入的语音叠在一起，发包速率翻倍，客户听到的是被搅乱的声音。
 
 ---
 
@@ -175,26 +192,27 @@ epoch 门闸的逻辑（`epoch++` 必须在 `conversation.bargeIn()` 之前）�
 
 ## 8. 最短跑通路径
 
-### Phase 0 · 本地闭环（不需要任何资质和线路，目标 1~2 天）
+### Phase 0 · 本地闭环（不需要任何资质和线路）✅ 已完成
 
 **这一步就是"让流程跑通"，不碰任何监管和费用。**
 
 ```
-Linphone/Zoiper (软电话)
-      │ SIP 注册, 拨内线 1000
+Linphone / pjsua (软电话, 分机 1000)
+      │ SIP 注册, 拨 5000
       ▼
-FreeSWITCH ──WebSocket(L16 8k)──▶ /ws/call ──▶ CallSession ──▶ ConversationSession
-      ◀──────────8k PCM──────────                                    │ (VAD/LLM/TTS 全部原样)
+FreeSWITCH(Docker) ──socket 应用(TCP, 事件套接字)──▶ FreeSwitchSocketServer :8084
+      ⇅ unicast(UDP, L16 8k 裸 PCM)                        │
+                                                    CallSession ──▶ ConversationSession
+                                                                     (VAD/LLM/TTS 全部原样)
 ```
 
-验收标准：软电话拨通后听到开场白 → 说话能被识别 → AI 有回复 → **说话能打断 AI** → 挂机后 `conversation_turn` 表有记录。
+验收标准：软电话拨通后听到开场白 → 说话能被识别 → AI 有回复 → **说话能打断 AI** → 挂机后 `conversation_turn` 表有记录。以上全部实测通过，外呼（拨回软电话）也已跑通。
 
-跑通这一步，最难的技术风险（媒体外接、采样率、节流、打断）就全部出清了。
+### Phase 1 · 真实线路（依赖 SIP 中继或语音网关）
 
-### Phase 1 · 真实外呼（依赖客户提供 SIP 中继）
-
-- 接 ESL，实现 `TelephonyProvider.originate(手机号)`
-- `ignore_early_media` + CPA，把 outcome 打准
+- FreeSWITCH 配 sofia gateway，`endpoint` 改成 `sofia/gateway/<网关名>/{number}`
+- 呼入：中继号码进 `ai-agent` context；多商家按 `calledNumber()` 路由
+- CPA，把 outcome 打准（`ignore_early_media` 已默认带上）
 - 挂机检测、最大通话时长、并发路数上限
 
 ### Phase 2 · 批量与线索
@@ -219,11 +237,10 @@ FreeSWITCH ──WebSocket(L16 8k)──▶ /ws/call ──▶ CallSession ─�
 vca:
   telephony:
     enabled: ${VCA_TELEPHONY_ENABLED:false}
-    port: 9092                    # AudioSocket 监听端口, Asterisk 连过来
+    provider: freeswitch          # freeswitch(默认) / asterisk
     sample-rate: 8000             # 电话网窄带; 高清语音线路可能是 16000
-    swap-payload-bytes: false     # 听到刺耳噪声而非人声时设 true
     max-call-seconds: 300         # 单通上限, 到点主动挂机
-    greeting: 您好，这边是贷款咨询…  # 启动预合成, 接通瞬间出声
+    greeting: 您好，这里是…        # 启动预合成, 接通瞬间出声
     greeting-barge-in: true
     tts-voice: ''                 # 留空 = 用 gateway 候选的音色(别写死)
     api-token: ${VCA_TELEPHONY_API_TOKEN:}   # 留空 = 不注册外呼端点
@@ -233,58 +250,121 @@ vca:
       barge-threshold: 0.025
       barge-ms: 250
       barge-grace-ms: 200
-    ami:                          # 外呼所需; 不开只能接呼入
-      enabled: false
-      host: 127.0.0.1
-      port: 5038
-      username: ***
-      secret: ***
-      trunk: trunk-cmcc           # SIP 中继名, 拨号串 = PJSIP/<号码>@<trunk>
-      context: ai-agent
-      ring-timeout-ms: 30000
-      answer-wait-ms: 45000
+    freeswitch:
+      listen-address: 127.0.0.1   # socket 应用连这里; 没有鉴权, 只绑回环
+      port: 8084
+      media-bind-address: 127.0.0.1
+      media-wait-ms: 3000         # 下发 unicast 后多久没媒体就挂断并打排查提示
+      esl:                        # 外呼所需; 不开只能接呼入
+        enabled: false
+        host: 127.0.0.1
+        port: 8021                # 本地 Docker 版映射在 18021
+        password: ***
+        endpoint: sofia/gateway/trunk/{number}   # 本地拨软电话: user/{number}
+        context: ai-agent
+        exten: vca-outbound
+        ring-timeout-ms: 30000
+        answer-wait-ms: 45000
+    # provider=asterisk 时才用: port(9092) / swap-payload-bytes / uuid-wait-ms / ami.*
 ```
 
 完整项与默认值以 `TelephonyProperties` 和 `vca-bootstrap/src/main/resources/application.yml` 为准。
 
-> ⚠️ **还没有并发路数上限。** 早先这里写过 `max-concurrent-calls: 50`，但那只是方案阶段的设想，
-> **代码里并不存在这个配置**。批量外呼之前必须补上，否则名单一灌就会同时打爆内存和中继。
+> ⚠️ **还没有并发路数上限。** 批量外呼之前必须补上，否则名单一灌就会同时打爆内存和中继。
 
 ---
 
-## 9.1 Asterisk 侧配置（Phase 0 本地闭环）
+## 9.1 FreeSWITCH 侧（Phase 0 本地闭环）
 
-> 以下按 Asterisk 18+ / PJSIP 写。**先确认你这个版本带 AudioSocket**：`asterisk -rx "module show like audiosocket"`，看到 `res_audiosocket.so` / `app_audiosocket.so` 才能继续。没有就得装 `asterisk-modules` 或自行编译。
+> **现成可跑的版本在 [`deploy/freeswitch/`](../deploy/freeswitch/README.md)**（Docker，Alpine 包自带 arm64，一分钟装好）。
+> 按代码逐步讲解的专篇见 [12 · FreeSWITCH 接入](./12-freeswitch.md)，下面是原理与踩过的坑的摘要。
 
-**`pjsip.conf`** —— 给软电话一个分机：
+一通电话接进 VCA 的拨号计划（节选）：
 
-```ini
-[transport-udp]
-type=transport
-protocol=udp
-bind=0.0.0.0:5060
-; Asterisk 在内网、对端在公网时必须配, 否则"能接通但听不到声音"
-; external_media_address=<公网IP>
-; external_signaling_address=<公网IP>
-
-[1000]
-type=endpoint
-context=ai-agent
-disallow=all
-allow=alaw            ; 锁 G.711A, 别让它协商到别的编码
-auth=1000-auth
-aors=1000
-
-[1000-auth]
-type=auth
-auth_type=userpass
-username=1000
-password=<改成你的>
-
-[1000]
-type=aor
-max_contacts=1
+```xml
+<action application="answer"/>
+<!-- 告诉 VCA 媒体怎么走: VCA 从 socket 连接的通道变量里读 -->
+<action application="set" data="vca_media_local_ip=0.0.0.0"/>          <!-- 容器里必须 0.0.0.0 -->
+<action application="set" data="vca_media_remote_host=host.docker.internal"/>
+<action application="set" data="park_timeout=900"/>                    <!-- VCA 挂了时的兜底 -->
+<action application="socket" data="host.docker.internal:8084 async full"/>
 ```
+
+VCA 收到连接后的握手（`FreeSwitchCallLeg.handshake`）：
+
+```
+→ connect                      ← 通道数据: Unique-ID(当 callId)、主叫、被叫、编码、上面 set 的变量
+→ myevents                     ← 订阅本通道事件: DTMF / CHANNEL_HANGUP
+→ linger 10                    ← 挂机后连接多留 10s, 否则挂机事件来不及送到
+→ sendmsg                      ← FreeSWITCH 开始按 20ms 一包往 VCA 发 UDP, 并把 VCA 发回的包写进通话
+  call-command: unicast
+  local-ip: 0.0.0.0  local-port: 0  remote-ip: host.docker.internal  remote-port: <VCA 的 UDP 口>
+  transport: udp
+```
+
+收到第一个 UDP 包才算接通（emit `ANSWERED`，开始播开场白），回包地址锁定为首包来源，之后别处来的包一律丢弃。
+
+**踩过的坑**（都已写进配置与代码注释）：
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 能接通但软电话没声音 | 软电话经 Docker 转发进来，源地址是网桥网关，默认 `localnet.auto` 把它当局域网，SDP 里写了容器内网 IP | `local-network-acl` 指向一个谁都不匹配的名单，强制用 `ext-rtp-ip` |
+| 外呼启动失败，对端回 `text/rude-rejection` | 事件套接字不配 ACL 时默认只放行回环，宿主机经端口转发进来是网桥地址 | `apply-inbound-acl` 放行回环与私网段（8021 只发布到宿主机回环，不外露） |
+| 外呼报 `MANDATORY_IE_MISSING` | 精简的分机目录里没有 `dial-string`，`user/1000` 找不到注册地址 | 域级参数补上 `dial-string` |
+| unicast 下发成功但没有媒体 | 容器里 `local-ip` 绑了 127.0.0.1，套接字发不出容器；或 `remote-ip` 不是 FreeSWITCH 能到达的地址 | VCA 等 `media-wait-ms` 后挂断并打出排查提示 |
+| 宿主机 8021 端口被占 | macOS 上 launchd 占着 8021 | 本地映射到 18021 |
+| FreeSWITCH 重启后外呼不可用 | ESL 连接断开 | `EslClient` 1s→30s 退避自动重连，断开期间外呼立刻失败 |
+
+## 9.2 外呼是怎么拨出去的（FreeSWITCH）
+
+一次外呼是**两条互不相干的通道**：
+
+```
+①  本进程 ──ESL bgapi originate──▶ FreeSWITCH ──SIP──▶ 客户手机      (我们连 FreeSWITCH :8021)
+②  客户接听 → 通道进拨号计划 vca-outbound ──socket 应用──▶ 本进程     (FreeSWITCH 连我们 :8084)
+```
+
+两条路靠我们生成的一个 id 对上，它**身兼三职**：
+
+```
+bgapi originate {origination_uuid=<id>,originate_timeout=30,ignore_early_media=true,
+                 absolute_codec_string=^^:PCMA:PCMU,origination_caller_id_number=<号显>}
+                sofia/gateway/<网关>/<号码> vca-outbound XML ai-agent
+Job-UUID: <id>
+```
+
+- `origination_uuid` → ② 连进来时通道的 Unique-ID 就是它，`PendingCalls` 一查即配对并回填客户号码；
+- `Job-UUID` → 空号/关机/拒接时 `BACKGROUND_JOB` 事件带着它，立刻叫醒发起方（实测 30ms），不干等 `answer-wait-ms`；
+- 同时当落库的 sessionId。
+
+三个值得注意的设计点：
+
+- **不会对着彩铃说话**。originate 的目标是拨号计划里的 extension，FreeSWITCH 只有在对端**真正接听**后才把通道送进拨号计划；再加 `ignore_early_media=true`。
+- **先登记再发起**。反过来的话，快线路上媒体可能比登记还早连进来，那一路会被当成呼入。
+- **锁 G.711**。VCA 按 8k 解释 unicast 音频，协商到宽带编码会整段变速。变量值里的逗号会被当成分隔符，所以用 `^^:` 语法换成冒号。
+
+### 怎么拨第一通电话
+
+```bash
+curl -X POST http://localhost:8080/telephony/calls \
+  -H 'X-Telephony-Token: <你的令牌>' \
+  -H 'Content-Type: application/json' \
+  -d '{"number":"13800138000","callerId":"01088886666"}'
+
+# 接通: {"callId":"...","outcome":"answered","peerNumber":"13800138000","elapsedMs":8123}
+# 未通: {"callId":null,"outcome":"failed","reason":"外呼失败: NO_ANSWER","elapsedMs":30012}
+```
+
+这是**冒烟工具，不是批量入口**——它会一直等到接通或失败才返回。批量外呼需要异步发起 + 并发控制 + 重呼策略，那是名单/任务系统的事。
+
+两条安全约束写死在代码里：
+
+- **未配 `vca.telephony.api-token` 就不注册这个端点。** 它会真的打电话、真的花钱。
+- **号码只放行 `[0-9+*#]`。** 号码会被拼进 originate 命令：逗号能多塞一个通道变量，空格能改掉目标 extension，换行能在同一条连接上多塞一条命令（`api shutdown`）。一律不做"清洗后放行"；`EslMessage.command` 对任何带换行的字段再拦一道。
+
+## 9.3 备选：Asterisk（AudioSocket + AMI）
+
+> 设 `VCA_TELEPHONY_PROVIDER=asterisk`。现成可跑的版本在 [`deploy/asterisk/`](../deploy/asterisk/README.md)。以下按 Asterisk 18+ / PJSIP 写。**先确认你这个版本带 AudioSocket**：`asterisk -rx "module show like audiosocket"`。
 
 **`extensions.conf`** —— 拨 5000 进 AI：
 
@@ -297,92 +377,23 @@ exten => 5000,1,NoOp(接入 VCA 语音助手)
  same => n,Hangup()
 ```
 
-> ⚠️ **第一个参数必须是合法 UUID。** AudioSocket 协议里那一帧就是 16 字节 UUID，`app_audiosocket`
-> 会真的去解析它。别拿 `${UNIQUEID}` 顶替——它是"时间戳.序号"（如 `1786444930.4`），会直接报
-> `Failed to parse UUID`，通道当场退出。症状是**接通后立刻挂断，而 VCA 侧连一条连接日志都没有**，
-> 很容易误判成网络或端口问题。
->
-> `${UUID()}` 由 `func_uuid.so` 提供，先 `asterisk -rx "module show like func_uuid"` 确认；
-> 没有就用 `${SHELL(uuidgen)}`。
+> ⚠️ **第一个参数必须是合法 UUID。** 别拿 `${UNIQUEID}` 顶替——它是"时间戳.序号"，会直接报
+> `Failed to parse UUID`，症状是**接通后立刻挂断，而 VCA 侧连一条连接日志都没有**。
+> **Ubuntu 24.04 自带的 Asterisk 20.6 没有 `func_uuid`**，用
+> `${SHELL(cat /proc/sys/kernel/random/uuid | tr -d '\n')}` —— `tr` 不能省。
 
-**启动 VCA**：
+如果听到的是刺耳噪声而不是人声，设 `VCA_TELEPHONY_SWAP_BYTES=true`（Docker 版实测不需要）。
 
-```bash
-VCA_TELEPHONY_ENABLED=true \
-VCA_TELEPHONY_GREETING="您好，这边是贷款咨询，方便耽误您一分钟吗？" \
-java -jar vca-bootstrap/target/vca-bootstrap-0.0.1-SNAPSHOT.jar
-```
-
-看到 `电话接入已启用: AudioSocket :9092` 就绪。软电话（Zoiper/Linphone）注册 1000，拨 5000。
-
-**验收清单**：听到开场白 → 说话能识别 → 有回复 → **能打断** → 挂机后 `conversation_turn` 有记录（需另开 `vca.store.enabled`）。
-
-**第一件要听的事**：如果听到的是刺耳噪声而不是人声，设 `VCA_TELEPHONY_SWAP_BYTES=true` 重启——SLIN 字节序在不同构建上不一致，这个开关就是为它准备的。
-
-## 9.2 外呼是怎么拨出去的
-
-一次外呼是**两条互不相干的通道**，这是理解这块代码的关键：
-
-```
-①  本进程 ──AMI Originate──▶ Asterisk ──SIP──▶ 客户手机     (出方向, 我们连 Asterisk)
-②                            Asterisk ──AudioSocket──▶ 本进程  (入方向, Asterisk 连我们)
-```
-
-两条路唯一的共同信息，是我们自己生成的一个 id。它**同时**当 AMI 的 `ActionID` 和 `Variable: CALLUUID`：
-
-```
-Action: Originate
-ActionID: <id>
-Channel: PJSIP/<被叫号码>@<trunk>
-Context: ai-agent          ; 接通后进这里, 那里跑 AudioSocket
-Async: true                ; 同步 Originate 会把 AMI 连接阻塞到通话结束
-Variable: CALLUUID=<id>    ; dialplan 里 AudioSocket(${CALLUUID},host:port) 用它
-Variable: __SIP_CODEC=alaw ; 锁死 G.711A
-```
-
-媒体连进来时带的 UUID 就是这个 id，`PendingCalls` 一查即可配对，并把被叫号码回填进 `CallLeg`（AudioSocket 自己拿不到号码）。**用同一个 id 兼任两职是刻意的**——失败事件 `OriginateResponse` 只带 `ActionID`，两者若是不同的 id，拿到失败通知也不知道该叫醒谁。
-
-三个值得注意的设计点：
-
-- **不会对着彩铃说话**。Originate 指定了 `Context/Exten`，Asterisk 只有在对端**真正接听**后才把通道送进 dialplan，`AudioSocket()` 根本不会在彩铃阶段执行。这比任何音频特征判定都可靠。
-- **失败立刻报错**。`Response: Success` 只表示"指令已受理"，真正结果在 `OriginateResponse` 事件里。空号/关机/拒接会立刻叫醒发起方，不必干等 `answerWaitMs`——批量外呼时这点等待会直接吃掉并发。
-- **先登记再发起**。反过来的话，快线路上媒体可能比登记还早连进来，那一路会被当成呼入，而发起方一直等到超时。
-
-### 怎么拨第一通电话
-
-```bash
-curl -X POST http://localhost:8080/telephony/calls \
-  -H 'X-Telephony-Token: <你的令牌>' \
-  -H 'Content-Type: application/json' \
-  -d '{"number":"13800138000","callerId":"01088886666"}'
-
-# 接通: {"callId":"...","outcome":"answered","peerNumber":"13800138000","elapsedMs":8123}
-# 未通: {"callId":null,"outcome":"failed","reason":"外呼失败: 3","elapsedMs":3120}
-```
-
-这是**冒烟工具，不是批量入口**——它会一直等到接通或失败才返回，便于人肉验证"到底通没通"。批量外呼需要异步发起 + 并发控制 + 重呼策略，那是名单/任务系统的事。
-
-两条安全约束写死在代码里：
-
-- **未配 `vca.telephony.api-token` 就不注册这个端点。** 它会真的打电话、真的花钱，没令牌暴露到公网等于把话费和号码信誉交出去。
-- **号码只放行 `[0-9+*#]`。** 号码会被拼进 `Channel: PJSIP/<号码>@<trunk>`，而 AMI 是 CRLF 行协议——号码里带 `\r\n` 就能往同一条连接注入任意 manager action（挂断别人的通话、读配置、甚至 Originate 到自己号码上刷话费）。一律不做"清洗后放行"。
-
-外呼的 dialplan 与 Phase 0 共用同一个 context，只是 `AudioSocket()` 的第一个参数换成变量：
-
-```ini
-[ai-agent]
-exten => s,1,NoOp(外呼接通: ${CALLUUID})
- same => n,AudioSocket(${CALLUUID},127.0.0.1:9092)
- same => n,Hangup()
-```
+外呼经 AMI：`Action: Originate`，`ActionID` 与 `Variable: CALLUUID` 用同一个 id，接通后进 `s` extension 跑 `AudioSocket(${CALLUUID},…)`，`PendingCalls` 按 UUID 配对。AMI 客户端没有断线重连，AudioSocket 拿不到号码，按键要另走 AMI 事件——这也是默认改成 FreeSWITCH 的原因之一。
 
 ## 10. 风险清单
 
 | 风险 | 处置 |
 |---|---|
-| **媒体外接模块不可用** | 唯一的外部不确定项。Phase 0 第一天就验证；不行则切 Asterisk AudioSocket |
+| 媒体外接不可用 | 已排除：FreeSWITCH unicast 与 Asterisk AudioSocket 均已实测双向通 |
+| 真实中继的 NAT/编码差异 | 本地只验证了软电话；接中继时先拨 6000 回声测试，再看 `media-wait-ms` 超时日志 |
 | 8k 下 ASR 识别率下降 | 用真实通话录音评测，必要时换电话专用 ASR 模型（各家都有 8k 电话模型，别用通用模型） |
-| Silero VAD 在窄带上误判 | 先修线性插值升采样；仍不行则电话路径回退 `EnergyVad` + 调阈值 |
+| Silero VAD 在窄带上误判 | 升采样已改线性插值；电话路径默认 `EnergyVad`，开 Silero 前用真实通话回归 |
 | 打断在高延迟线路上迟钝 | 端到端延迟预算要单独测：线路 RTT + VAD 判决 + 取消上游，目标 < 500ms |
 | 并发上不去 | 治理态外置 Redis（Phase 3）。**并发路数上限尚未实现**，批量外呼前必须先补 |
 
@@ -392,10 +403,14 @@ exten => s,1,NoOp(外呼接通: ${CALLUUID})
 
 | 用途 | 文件 |
 |---|---|
+| FreeSWITCH 单路通话(握手/信令/媒体) | `vca-telephony/.../provider/freeswitch/FreeSwitchCallLeg.java` |
+| FreeSWITCH 外呼 | `vca-telephony/.../provider/freeswitch/FreeSwitchTelephonyProvider.java` |
+| 本地 FreeSWITCH 配置 | `deploy/freeswitch/conf/`（`dialplan.xml` 是接入 VCA 的地方） |
+| 电话通话编排 | `vca-telephony/.../session/CallSession.java` |
 | 传输无关的编排入口 | `vca-orchestrator/.../session/ConversationSession.java:467` |
 | 要对照抄的浏览器接入层 | `vca-web/.../ws/VoiceWebSocketHandler.java`（内部类 `Connection`，L313 起） |
 | epoch 门闸的三层打断说明 | `docs/02-tech-implementation.md` §3 |
-| 重采样（需改升采样插值） | `vca-orchestrator/.../vad/PcmAudio.java:60` |
+| 重采样 | `vca-orchestrator/.../vad/PcmAudio.java` |
 | VAD 状态机（原样复用） | `vca-orchestrator/.../vad/HandsFreeVad.java` |
 | 通话落库（原样复用） | `vca-orchestrator/.../recorder/ConversationRecorder.java` |
 | 录音落 OSS（质检用） | `vca-store/.../OssAudioRecordingService.java` |
