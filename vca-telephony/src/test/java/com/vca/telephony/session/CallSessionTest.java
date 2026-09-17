@@ -54,6 +54,12 @@ class CallSessionTest {
         final Sinks.Many<CallEvent> events = Sinks.many().multicast().onBackpressureBuffer();
         final List<byte[]> written = Collections.synchronizedList(new ArrayList<>());
         volatile String hangupReason;
+        volatile boolean continuousMedia;
+
+        @Override
+        public boolean needsContinuousMedia() {
+            return continuousMedia;
+        }
 
         @Override
         public String callId() {
@@ -190,6 +196,32 @@ class CallSessionTest {
         // 1000 字节 → 4 帧(最后一帧补静音), 之后缓冲空, 不再往线路写任何东西
         assertThat(leg.written).hasSize(4);
         assertThat(leg.written).allSatisfy(f -> assertThat(f).hasSize(FRAME_BYTES));
+        assertThat(call.pendingPlaybackMs()).isZero();
+    }
+
+    /**
+     * 需要连续媒体的接入层(FreeSWITCH): 开场白播完后每拍补一帧静音, 线路上 RTP 不断流;
+     * 接通之前一帧都不写, 补的静音也不能让"机器人还在说话"的判断变成 true(否则打断窗口永远关不上)。
+     */
+    @Test
+    void continuousMediaLegGetsSilenceWhenIdleButOnlyAfterAnswer() {
+        FakeCallLeg leg = new FakeCallLeg();
+        leg.continuousMedia = true;
+        CallSession call = callSession(leg, new AtomicInteger(), new byte[640]);   // 2 帧开场白
+
+        for (int i = 0; i < 5; i++) {
+            call.tick();
+        }
+        assertThat(leg.written).isEmpty();   // 未接通
+
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+        for (int i = 0; i < 10; i++) {
+            call.tick();
+        }
+
+        assertThat(leg.written).hasSize(10);   // 2 帧开场白 + 8 帧静音, 一拍不落
+        assertThat(leg.written).allSatisfy(f -> assertThat(f).hasSize(FRAME_BYTES));
+        assertThat(leg.written.subList(2, 10)).allSatisfy(f -> assertThat(f).containsOnly(0));
         assertThat(call.pendingPlaybackMs()).isZero();
     }
 

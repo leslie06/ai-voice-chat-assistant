@@ -29,8 +29,8 @@ import org.springframework.context.annotation.Configuration;
 public class TelephonyWiring {
 
     /**
-     * 一路通话一个编排会话。{@code callId} 用的是 AudioSocket 握手拿到的 Asterisk UUID,
-     * 同时当 sessionId 落库, 因此通话记录能和 Asterisk 侧的通道对上。
+     * 一路通话一个编排会话。{@code callId} 用的是媒体服务器的通道 id(FreeSWITCH 的 Unique-ID /
+     * Asterisk AudioSocket 的 UUID), 同时当 sessionId 落库, 因此通话记录能和媒体服务器侧的通道、录音对上。
      *
      * <p>{@code userId} 为 null: 电话对端是外部客户, 不是本系统的登录用户, 不该启用跨会话个人记忆。
      * {@code TurnListener} 暂用 NOOP —— 等做意向分级时, 这里换成把 ASR/回复文本喂给打分器的实现。

@@ -10,11 +10,15 @@ import com.vca.orchestrator.vad.VoiceActivityDetector;
 import com.vca.telephony.media.PromptCache;
 import com.vca.telephony.provider.ami.AmiClient;
 import com.vca.telephony.provider.ami.AmiTelephonyProvider;
-import com.vca.telephony.provider.audiosocket.AudioSocketCallLeg;
 import com.vca.telephony.provider.audiosocket.AudioSocketServer;
+import com.vca.telephony.provider.freeswitch.EslClient;
+import com.vca.telephony.provider.freeswitch.FreeSwitchSocketServer;
+import com.vca.telephony.provider.freeswitch.FreeSwitchTelephonyProvider;
 import com.vca.telephony.session.CallConversationFactory;
 import com.vca.telephony.session.CallSession;
 import com.vca.telephony.session.PendingCalls;
+import com.vca.telephony.spi.CallLeg;
+import com.vca.telephony.spi.TelephonyProvider;
 import com.vca.telephony.web.OutboundCallRoute;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +28,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerResponse;
@@ -39,6 +44,9 @@ import java.util.function.Supplier;
  * <p><b>默认不生效</b>: 需要 {@code vca.telephony.enabled=true}, 且容器里得有一个
  * {@link CallConversationFactory}(由 {@code vca-bootstrap} 提供, 见该接口的注释)。
  * 两个条件任一不满足就完全不建 bean、不占端口。
+ *
+ * <p>媒体服务器二选一({@code vca.telephony.provider}), 各自的接入与外呼 bean 放在下面两个嵌套配置里;
+ * 与媒体服务器无关的(开场白、VAD、外呼接线台、外呼端点)放在外层共用。
  */
 @AutoConfiguration(after = GatewayAutoConfiguration.class)
 @EnableConfigurationProperties(TelephonyProperties.class)
@@ -84,42 +92,21 @@ public class TelephonyAutoConfiguration {
         return m::newDetector;
     }
 
-    /**
-     * AudioSocket 服务端。Asterisk 每接通一路就连过来一条 TCP, 这里为它装配一路 {@link CallSession}。
-     *
-     * <p>顺序是有意的: 先建 leg → 建会话并 {@code attach()}(订阅) → {@code AudioSocketServer} 才开读泵,
-     * 因此首帧一定落在订阅之后。
-     */
-    /** 外呼接线台: 把 AMI 发起的呼叫和 AudioSocket 连进来的媒体按 id 对上。呼入不经过它。 */
+    /** 外呼接线台: 把发起的呼叫和连进来的媒体按 id 对上。呼入不经过它。 */
     @Bean
     PendingCalls pendingCalls() {
         return new PendingCalls();
     }
 
-    /** AMI 连接。只在 {@code vca.telephony.ami.enabled=true} 时建 —— 不开就只能接呼入。 */
-    @Bean(destroyMethod = "close")
-    @ConditionalOnProperty(prefix = "vca.telephony.ami", name = "enabled", havingValue = "true")
-    AmiClient amiClient(TelephonyProperties props) throws IOException {
-        AmiClient client = new AmiClient(props.toAmiConfig());
-        client.connect();   // 连不上就让启动失败: 外呼服务拨不出去没有意义
-        return client;
-    }
-
-    @Bean
-    @ConditionalOnBean(AmiClient.class)
-    AmiTelephonyProvider amiTelephonyProvider(AmiClient client, TelephonyProperties props, PendingCalls pending) {
-        log.info("外呼已启用: 中继={}, context={}, 振铃超时={}ms",
-                props.getAmi().getTrunk(), props.getAmi().getContext(), props.getAmi().getRingTimeoutMs());
-        return new AmiTelephonyProvider(client, props.toAmiConfig(), pending);
-    }
-
     /**
      * 单拨外呼端点。<b>只在配了令牌时才注册</b> —— 这个接口会真的打电话、真的花钱,
      * 没令牌就暴露出去等于把话费和号码信誉交给公网。宁可不提供, 也不裸奔。
+     *
+     * <p>{@link TelephonyProvider} 由下面某个嵌套配置提供; 嵌套配置先于外层 bean 方法注册, 所以这里的条件看得到它。
      */
     @Bean
-    @ConditionalOnBean(AmiTelephonyProvider.class)
-    RouterFunction<ServerResponse> outboundCallRoute(AmiTelephonyProvider provider, TelephonyProperties props) {
+    @ConditionalOnBean(TelephonyProvider.class)
+    RouterFunction<ServerResponse> outboundCallRoute(TelephonyProvider provider, TelephonyProperties props) {
         if (props.getApiToken().isBlank()) {
             log.warn("未配 vca.telephony.api-token, 不注册外呼端点 POST /telephony/calls "
                     + "(外呼能力仍在, 只是没有 HTTP 触发入口)");
@@ -127,33 +114,113 @@ public class TelephonyAutoConfiguration {
         }
         log.info("外呼端点已注册: POST /telephony/calls (需 X-Telephony-Token)");
         return OutboundCallRoute.create(provider, props.getApiToken(),
-                Duration.ofMillis(props.getAmi().getAnswerWaitMs() + 5_000L));
+                Duration.ofMillis(props.outboundAnswerWaitMs() + 5_000L));
     }
 
-    @Bean(destroyMethod = "close")
-    AudioSocketServer audioSocketServer(TelephonyProperties props,
-                                        CallConversationFactory conversations,
-                                        PromptCache prompts,
-                                        PendingCalls pendingCalls,
-                                        Supplier<VoiceActivityDetector> vadDetectorFactory) throws IOException {
-        byte[] greeting = prompts.get(props.getGreeting());
-        AudioSocketServer server = new AudioSocketServer(props.toAudioSocketConfig(),
-                leg -> startCall(leg, props, conversations, pendingCalls, vadDetectorFactory, greeting));
-        server.start();
-        log.info("电话接入已启用: AudioSocket :{}, 线路 {}Hz, 单通上限 {}s, 开场白 {}",
-                props.getPort(), props.getSampleRate(), props.getMaxCallSeconds(),
-                greeting.length > 0 ? (greeting.length * 500 / props.getSampleRate()) + "ms" : "无");
-        return server;
+    // ================= FreeSWITCH(默认) =================
+
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnProperty(prefix = "vca.telephony", name = "provider", havingValue = "freeswitch", matchIfMissing = true)
+    static class FreeSwitchConfiguration {
+
+        /**
+         * 接 FreeSWITCH 拨号计划里 socket 应用连过来的通话, 呼入与外呼都从这里进。
+         * 顺序由服务端保证: 握手(拿 callId/号码、下发 unicast) → 建会话并订阅 → 开信令/媒体泵。
+         */
+        @Bean(destroyMethod = "close")
+        FreeSwitchSocketServer freeSwitchSocketServer(TelephonyProperties props,
+                                                      CallConversationFactory conversations,
+                                                      PromptCache prompts,
+                                                      PendingCalls pendingCalls,
+                                                      Supplier<VoiceActivityDetector> vadDetectorFactory) throws IOException {
+            byte[] greeting = prompts.get(props.getGreeting());
+            FreeSwitchSocketServer server = new FreeSwitchSocketServer(props.toFreeSwitchConfig(),
+                    leg -> startCall(leg, props, conversations, pendingCalls, vadDetectorFactory, greeting));
+            server.start();
+            log.info("电话接入已启用(FreeSWITCH): socket {}:{}, 线路 {}Hz, 单通上限 {}s, 开场白 {}",
+                    props.getFreeswitch().getListenAddress(), props.getFreeswitch().getPort(),
+                    props.getSampleRate(), props.getMaxCallSeconds(), describeGreeting(greeting, props));
+            return server;
+        }
+
+        /** ESL 连接。只在 {@code vca.telephony.freeswitch.esl.enabled=true} 时建 —— 不开就只能接呼入。 */
+        @Bean(destroyMethod = "close")
+        @ConditionalOnProperty(prefix = "vca.telephony.freeswitch.esl", name = "enabled", havingValue = "true")
+        EslClient eslClient(TelephonyProperties props) throws IOException {
+            EslClient client = new EslClient(props.toEslConfig());
+            client.connect();   // 连不上就让启动失败: 外呼服务拨不出去没有意义
+            return client;
+        }
+
+        @Bean
+        @ConditionalOnBean(EslClient.class)
+        FreeSwitchTelephonyProvider freeSwitchTelephonyProvider(EslClient client, TelephonyProperties props,
+                                                                PendingCalls pending) {
+            log.info("外呼已启用(FreeSWITCH): 拨号串={}, 目标 {}@{}, 振铃超时={}ms",
+                    props.getFreeswitch().getEsl().getEndpoint(), props.getFreeswitch().getEsl().getExten(),
+                    props.getFreeswitch().getEsl().getContext(), props.getFreeswitch().getEsl().getRingTimeoutMs());
+            return new FreeSwitchTelephonyProvider(client, props.toEslConfig(), pending);
+        }
     }
 
-    private void startCall(AudioSocketCallLeg leg, TelephonyProperties props,
-                           CallConversationFactory conversations, PendingCalls pendingCalls,
-                           Supplier<VoiceActivityDetector> vadDetectorFactory, byte[] greeting) {
+    // ================= Asterisk(备选) =================
+
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnProperty(prefix = "vca.telephony", name = "provider", havingValue = "asterisk")
+    static class AsteriskConfiguration {
+
+        /**
+         * AudioSocket 服务端。Asterisk 每接通一路就连过来一条 TCP。
+         * 顺序由服务端保证: 先建 leg → 建会话并订阅 → 才开读泵, 因此首帧一定落在订阅之后。
+         */
+        @Bean(destroyMethod = "close")
+        AudioSocketServer audioSocketServer(TelephonyProperties props,
+                                            CallConversationFactory conversations,
+                                            PromptCache prompts,
+                                            PendingCalls pendingCalls,
+                                            Supplier<VoiceActivityDetector> vadDetectorFactory) throws IOException {
+            byte[] greeting = prompts.get(props.getGreeting());
+            AudioSocketServer server = new AudioSocketServer(props.toAudioSocketConfig(),
+                    leg -> startCall(leg, props, conversations, pendingCalls, vadDetectorFactory, greeting));
+            server.start();
+            log.info("电话接入已启用(Asterisk): AudioSocket :{}, 线路 {}Hz, 单通上限 {}s, 开场白 {}",
+                    props.getPort(), props.getSampleRate(), props.getMaxCallSeconds(), describeGreeting(greeting, props));
+            return server;
+        }
+
+        /** AMI 连接。只在 {@code vca.telephony.ami.enabled=true} 时建 —— 不开就只能接呼入。 */
+        @Bean(destroyMethod = "close")
+        @ConditionalOnProperty(prefix = "vca.telephony.ami", name = "enabled", havingValue = "true")
+        AmiClient amiClient(TelephonyProperties props) throws IOException {
+            AmiClient client = new AmiClient(props.toAmiConfig());
+            client.connect();   // 连不上就让启动失败: 外呼服务拨不出去没有意义
+            return client;
+        }
+
+        @Bean
+        @ConditionalOnBean(AmiClient.class)
+        AmiTelephonyProvider amiTelephonyProvider(AmiClient client, TelephonyProperties props, PendingCalls pending) {
+            log.info("外呼已启用(Asterisk): 中继={}, context={}, 振铃超时={}ms",
+                    props.getAmi().getTrunk(), props.getAmi().getContext(), props.getAmi().getRingTimeoutMs());
+            return new AmiTelephonyProvider(client, props.toAmiConfig(), pending);
+        }
+    }
+
+    // ================= 共用 =================
+
+    private static void startCall(CallLeg leg, TelephonyProperties props,
+                                  CallConversationFactory conversations, PendingCalls pendingCalls,
+                                  Supplier<VoiceActivityDetector> vadDetectorFactory, byte[] greeting) {
         // 先配对: 命中说明这是我们拨出去的电话(顺带回填被叫号码), 没命中就是呼入 —— 都照常建会话
         boolean outbound = pendingCalls.attach(leg);
-        log.debug("建立通话会话: callId={}, 方向={}", leg.callId(), outbound ? "外呼" : "呼入");
+        log.info("[{}] 建立通话会话: 方向={}, 对端={}, 被叫={}",
+                leg.callId(), outbound ? "外呼" : "呼入", leg.peerNumber(), leg.calledNumber());
         CallSession call = new CallSession(leg, conversations.create(leg.callId()),
                 props.toVadConfig(), vadDetectorFactory.get(), props.toCallConfig(), greeting);
         call.start();
+    }
+
+    private static String describeGreeting(byte[] greeting, TelephonyProperties props) {
+        return greeting.length > 0 ? (greeting.length * 500 / props.getSampleRate()) + "ms" : "无";
     }
 }

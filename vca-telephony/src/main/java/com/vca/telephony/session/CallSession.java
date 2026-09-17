@@ -53,6 +53,8 @@ public final class CallSession {
 
     /** 预合成开场白(已是线路采样率的 PCM); 为空则接通后直接进入聆听 */
     private final byte[] greeting;
+    /** 空闲时补发的静音帧; 接入层不需要连续媒体时为 null */
+    private final byte[] silenceFrame;
 
     private final AtomicLong seq = new AtomicLong();
     private final long startedAtMs = System.currentTimeMillis();
@@ -86,6 +88,7 @@ public final class CallSession {
         this.mediaRate = leg.sampleRate();
         this.pacing = new PacingBuffer(mediaRate, this.cfg.pacingMs(), this.cfg.maxBufferedMs());
         this.greeting = greeting;
+        this.silenceFrame = leg.needsContinuousMedia() ? new byte[pacing.frameBytes()] : null;
         this.vad = new HandsFreeVad(vadConfig, vadListener(), detector);
     }
 
@@ -288,6 +291,9 @@ public final class CallSession {
             if (frame == null && resumeEpoch >= 0 && resumeEpoch == epoch) {
                 resumeEpoch = -1;
                 vad.resumeListening();   // 已播完, 现在回到聆听才不会关掉打断窗口
+            }
+            if (frame == null && answered && silenceFrame != null) {
+                frame = silenceFrame;    // 没话说也保持 RTP 连续, 见 CallLeg#needsContinuousMedia
             }
         }
         if (frame != null) {

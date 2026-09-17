@@ -12,23 +12,37 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "vca.telephony")
 public class TelephonyProperties {
 
+    /** 接哪种媒体服务器 */
+    public enum Provider {
+        /** 默认。事件套接字(信令) + unicast UDP(媒体), 都是 FreeSWITCH 自带能力。配置见 {@link FreeSwitch} */
+        FREESWITCH,
+        /** 备选。AudioSocket(媒体) + AMI(外呼)。配置是本类顶层的 port/swapPayloadBytes/uuidWaitMs 与 {@link Ami} */
+        ASTERISK
+    }
+
     /** 总开关。关闭时不监听端口、不建任何 bean。 */
     private boolean enabled = false;
 
-    /** AudioSocket 监听端口。Asterisk 的 dialplan 会连到这里。 */
+    /** 媒体服务器类型, 默认 FreeSWITCH */
+    private Provider provider = Provider.FREESWITCH;
+
+    /** FreeSWITCH 接入参数(provider=freeswitch 时生效) */
+    private FreeSwitch freeswitch = new FreeSwitch();
+
+    /** [Asterisk] AudioSocket 监听端口。Asterisk 的 dialplan 会连到这里。 */
     private int port = 9092;
 
     /** 线路采样率(Hz)。电话网窄带固定 8000; 高清语音线路可能是 16000。 */
     private int sampleRate = 8000;
 
     /**
-     * 是否翻转音频负载字节序。SLIN 在不同 Asterisk 构建上的线路字节序可能不同,
+     * [Asterisk] 是否翻转音频负载字节序。SLIN 在不同 Asterisk 构建上的线路字节序可能不同,
      * 而本项目全链路按小端解析。<b>联调时若听到刺耳噪声而不是人声, 把它打开。</b>
      */
     private boolean swapPayloadBytes = false;
 
     /**
-     * 建连后等 Asterisk 首帧 UUID 的时长(ms)。UUID 会当作 sessionId 落库, 也是跟 originate 侧
+     * [Asterisk] 建连后等 Asterisk 首帧 UUID 的时长(ms)。UUID 会当作 sessionId 落库, 也是跟 originate 侧
      * 对账被叫号码的唯一键; 等不到就用占位 id 继续, 不阻断通话。
      */
     private int uuidWaitMs = 2000;
@@ -65,7 +79,7 @@ public class TelephonyProperties {
     /** 电话专用 VAD 阈值 —— 不要复用浏览器那组(那是按 48k 麦克风调的)。 */
     private Vad vad = new Vad();
 
-    /** AMI: 外呼所需。不开只能接呼入。 */
+    /** [Asterisk] AMI: 外呼所需。不开只能接呼入。 */
     private Ami ami = new Ami();
 
     /**
@@ -75,6 +89,179 @@ public class TelephonyProperties {
      * 把话费和号码信誉交给公网, 所以宁可不提供也不裸奔。
      */
     private String apiToken = "";
+
+    /**
+     * FreeSWITCH 接入。拨号计划里 {@code socket <本进程>:<port> async full} 每通电话连过来一次,
+     * 媒体经 unicast UDP 双向传输。详见 {@code FreeSwitchCallLeg}。
+     */
+    public static class FreeSwitch {
+        /**
+         * socket 服务端绑定地址。默认只绑回环 —— 这个端口没有鉴权, 能连上就能冒充 FreeSWITCH。
+         * FreeSWITCH 在别的机器上时才改成内网地址, 并用防火墙只放行 FreeSWITCH。
+         */
+        private String listenAddress = "127.0.0.1";
+        /** socket 服务端端口(FreeSWITCH 惯例 8084) */
+        private int port = 8084;
+        /** 本进程 UDP 媒体口绑定地址。默认回环, 理由同上: 能往这个口发包就能往通话里灌音频 */
+        private String mediaBindAddress = "127.0.0.1";
+        /** 下发 unicast 后等第一个媒体包的上限(ms), 超时挂断并打出排查提示 */
+        private int mediaWaitMs = 3000;
+        /** 等 FreeSWITCH 应答握手命令的上限(ms) */
+        private int handshakeTimeoutMs = 5000;
+        /** 外呼: 经事件套接字发 originate。不开只能接呼入 */
+        private Esl esl = new Esl();
+
+        public static class Esl {
+            /** 开关。关闭时不连 FreeSWITCH, 系统只能接呼入 */
+            private boolean enabled = false;
+            private String host = "127.0.0.1";
+            private int port = 8021;
+            /** event_socket.conf 里的密码 */
+            private String password = "";
+            /**
+             * 拨号串模板, {@code {number}} 替换为被叫。接中继: {@code sofia/gateway/<网关名>/{number}};
+             * 本地联调拨注册在 FreeSWITCH 上的软电话: {@code user/{number}}
+             */
+            private String endpoint = "sofia/gateway/trunk/{number}";
+            /** 接通后进入的拨号计划 context */
+            private String context = "ai-agent";
+            /** context 里的 extension, 那里跑 socket 应用连回本进程 */
+            private String exten = "vca-outbound";
+            /** 振铃多久没人接就放弃(ms) */
+            private int ringTimeoutMs = 30_000;
+            /** 从发起到媒体连进来的总等待上限(ms), 应大于 ringTimeoutMs */
+            private int answerWaitMs = 45_000;
+            private int connectTimeoutMs = 5_000;
+
+            public boolean isEnabled() {
+                return enabled;
+            }
+
+            public void setEnabled(boolean v) {
+                this.enabled = v;
+            }
+
+            public String getHost() {
+                return host;
+            }
+
+            public void setHost(String v) {
+                this.host = v;
+            }
+
+            public int getPort() {
+                return port;
+            }
+
+            public void setPort(int v) {
+                this.port = v;
+            }
+
+            public String getPassword() {
+                return password;
+            }
+
+            public void setPassword(String v) {
+                this.password = v;
+            }
+
+            public String getEndpoint() {
+                return endpoint;
+            }
+
+            public void setEndpoint(String v) {
+                this.endpoint = v;
+            }
+
+            public String getContext() {
+                return context;
+            }
+
+            public void setContext(String v) {
+                this.context = v;
+            }
+
+            public String getExten() {
+                return exten;
+            }
+
+            public void setExten(String v) {
+                this.exten = v;
+            }
+
+            public int getRingTimeoutMs() {
+                return ringTimeoutMs;
+            }
+
+            public void setRingTimeoutMs(int v) {
+                this.ringTimeoutMs = v;
+            }
+
+            public int getAnswerWaitMs() {
+                return answerWaitMs;
+            }
+
+            public void setAnswerWaitMs(int v) {
+                this.answerWaitMs = v;
+            }
+
+            public int getConnectTimeoutMs() {
+                return connectTimeoutMs;
+            }
+
+            public void setConnectTimeoutMs(int v) {
+                this.connectTimeoutMs = v;
+            }
+        }
+
+        public String getListenAddress() {
+            return listenAddress;
+        }
+
+        public void setListenAddress(String v) {
+            this.listenAddress = v;
+        }
+
+        public int getPort() {
+            return port;
+        }
+
+        public void setPort(int v) {
+            this.port = v;
+        }
+
+        public String getMediaBindAddress() {
+            return mediaBindAddress;
+        }
+
+        public void setMediaBindAddress(String v) {
+            this.mediaBindAddress = v;
+        }
+
+        public int getMediaWaitMs() {
+            return mediaWaitMs;
+        }
+
+        public void setMediaWaitMs(int v) {
+            this.mediaWaitMs = v;
+        }
+
+        public int getHandshakeTimeoutMs() {
+            return handshakeTimeoutMs;
+        }
+
+        public void setHandshakeTimeoutMs(int v) {
+            this.handshakeTimeoutMs = v;
+        }
+
+        public Esl getEsl() {
+            return esl;
+        }
+
+        public void setEsl(Esl v) {
+            this.esl = v;
+        }
+    }
 
     /** Asterisk Manager Interface —— 发起外呼的控制通道。 */
     public static class Ami {
@@ -269,6 +456,25 @@ public class TelephonyProperties {
 
     // ---- 组装成各层自己的配置对象 ----
 
+    public com.vca.telephony.provider.freeswitch.FreeSwitchConfig toFreeSwitchConfig() {
+        return new com.vca.telephony.provider.freeswitch.FreeSwitchConfig(
+                freeswitch.getListenAddress(), freeswitch.getPort(), sampleRate,
+                freeswitch.getMediaBindAddress(), freeswitch.getMediaWaitMs(),
+                freeswitch.getHandshakeTimeoutMs(), 128);
+    }
+
+    public com.vca.telephony.provider.freeswitch.EslConfig toEslConfig() {
+        FreeSwitch.Esl e = freeswitch.getEsl();
+        return new com.vca.telephony.provider.freeswitch.EslConfig(
+                e.getHost(), e.getPort(), e.getPassword(), e.getEndpoint(), e.getContext(), e.getExten(),
+                e.getRingTimeoutMs(), e.getAnswerWaitMs(), e.getConnectTimeoutMs());
+    }
+
+    /** 当前媒体服务器的外呼等待上限(ms), 外呼端点据此夹 HTTP 超时 */
+    public int outboundAnswerWaitMs() {
+        return provider == Provider.ASTERISK ? ami.getAnswerWaitMs() : freeswitch.getEsl().getAnswerWaitMs();
+    }
+
     public AudioSocketConfig toAudioSocketConfig() {
         return new AudioSocketConfig(port, sampleRate, swapPayloadBytes, 128, uuidWaitMs);
     }
@@ -292,7 +498,7 @@ public class TelephonyProperties {
                 16_000, vad.isUseSilero(), "", vad.getBargeGraceMs(),
                 // halfDuplex=false: 电话线路本就是全双工, 打断照常判
                 // echoAware=false: 回声判别依赖"服务端知道下行音频"的时序模型, 电话侧下行走
-                //                  AudioSocket 的定速缓冲(PacingBuffer), 时间轴与 Web 不同, 未验证
+                //                  定速缓冲(PacingBuffer), 时间轴与 Web 不同, 未验证
                 false, false, false, 400, 1600);
     }
 
@@ -304,6 +510,22 @@ public class TelephonyProperties {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public Provider getProvider() {
+        return provider;
+    }
+
+    public void setProvider(Provider provider) {
+        this.provider = provider;
+    }
+
+    public FreeSwitch getFreeswitch() {
+        return freeswitch;
+    }
+
+    public void setFreeswitch(FreeSwitch freeswitch) {
+        this.freeswitch = freeswitch;
     }
 
     public int getPort() {

@@ -1,0 +1,26 @@
+# 本地联调用的 Asterisk。用法见同目录 README.md。
+#   cd deploy/asterisk && SIP_PASSWORD=<自己定> docker compose up -d --build
+services:
+  asterisk:
+    build: .
+    image: vca-asterisk:local
+    container_name: vca-asterisk
+    restart: unless-stopped
+    environment:
+      # 软电话眼里 Asterisk 的地址。软电话和 Docker 在同一台机器上 = 127.0.0.1;
+      # 要用手机上的软电话, 改成这台电脑的局域网 IP, 并把 SIP_BIND 改成 0.0.0.0。
+      EXTERNAL_IP: ${EXTERNAL_IP:-127.0.0.1}
+      SIP_PASSWORD: ${SIP_PASSWORD:?先设置 SIP_PASSWORD}
+      # VCA 跑在宿主机上, 容器里用 host.docker.internal 访问
+      VCA_HOST: ${VCA_HOST:-host.docker.internal}
+      VCA_PORT: ${VCA_PORT:-9092}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      # 默认只绑回环: SIP 端口一旦暴露到网络上就会被扫号盗打
+      - "${SIP_BIND:-127.0.0.1}:5060:5060/udp"
+      - "${SIP_BIND:-127.0.0.1}:5060:5060/tcp"
+      - "${SIP_BIND:-127.0.0.1}:10000-10019:10000-10019/udp"
+    volumes:
+      - ./conf:/conf:ro
+      - ./recordings:/var/spool/asterisk/monitor

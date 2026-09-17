@@ -1,0 +1,63 @@
+<!--
+  拨号计划。@VCA_HOST@/@VCA_PORT@ 由 entrypoint.sh 渲染。
+
+  一通电话接进 VCA 的全过程:
+    1. answer 应答
+    2. socket 应用主动连 VCA(async full), VCA 在这条连接上拿到主叫/被叫/按键/挂机事件
+    3. VCA 回一条 sendmsg unicast, FreeSWITCH 开一个 UDP 口把通话音频(L16 8k 裸 PCM)发给 VCA,
+       同时把 VCA 发回来的 UDP 包写进通话 —— 这就是双向音频
+  unicast 是 FreeSWITCH 内核自带的能力, 不需要 mod_audio_stream 之类的第三方模块。
+-->
+<section name="dialplan" description="Dialplan">
+  <context name="ai-agent">
+
+    <!-- 5000: 接入 VCA 语音助手 -->
+    <extension name="vca-inbound">
+      <condition field="destination_number" expression="^5000$">
+        <action application="answer"/>
+        <action application="execute_extension" data="vca-connect XML ai-agent"/>
+      </condition>
+    </extension>
+
+    <!--
+      外呼接通后进这里: VCA 发 "originate {...}<号码> vca-outbound XML ai-agent",
+      对端真正接听后通道才会进拨号计划, 所以不会对着彩铃说话。已接通, 不用再 answer。
+    -->
+    <extension name="vca-outbound">
+      <condition field="destination_number" expression="^vca-outbound$">
+        <action application="execute_extension" data="vca-connect XML ai-agent"/>
+      </condition>
+    </extension>
+
+    <!-- 呼入与外呼共用的接入段 -->
+    <extension name="vca-connect">
+      <condition field="destination_number" expression="^vca-connect$">
+        <!--
+          告诉 VCA 媒体该怎么走(VCA 从 socket 连接的通道变量里读):
+            vca_media_local_ip    FreeSWITCH 这一侧 UDP 口绑哪个地址。容器里必须 0.0.0.0 ——
+                                  绑 127.0.0.1 的套接字发不出容器;
+                                  FreeSWITCH 与 VCA 同机部署(非容器)时应改回 127.0.0.1, 免得别人往通话里灌音频
+            vca_media_remote_host FreeSWITCH 眼里 VCA 的地址
+        -->
+        <action application="set" data="vca_media_local_ip=0.0.0.0"/>
+        <action application="set" data="vca_media_remote_host=@VCA_HOST@"/>
+        <!-- VCA 挂了或没回挂机指令时的兜底: 停泊超过 15 分钟自动挂断, 不留僵尸通道 -->
+        <action application="set" data="park_timeout=900"/>
+        <!-- 联调期留双声道录音: 左 = 来电方说的, 右 = VCA 回的。文件名就是通话 id, 与 VCA 日志和落库记录对得上 -->
+        <action application="set" data="RECORD_STEREO=true"/>
+        <action application="record_session" data="/recordings/${uuid}.wav"/>
+        <action application="socket" data="@VCA_HOST@:@VCA_PORT@ async full"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+
+    <!-- 6000: 回声测试, 不经过 VCA。5000 没声音时先拨它: 听得到自己 = 软电话↔FreeSWITCH 这段没问题 -->
+    <extension name="echo">
+      <condition field="destination_number" expression="^6000$">
+        <action application="answer"/>
+        <action application="echo"/>
+      </condition>
+    </extension>
+
+  </context>
+</section>

@@ -1,7 +1,7 @@
 package com.vca.telephony.web;
 
-import com.vca.telephony.provider.ami.AmiTelephonyProvider;
 import com.vca.telephony.spi.CallLeg;
+import com.vca.telephony.spi.TelephonyProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -44,13 +44,13 @@ public final class OutboundCallRoute {
     private OutboundCallRoute() {
     }
 
-    public static RouterFunction<ServerResponse> create(AmiTelephonyProvider provider,
+    public static RouterFunction<ServerResponse> create(TelephonyProvider provider,
                                                        String apiToken, Duration maxWait) {
         return RouterFunctions.route(POST("/telephony/calls"),
                 request -> handle(request, provider, apiToken, maxWait));
     }
 
-    private static Mono<ServerResponse> handle(ServerRequest request, AmiTelephonyProvider provider,
+    private static Mono<ServerResponse> handle(ServerRequest request, TelephonyProvider provider,
                                                String apiToken, Duration maxWait) {
         if (!authorized(request, apiToken)) {
             return ServerResponse.status(HttpStatus.UNAUTHORIZED).bodyValue(Map.of("error", "unauthorized"));
@@ -60,7 +60,7 @@ public final class OutboundCallRoute {
                 .flatMap(body -> place(provider, body, maxWait));
     }
 
-    private static Mono<ServerResponse> place(AmiTelephonyProvider provider, CallRequest body, Duration maxWait) {
+    private static Mono<ServerResponse> place(TelephonyProvider provider, CallRequest body, Duration maxWait) {
         long startedAt = System.currentTimeMillis();
         return provider.originate(body.number(), body.callerId())
                 // 兜底: provider 内部已按 answerWaitMs 超时, 这里再夹一道, 免得 HTTP 连接被挂死
@@ -104,7 +104,7 @@ public final class OutboundCallRoute {
         return body;
     }
 
-    /** 请求体。号码的合法性由 {@code AmiTelephonyProvider} 把关(那里是安全边界)。 */
+    /** 请求体。号码的合法性由各 {@code TelephonyProvider} 实现把关(那里是安全边界)。 */
     public record CallRequest(String number, String callerId) {
     }
 }

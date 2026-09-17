@@ -192,14 +192,40 @@ vca:
       # 两条都稳定成立, 再把它设成默认。日志里 EchoGuard 的 TRACE 会打出延迟/增益/残差占比。
       echo-aware: ${VCA_VAD_ECHO_AWARE:false}
 
-  # 电话接入(外呼/呼入): Asterisk 经 AudioSocket(裸 TCP)把通话音频接进来, 复用同一套编排。
+  # 电话接入(呼入/外呼): 媒体服务器把通话音频接进来, 复用同一套编排。
   # 默认关闭 —— 关闭时不监听端口、不建任何 bean, 对浏览器链路零影响。
-  # 联调顺序见 docs/10-telephony-outbound.md：先软电话拨内线跑通, 再接 SIP 中继做真实外呼。
+  # 本地联调见 deploy/freeswitch/README.md; 方案见 docs/10-telephony-outbound.md。
   telephony:
     enabled: ${VCA_TELEPHONY_ENABLED:false}
-    port: ${VCA_TELEPHONY_PORT:9092}
+    # freeswitch(默认): 事件套接字 + unicast UDP, 都是 FreeSWITCH 自带能力
+    # asterisk(备选):  AudioSocket + AMI
+    provider: ${VCA_TELEPHONY_PROVIDER:freeswitch}
     # 电话网窄带固定 8000; 高清语音线路可能是 16000。
     sample-rate: ${VCA_TELEPHONY_SAMPLE_RATE:8000}
+    freeswitch:
+      # 拨号计划里 socket 应用连到这里。默认只绑回环: 这个端口没有鉴权, 能连上就能冒充 FreeSWITCH。
+      # (Docker Desktop 上容器经 host.docker.internal 访问宿主机回环, 实测可达)
+      listen-address: ${VCA_FS_LISTEN_ADDRESS:127.0.0.1}
+      port: ${VCA_FS_PORT:8084}
+      # 本进程 UDP 媒体口绑定地址。默认回环, 理由同上: 能往这个口发包就能往通话里灌音频。
+      media-bind-address: ${VCA_FS_MEDIA_BIND_ADDRESS:127.0.0.1}
+      # 下发 unicast 后多久没收到媒体包就挂断并打出排查提示(多半是拨号计划里 vca_media_remote_host 配错)。
+      media-wait-ms: ${VCA_FS_MEDIA_WAIT_MS:3000}
+      # 外呼: 经事件套接字发 originate。不开则只能接呼入。
+      esl:
+        enabled: ${VCA_FS_ESL_ENABLED:false}
+        host: ${VCA_FS_ESL_HOST:127.0.0.1}
+        # 本地 Docker 版映射在 18021(macOS 上 8021 常被系统占用); 服务器上同机部署一般是 8021
+        port: ${VCA_FS_ESL_PORT:8021}
+        password: ${VCA_FS_ESL_PASSWORD:}
+        # 拨号串模板。接中继: sofia/gateway/<网关名>/{number}; 本地拨注册的软电话: user/{number}
+        endpoint: ${VCA_FS_ESL_ENDPOINT:sofia/gateway/trunk/{number}}
+        context: ${VCA_FS_ESL_CONTEXT:ai-agent}
+        exten: ${VCA_FS_ESL_EXTEN:vca-outbound}
+        ring-timeout-ms: ${VCA_FS_ESL_RING_TIMEOUT_MS:30000}
+        answer-wait-ms: ${VCA_FS_ESL_ANSWER_WAIT_MS:45000}
+    # ---- 以下三项只对 provider=asterisk 生效 ----
+    port: ${VCA_TELEPHONY_PORT:9092}
     # SLIN 字节序。联调时若听到的是刺耳噪声而不是人声, 把它设 true。
     swap-payload-bytes: ${VCA_TELEPHONY_SWAP_BYTES:false}
     # 单通最长时长, 到点主动挂机。外呼必须设, 否则一通挂死的电话会一直烧钱。
@@ -223,7 +249,7 @@ vca:
     # 单拨外呼端点 POST /telephony/calls 的令牌。留空=不注册该端点。
     # 这个接口会真的打电话、真的花钱, 没令牌就暴露到公网等于把话费和号码信誉交出去。
     api-token: ${VCA_TELEPHONY_API_TOKEN:}
-    # AMI: 外呼所需(经 Asterisk Manager Interface 发起呼叫)。不开则系统只能接呼入。
+    # [asterisk] AMI: 外呼所需(经 Asterisk Manager Interface 发起呼叫)。不开则系统只能接呼入。
     # 需要 manager.conf 里配好账号, 以及一条能拨出去的 SIP 中继(由客户提供)。
     ami:
       enabled: ${VCA_AMI_ENABLED:false}

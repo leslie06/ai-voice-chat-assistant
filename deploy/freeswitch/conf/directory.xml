@@ -1,0 +1,23 @@
+<!-- 分机目录。@SIP_PASSWORD@ 由 entrypoint.sh 渲染。 -->
+<section name="directory" description="Users">
+  <domain name="$${domain}">
+    <params>
+      <!--
+        originate user/1000 时怎么找到这个分机: 查它当前的注册地址。
+        精简配置里漏了这一行, 外呼就会报 "No dial-string available" / MANDATORY_IE_MISSING。
+      -->
+      <param name="dial-string" value="{^^:sip_invite_domain=${dialed_domain}:presence_id=${dialed_user}@${dialed_domain}}${sofia_contact(*/${dialed_user}@${dialed_domain})}"/>
+    </params>
+    <user id="1000">
+      <params>
+        <param name="password" value="@SIP_PASSWORD@"/>
+      </params>
+      <variables>
+        <variable name="user_context" value="ai-agent"/>
+        <variable name="effective_caller_id_number" value="1000"/>
+        <!-- 外呼测试(originate user/1000)要把 INVITE 发回软电话: 按注册包的实际来源地址发, 不信它自报的 Contact -->
+        <variable name="sip-force-contact" value="NDLB-connectile-dysfunction"/>
+      </variables>
+    </user>
+  </domain>
+</section>

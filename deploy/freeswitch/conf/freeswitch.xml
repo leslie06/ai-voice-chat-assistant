@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  本地联调用的最小 FreeSWITCH 配置。@XXX@ 占位符由 entrypoint.sh 渲染。
+  故意不用官方 vanilla 配置: 那套一百多个文件, 这里只需要"一个软电话分机 + 一段拨号计划 + 事件套接字"。
+-->
+<document type="freeswitch/xml">
+  <X-PRE-PROCESS cmd="set" data="domain=vca.local"/>
+
+  <section name="configuration" description="core">
+
+    <configuration name="switch.conf" description="Core">
+      <settings>
+        <param name="colorize-console" value="false"/>
+        <param name="loglevel" value="info"/>
+        <param name="max-sessions" value="100"/>
+        <param name="sessions-per-second" value="30"/>
+        <!-- RTP 端口范围故意很窄: Docker 要逐个映射 UDP 端口。FreeSWITCH 只用偶数端口(结束端口也得是偶数), 约同时 10 路 -->
+        <param name="rtp-start-port" value="16384"/>
+        <param name="rtp-end-port" value="16402"/>
+        <param name="dump-cores" value="no"/>
+      </settings>
+    </configuration>
+
+    <configuration name="modules.conf" description="Modules">
+      <modules>
+        <load module="mod_console"/>
+        <load module="mod_event_socket"/>
+        <load module="mod_sofia"/>
+        <load module="mod_commands"/>
+        <load module="mod_dptools"/>
+        <load module="mod_dialplan_xml"/>
+        <!-- 录音(wav)与提示音 -->
+        <load module="mod_sndfile"/>
+        <load module="mod_native_file"/>
+        <load module="mod_tone_stream"/>
+      </modules>
+    </configuration>
+
+    <configuration name="console.conf" description="Console Logger">
+      <mappings>
+        <map name="all" value="console,debug,info,notice,warning,err,crit,alert"/>
+      </mappings>
+      <settings>
+        <param name="colorize" value="false"/>
+        <param name="loglevel" value="info"/>
+      </settings>
+    </configuration>
+
+    <!--
+      事件套接字(ESL)。两个方向都用到:
+        入方向 = VCA 连进来发 originate(外呼);
+        出方向 = 拨号计划里的 socket 应用主动连 VCA(每通电话一条, 见 dialplan)。
+      容器内监听 0.0.0.0, 但 docker-compose 只把 8021 发布到宿主机回环, 外网碰不到。
+    -->
+    <configuration name="event_socket.conf" description="Socket Client">
+      <settings>
+        <param name="nat-map" value="false"/>
+        <param name="listen-ip" value="0.0.0.0"/>
+        <param name="listen-port" value="8021"/>
+        <param name="password" value="@ESL_PASSWORD@"/>
+        <param name="apply-inbound-acl" value="esl-local"/>
+      </settings>
+    </configuration>
+
+    <configuration name="acl.conf" description="Network Lists">
+      <network-lists>
+        <!--
+          一个谁都不匹配的名单。用作 sofia 的 local-network-acl, 效果是"所有对端都按 NAT 后处理",
+          于是 SDP 里一律写 ext-rtp-ip。原因: 软电话经 Docker 转发进来, 源地址是网桥网关 172.17.0.1,
+          默认的 localnet.auto 会把它当局域网, 在 SDP 里写容器内网 IP, 宿主机上的软电话根本到不了。
+        -->
+        <list name="nobody" default="deny"/>
+
+        <!--
+          事件套接字的访问名单。FreeSWITCH 不配时默认只放行回环, 而宿主机上的 VCA 经 Docker 端口转发进来,
+          源地址是网桥网关(172.x / 192.168.x), 会被回一句 "text/rude-rejection" 直接断开。
+          8021 在 docker-compose 里只发布到宿主机回环, 所以这里放行私网段不会把它暴露出去。
+        -->
+        <list name="esl-local" default="deny">
+          <node type="allow" cidr="127.0.0.0/8"/>
+          <node type="allow" cidr="172.16.0.0/12"/>
+          <node type="allow" cidr="192.168.0.0/16"/>
+        </list>
+      </network-lists>
+    </configuration>
+
+    <configuration name="sofia.conf" description="SIP">
+      <global_settings>
+        <param name="log-level" value="0"/>
+      </global_settings>
+      <profiles>
+        <profile name="internal">
+          <domains>
+            <domain name="all" alias="true" parse="false"/>
+          </domains>
+          <settings>
+            <param name="context" value="ai-agent"/>
+            <param name="dialplan" value="XML"/>
+            <param name="sip-port" value="5060"/>
+            <param name="sip-ip" value="$${local_ip_v4}"/>
+            <param name="rtp-ip" value="$${local_ip_v4}"/>
+            <!-- 软电话眼里 FreeSWITCH 的地址。和 Docker 在同一台机器 = 127.0.0.1 -->
+            <param name="ext-sip-ip" value="@EXTERNAL_IP@"/>
+            <param name="ext-rtp-ip" value="@EXTERNAL_IP@"/>
+            <param name="local-network-acl" value="nobody"/>
+            <!-- 经 Docker 转发后源地址和 Via 对不上: 以收包地址为准回信令, RTP 也跟着对端实际来源走 -->
+            <param name="NDLB-force-rport" value="true"/>
+            <param name="aggressive-nat-detection" value="true"/>
+            <param name="apply-nat-acl" value="nobody"/>
+
+            <!-- 只放 G.711, 和真实电话线路一致(8k 窄带)。VCA 按 8k 解释 unicast 音频, 协商到宽带编码会整段错位 -->
+            <param name="inbound-codec-prefs" value="PCMA,PCMU"/>
+            <param name="outbound-codec-prefs" value="PCMA,PCMU"/>
+            <param name="dtmf-type" value="rfc2833"/>
+            <param name="rfc2833-pt" value="101"/>
+
+            <param name="auth-calls" value="true"/>
+            <param name="accept-blind-reg" value="false"/>
+            <param name="accept-blind-auth" value="false"/>
+            <!-- 认证域固定, 不随软电话填的服务器地址(127.0.0.1 / 局域网 IP)变化 -->
+            <param name="force-register-domain" value="$${domain}"/>
+            <param name="force-register-db-domain" value="$${domain}"/>
+            <param name="challenge-realm" value="auto_from"/>
+            <param name="manage-presence" value="false"/>
+            <param name="inbound-reg-force-matching-username" value="true"/>
+          </settings>
+        </profile>
+      </profiles>
+    </configuration>
+
+  </section>
+
+  <X-PRE-PROCESS cmd="include" data="dialplan.xml"/>
+  <X-PRE-PROCESS cmd="include" data="directory.xml"/>
+</document>

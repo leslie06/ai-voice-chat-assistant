@@ -27,7 +27,7 @@
 			<groupId>org.slf4j</groupId>
 			<artifactId>slf4j-api</artifactId>
 		</dependency>
-		<!-- 通话媒体走裸 TCP(AudioSocket), 不经 HTTP; webflux 只用来暴露外呼触发端点(同 vca-store) -->
+		<!-- 通话信令/媒体走裸 TCP/UDP(FreeSWITCH 事件套接字 + unicast, 或 Asterisk AudioSocket), 不经 HTTP; webflux 只用来暴露外呼触发端点(同 vca-store) -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-autoconfigure</artifactId>
