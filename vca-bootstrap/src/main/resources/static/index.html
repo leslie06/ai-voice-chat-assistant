@@ -264,7 +264,11 @@
     .hero-title{font-size:27px;font-weight:600;letter-spacing:.5px;}
     .hero-sub{color:var(--sub);margin-top:12px;font-size:14px;}
     .merow{display:flex;align-items:center;justify-content:space-between;gap:8px;}
-    .mename{font-size:13.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .mename{flex:1;min-width:0;font-size:13.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    /* 会员标识: 普通=素色, VIP=金色。文字由后端的 tier 决定, 不在前端猜 */
+    .tierchip{flex:none;font-size:10.5px;line-height:1;padding:3px 6px;border-radius:999px;letter-spacing:.3px;
+      border:1px solid var(--line);background:var(--bg);color:var(--sub);cursor:default;}
+    .tierchip.vip{font-weight:700;color:#7a5200;background:linear-gradient(180deg,#ffe9a8,#f3ca61);border-color:#e0b74e;}
     .authpanel input.modelsel{cursor:text;}
     /* 品牌(Flying Fish) */
     .brand{display:flex;align-items:center;gap:9px;padding:2px 4px 12px;font-size:16px;font-weight:700;letter-spacing:.3px;}
@@ -284,6 +288,7 @@
       <button class="newchat guestonly" id="sbLogin">登录 / 注册</button>
       <div class="merow authonly">
         <span class="mename" id="meName"></span>
+        <span class="tierchip" id="meTier" hidden></span>
         <button class="iconbtn" id="logoutBtn" title="退出登录">退出</button>
       </div>
     </div>
@@ -1460,6 +1465,28 @@ function showLanding(){
   chat.innerHTML=''; document.getElementById('convTitle').textContent='Flying Fish';
   if(ws){ try{ws.close();}catch(e){} ws=null; }   // 退出后断开语音连接
 }
+/* ---------- 会员等级(free/vip): 标识与权益都以后端 /api/me 的 tier 为准 ---------- */
+let meTier='free';
+function applyMe(data){
+  me=data.username;
+  renderTier(data.tier, data.memberExpiresAt);
+}
+function renderTier(tier, expiresAt){
+  meTier = tier==='vip' ? 'vip' : 'free';
+  const el=document.getElementById('meTier');
+  el.hidden=false;
+  el.className='tierchip'+(meTier==='vip'?' vip':'');
+  el.textContent = meTier==='vip' ? 'VIP' : '普通';
+  el.title = meTier==='vip'
+    ? (expiresAt ? ('会员有效期至 '+new Date(expiresAt).toLocaleDateString()) : '长期会员')
+    : '普通用户';
+}
+/** 重新拉一次账号信息(登录后、会员状态可能已变时); 失败不影响已进入的 App。 */
+async function refreshMe(){
+  const r=await api('GET','/api/me');
+  if(r.ok && r.data){ applyMe(r.data); return true; }
+  return false;
+}
 function maskedUser(value){
   const s=(value||'').trim();
   return /^1[3-9]\d{9}$/.test(s) ? '用户'+s.slice(-4) : s;
@@ -1475,7 +1502,7 @@ async function enterApp(){
 async function boot(){
   if(token){
     const r=await api('GET','/api/me');
-    if(r.ok && r.data){ me=r.data.username; await enterApp(); return; }
+    if(r.ok && r.data){ applyMe(r.data); await enterApp(); return; }
     if(r.status===401){ token=''; localStorage.removeItem('vca_auth_token'); }  // 令牌失效→落地页
   }
   // 探测账号系统是否启用: 无有效 token 访问受保护接口, 401=启用(需登录), 404/0=未启用(访客直接用)
@@ -1492,7 +1519,9 @@ function startGuest(){   // 无账号系统: 访客模式, 直接进 App(无登�
   convs=[]; activeId=null; activeMsgs=[]; renderConvList(); renderActiveConv();
   connect();
 }
-function logout(){ token=''; me=null; localStorage.removeItem('vca_auth_token'); showLanding(); }
+function logout(){ token=''; me=null; meTier='free';
+  document.getElementById('meTier').hidden=true;
+  localStorage.removeItem('vca_auth_token'); showLanding(); }
 
 /* ---------- 登录/注册/找回/重置 模态 ---------- */
 let authView='login';   // login | register | forgot | reset
@@ -1534,6 +1563,7 @@ async function submitAuth(){
     const r=await api('POST', v==='login'?'/api/login':'/api/register', body);
     if(r.ok && r.data && r.data.token){
       token=r.data.token; me=r.data.username; localStorage.setItem('vca_auth_token',token);
+      await refreshMe();   // 登录接口只回 token+用户名, 会员等级问 /api/me
       closeAuth(); await enterApp();
     } else authMsg((r.data&&r.data.error)||'操作失败，请重试');
   } else if(v==='forgot'){
@@ -2146,6 +2176,8 @@ async function loadVoiceClones(){
     row.append(label,play,del); cloneList.appendChild(row);
   }
   const q=data.quota||{};
+  // 这里的 tier 是刚查的; 与页面上显示的不一致说明期间开通或到期了, 顺手纠正
+  if(q.tier && q.tier!==meTier){ refreshMe(); }
   const qmax=q.max||3;
   // 免费档满了指向会员(vipMax 由后端给), 会员满了只能删 —— 文案是升级入口, 别写死数字
   const canUpgrade=q.tier!=='vip'&&q.vipMax>qmax;
