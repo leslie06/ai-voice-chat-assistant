@@ -1,5 +1,6 @@
 package com.vca.store.account;
 
+import com.vca.store.entity.AppUser;
 import com.vca.store.entity.ChatConversation;
 import com.vca.store.entity.ChatMessage;
 import org.springframework.web.reactive.function.server.RouterFunction;
@@ -27,7 +28,7 @@ import static org.springframework.web.reactive.function.server.RequestPredicates
  * <pre>
  *   POST /api/register {username(手机号),email,password} → {token,username(脱敏显示名)}
  *   POST /api/login    {username(手机号),password}       → {token,username(脱敏显示名)}
- *   GET  /api/me                                         → {username(脱敏显示名)}
+ *   GET  /api/me                          → {username(脱敏显示名),tier(free/vip),memberExpiresAt}
  *   POST /api/password/forgot {account}               → {ok} (dev 附 devToken)  发重置邮件
  *   POST /api/password/reset  {token,password}        → {ok}                    凭令牌设新密码
  *   POST /api/password/change-request                 → {ok} (dev 附 devToken)  已登录, 发重置邮件到本人邮箱
@@ -131,10 +132,24 @@ public final class AccountRoutes {
         if (uid == null) {
             return unauthorized();
         }
-        // 注意: Mono.fromCallable 对 null 结果会发空(不是 null 元素), 故 null 用户名走 switchIfEmpty
-        return blocking(() -> users.usernameOf(uid))
-                .flatMap(name -> json(200, Map.of("username", name)))
+        // 注意: Mono.fromCallable 对 null 结果会发空(不是 null 元素), 故用户不存在走 switchIfEmpty
+        return blocking(() -> meDto(users.findById(uid)))
+                .flatMap(dto -> json(200, dto))
                 .switchIfEmpty(unauthorized());
+    }
+
+    /** 用户不存在返回 null, 由上游 switchIfEmpty 转 401。 */
+    private static Map<String, Object> meDto(AppUser user) {
+        if (user == null) {
+            return null;
+        }
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("username", UserService.displayName(user.getUsername()));
+        // 到期的会员这里已经按 free 返回, 前端不必自己比时间
+        m.put("tier", UserService.tierOf(user).code());
+        m.put("memberExpiresAt", user.getMemberExpiresAt() == null
+                ? 0 : user.getMemberExpiresAt().toInstant(ZoneOffset.UTC).toEpochMilli());
+        return m;
     }
 
     // ---- 会话(按 userId 隔离) ----

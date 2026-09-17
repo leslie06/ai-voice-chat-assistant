@@ -2146,9 +2146,12 @@ async function loadVoiceClones(){
     row.append(label,play,del); cloneList.appendChild(row);
   }
   const q=data.quota||{};
-  cloneBtn.disabled=list.length>=(q.max||3);
+  const qmax=q.max||3;
+  // 免费档满了指向会员(vipMax 由后端给), 会员满了只能删 —— 文案是升级入口, 别写死数字
+  const canUpgrade=q.tier!=='vip'&&q.vipMax>qmax;
+  cloneBtn.disabled=list.length>=qmax;
   cloneBtn.textContent=cloneBtn.disabled
-    ? ('🎙 已达上限（'+list.length+'/'+q.max+'），请先删除')
+    ? ('🎙 已达上限（'+list.length+'/'+qmax+'）'+(canUpgrade?('，升级会员可克隆 '+q.vipMax+' 个'):'，请先删除'))
     : ('🎙 录一段我的声音（约 '+CLONE_SECONDS+' 秒）');
   // 复刻音色可能是上次选的, 等它插进下拉后再恢复一次选择
   const saved=localStorage.getItem('vca_voice');

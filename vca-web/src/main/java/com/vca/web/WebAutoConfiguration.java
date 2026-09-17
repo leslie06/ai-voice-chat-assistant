@@ -326,7 +326,8 @@ public class WebAutoConfiguration {
             WebProperties props, ProviderGateway gateway,
             ObjectProvider<com.vca.domain.spi.VoiceCloner> cloner,
             ObjectProvider<com.vca.domain.spi.VoiceCloneStore> store,
-            ObjectProvider<com.vca.orchestrator.auth.TokenAuthenticator> authenticator) {
+            ObjectProvider<com.vca.orchestrator.auth.TokenAuthenticator> authenticator,
+            ObjectProvider<com.vca.orchestrator.auth.MemberTiers> memberTiers) {
         com.vca.domain.spi.VoiceCloner c = cloner.getIfAvailable();
         com.vca.domain.spi.VoiceCloneStore s = store.getIfAvailable();
         com.vca.orchestrator.auth.TokenAuthenticator auth = authenticator.getIfAvailable();
@@ -335,8 +336,12 @@ public class WebAutoConfiguration {
                     c != null, s != null, auth != null);
             return RouterFunctions.route().build();
         }
+        WebProperties.VoiceClone vc = props.getVoiceClone();
+        // 会员等级查不到(没接账号会员)时按免费档发配额, 功能照常可用
         return com.vca.web.voice.VoiceCloneRoute.create(c, s, gateway.tts(), auth,
-                props.getVoiceClone().getMaxPerUser(), props.getVoiceClone().getCreatePerDay());
+                memberTiers.getIfAvailable(),
+                new com.vca.web.voice.VoiceCloneRoute.Quota(vc.getMaxPerUser(), vc.getCreatePerDay()),
+                new com.vca.web.voice.VoiceCloneRoute.Quota(vc.getVipMaxPerUser(), vc.getVipCreatePerDay()));
     }
 
     @Bean

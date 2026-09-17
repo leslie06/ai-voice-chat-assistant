@@ -620,13 +620,22 @@ public class WebProperties {
         private boolean enabled = false;
 
         /**
-         * 每个用户最多几个音色。厂商账号总上限是 1000 个, 不按用户分配额的话,
+         * 免费用户最多几个音色。厂商账号总上限是 1000 个, 不按用户分配额的话,
          * 一个用户就能把整个账号的配额占满。
          */
         private int maxPerUser = 3;
 
-        /** 每人每天最多创建几次(含失败后重试)。 */
+        /** 会员(tier=vip)最多几个音色 —— 会员的主要权益。 */
+        private int vipMaxPerUser = 15;
+
+        /** 免费用户每天最多创建几次(含失败后重试)。 */
         private int createPerDay = 5;
+
+        /**
+         * 会员每天最多创建几次。默认与会员音色数一致, 否则 15 个额度要分 3 天才建得满,
+         * 刚付完钱的人当天就被限流。
+         */
+        private int vipCreatePerDay = 15;
 
         public boolean isEnabled() {
             return enabled;
@@ -644,12 +653,28 @@ public class WebProperties {
             this.maxPerUser = maxPerUser;
         }
 
+        public int getVipMaxPerUser() {
+            return vipMaxPerUser;
+        }
+
+        public void setVipMaxPerUser(int vipMaxPerUser) {
+            this.vipMaxPerUser = vipMaxPerUser;
+        }
+
         public int getCreatePerDay() {
             return createPerDay;
         }
 
         public void setCreatePerDay(int createPerDay) {
             this.createPerDay = createPerDay;
+        }
+
+        public int getVipCreatePerDay() {
+            return vipCreatePerDay;
+        }
+
+        public void setVipCreatePerDay(int vipCreatePerDay) {
+            this.vipCreatePerDay = vipCreatePerDay;
         }
     }
 }

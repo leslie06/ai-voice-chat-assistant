@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS app_user (
     pass_salt  VARCHAR(64)  NOT NULL,
     pass_hash  VARCHAR(128) NOT NULL,
     last_login_at DATETIME           COMMENT '最近一次成功登录时间',
+    member_tier VARCHAR(16) NOT NULL DEFAULT 'free' COMMENT '会员等级 free/vip',
+    member_expires_at DATETIME       COMMENT '会员到期时间, NULL=不过期',
     created_at DATETIME     NOT NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_user_name (username),

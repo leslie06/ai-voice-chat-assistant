@@ -62,7 +62,8 @@ java -Xms512m -Xmx1g -Duser.timezone=Asia/Shanghai -jar ...jar
 | `vca.web.asr-vendor` / `llm-vendor` / `tts-vendor` | aliyun / deepseek / aliyun | 主选厂商 |
 | `vca.web.tts-voice` | longanhuan_v3.6 | 发音人。音色决定用哪个 TTS 模型，别把 CosyVoice 音色和 Qwen-Audio-3.0 音色混着写 |
 | `vca.web.voice-clone.enabled` | true | 声音复刻。缺了复刻能力/归属存储/登录校验中任何一个，该功能整条不注册，只打一行 warn |
-| `vca.web.voice-clone.max-per-user` | 3 | 每人音色上限。厂商账号总上限 1000 个，不分配额会被单个用户占满 |
+| `vca.web.voice-clone.max-per-user` | 3 | 免费用户音色上限。厂商账号总上限 1000 个，不分配额会被单个用户占满 |
+| `vca.web.voice-clone.vip-max-per-user` | 15 | 会员（`app_user.member_tier='vip'`）音色上限，见[声音复刻 §8](./11-voice-clone.md#8-配置与限制) |
 | `vca.web.system-prompt` | （内置口语化提示）| LLM 系统提示 |
 
 ### VAD / 断句打断（`vca.web.vad.*`）

@@ -18,6 +18,10 @@ public class AppUser {
     private String passSalt;
     private String passHash;
     private LocalDateTime lastLoginAt;
+    /** 会员等级 code: free / vip。 */
+    private String memberTier;
+    /** 会员到期时间; NULL = 不过期(手工开通的长期会员)。 */
+    private LocalDateTime memberExpiresAt;
     private LocalDateTime createdAt;
 
     public Long getId() {
@@ -74,6 +78,22 @@ public class AppUser {
 
     public void setLastLoginAt(LocalDateTime lastLoginAt) {
         this.lastLoginAt = lastLoginAt;
+    }
+
+    public String getMemberTier() {
+        return memberTier;
+    }
+
+    public void setMemberTier(String memberTier) {
+        this.memberTier = memberTier;
+    }
+
+    public LocalDateTime getMemberExpiresAt() {
+        return memberExpiresAt;
+    }
+
+    public void setMemberExpiresAt(LocalDateTime memberExpiresAt) {
+        this.memberExpiresAt = memberExpiresAt;
     }
 
     public LocalDateTime getCreatedAt() {

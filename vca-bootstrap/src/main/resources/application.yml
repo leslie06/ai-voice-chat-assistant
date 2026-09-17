@@ -59,8 +59,13 @@ vca:
     # 要关掉: VCA_VOICE_CLONE_ENABLED=false。
     voice-clone:
       enabled: ${VCA_VOICE_CLONE_ENABLED:true}
-      max-per-user: ${VCA_VOICE_CLONE_MAX:3}      # 厂商账号总上限 1000 个, 要按用户分配额
+      max-per-user: ${VCA_VOICE_CLONE_MAX:3}      # 免费用户; 厂商账号总上限 1000 个, 要按用户分配额
       create-per-day: ${VCA_VOICE_CLONE_PER_DAY:5}
+      # 会员(app_user.member_tier='vip')的配额。开通会员目前是手工的:
+      #   UPDATE app_user SET member_tier='vip', member_expires_at='2027-01-01 00:00:00' WHERE id=<用户id>;
+      # 改完立即生效, 不用重启; member_expires_at 留空=不过期, 到期自动降回免费档。
+      vip-max-per-user: ${VCA_VOICE_CLONE_VIP_MAX:15}
+      vip-create-per-day: ${VCA_VOICE_CLONE_VIP_PER_DAY:15}
     # 端到端模式(mode=s2s)厂商/模型/音色; model/voice 留空用 provider 默认。
     s2s-vendor: qwen
     s2s-model: ${VCA_S2S_MODEL:}

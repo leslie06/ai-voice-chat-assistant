@@ -19,8 +19,8 @@
   → POST /api/voices  multipart(file, name, consent)
   → VoiceCloneRoute.doCreate    四道关卡, 顺序即设计:
       ① validate(wav)              格式/时长/大小 —— 不合规不花厂商调用
-      ② store.countByUser          总量配额(默认 3/人)
-      ③ store.countCreatedSince    频次配额(默认 5/天)
+      ② store.countByUser          总量配额(免费 3/人, 会员 15/人)
+      ③ store.countCreatedSince    频次配额(免费 5/天, 会员 15/天)
       ④ cloner.create(prefix, wav) ← 唯一真正"克隆"的一步
   → VoiceCloneService: WAV → data:audio/wav;base64,... → VoiceEnrollmentService.createVoice
   → 返回 voiceId = qwen-audio-3.0-tts-flash-u1a-<32位hex>
@@ -123,8 +123,32 @@ A 猜到 B 的 id 拿来合成。两条路都要验：
 | 配置 | 默认 | 说明 |
 |------|------|------|
 | `vca.web.voice-clone.enabled` | `true` | 缺复刻能力/归属存储/登录校验中任何一个，整条路由不注册，只打一行 warn |
-| `vca.web.voice-clone.max-per-user` | `3` | 厂商账号总上限 1000 个，不按用户分配额会被单个用户占满 |
-| `vca.web.voice-clone.create-per-day` | `5` | 含失败重试 |
+| `vca.web.voice-clone.max-per-user` | `3` | **免费用户**音色上限。厂商账号总上限 1000 个，不按用户分配额会被单个用户占满 |
+| `vca.web.voice-clone.create-per-day` | `5` | 免费用户每天创建次数，含失败重试 |
+| `vca.web.voice-clone.vip-max-per-user` | `15` | **会员**音色上限，会员的主要权益 |
+| `vca.web.voice-clone.vip-create-per-day` | `15` | 会员每天创建次数。默认与会员音色数一致，否则 15 个额度要分 3 天才建得满 |
+
+### 会员配额（谁能克隆更多）
+
+配额按 `app_user.member_tier`（`free` / `vip`）分档，路由每次创建/列表时问一次
+`MemberTiers`（`vca-orchestrator` 的旁路 SPI，实现在 `vca-store` 的 `UserMemberTiers`）。
+到期判定在 `UserService.tierOf` 里做掉：`member_expires_at` 过了就按 `free` 返回，
+权益不靠"记得去改 member_tier"来收回；已经复刻好的音色不会因到期被删，只是不能再建新的。
+
+**开通会员**（支付未接，目前手工开）：
+
+```sql
+-- 长期会员: 到期时间留空
+UPDATE app_user SET member_tier='vip', member_expires_at=NULL WHERE id=<用户id>;
+-- 包年
+UPDATE app_user SET member_tier='vip', member_expires_at='2027-01-01 00:00:00' WHERE id=<用户id>;
+-- 退回免费档
+UPDATE app_user SET member_tier='free', member_expires_at=NULL WHERE id=<用户id>;
+```
+
+改完**立即生效，不用重启**（每次请求现查）。接支付时只需在订单回调里调
+`UserService.grantVip(userId, expiresAt)`，发权益的地方一行都不用改。
+老库的两列由启动时的幂等迁移（`StoreAutoConfiguration#migrate`）自动补上。
 
 厂商侧限制：创建**免费**；每账号每模型族最多 1000 个音色；**过去 1 年未用于任何合成的音色会被自动删除**
 （`user_voice_clone.last_used_at` 就是为提前提醒留的）。
@@ -135,7 +159,7 @@ A 猜到 B 的 id 拿来合成。两条路都要验：
 
 ```
 POST   /api/voices               multipart(file, name, consent) → {voiceId,name,seconds,status,createdAt}
-GET    /api/voices                                              → {voices:[...], quota:{used,max}}
+GET    /api/voices                                              → {voices:[...], quota:{used,max,tier,vipMax}}
 POST   /api/voices/{id}/preview  ?dialect=粤语                   → audio/wav 试听
 DELETE /api/voices/{id}                                         → {ok:true}
 ```

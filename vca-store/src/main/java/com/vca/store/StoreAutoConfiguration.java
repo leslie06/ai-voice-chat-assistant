@@ -13,6 +13,7 @@ import com.vca.store.account.EmailSender;
 import com.vca.store.account.LogEmailSender;
 import com.vca.store.account.PasswordResetService;
 import com.vca.store.account.SmtpEmailSender;
+import com.vca.store.account.UserMemberTiers;
 import com.vca.store.account.UserService;
 import com.vca.store.account.UserTokenAuthenticator;
 import com.vca.store.auth.TokenUtil;
@@ -136,6 +137,11 @@ public class StoreAutoConfiguration {
         addColumnIfMissing(ds, "app_user", "register_ip", "VARCHAR(45) NULL COMMENT '注册 IP'");
         addColumnIfMissing(ds, "app_user", "last_login_at",
                 "DATETIME NULL COMMENT '最近一次成功登录时间'");
+        // 会员体系: 老库补列。默认 free, 已有用户全部按免费档(权益只会少不会多)。
+        addColumnIfMissing(ds, "app_user", "member_tier",
+                "VARCHAR(16) NOT NULL DEFAULT 'free' COMMENT '会员等级 free/vip'");
+        addColumnIfMissing(ds, "app_user", "member_expires_at",
+                "DATETIME NULL COMMENT '会员到期时间, NULL=不过期'");
         addColumnIfMissing(ds, "conversation_recording", "oss_bucket", "VARCHAR(128) NULL COMMENT 'OSS Bucket'");
         addColumnIfMissing(ds, "conversation_recording", "conversation_file",
                 "VARCHAR(512) NULL COMMENT '按回合合并的完整对话 OSS Object Key'");
@@ -321,6 +327,13 @@ public class StoreAutoConfiguration {
     @ConditionalOnMissingBean(TokenAuthenticator.class)
     TokenAuthenticator tokenAuthenticator(UserService userService) {
         return new UserTokenAuthenticator(userService);
+    }
+
+    /** 会员等级查询: 各处按等级发权益(如声音复刻配额)都问它, 不直接碰账号表。 */
+    @Bean
+    @ConditionalOnMissingBean(com.vca.orchestrator.auth.MemberTiers.class)
+    com.vca.orchestrator.auth.MemberTiers memberTiers(UserService userService) {
+        return new UserMemberTiers(userService);
     }
 
     @Bean

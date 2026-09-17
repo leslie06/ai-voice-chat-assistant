@@ -8,6 +8,7 @@ import com.vca.domain.model.WavAudio;
 import com.vca.domain.spi.TtsProvider;
 import com.vca.domain.spi.VoiceCloneStore;
 import com.vca.domain.spi.VoiceCloner;
+import com.vca.orchestrator.auth.MemberTiers;
 import com.vca.orchestrator.auth.TokenAuthenticator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,7 +43,7 @@ import static org.springframework.web.reactive.function.server.RequestPredicates
  *
  * <pre>
  *   POST   /api/voices              multipart(file,name,consent) → {voiceId,name,...}
- *   GET    /api/voices                                            → {voices:[...], quota:{...}}
+ *   GET    /api/voices                          → {voices:[...], quota:{used,max,tier,vipMax}}
  *   POST   /api/voices/{id}/preview ?dialect=粤语                  → audio/wav 试听
  *   DELETE /api/voices/{id}                                        → {ok}
  * </pre>
@@ -66,23 +67,35 @@ public final class VoiceCloneRoute {
     private final VoiceCloneStore store;
     private final TtsProvider tts;
     private final TokenAuthenticator authenticator;
-    private final int maxPerUser;
-    private final int createPerDay;
+    private final MemberTiers tiers;
+    private final Quota free;
+    private final Quota vip;
+
+    /**
+     * 一档会员的声音复刻配额。
+     *
+     * @param maxVoices    音色总数上限
+     * @param createPerDay 每天最多创建几次(含失败后重试)
+     */
+    public record Quota(int maxVoices, int createPerDay) {
+    }
 
     private VoiceCloneRoute(VoiceCloner cloner, VoiceCloneStore store, TtsProvider tts,
-                            TokenAuthenticator authenticator, int maxPerUser, int createPerDay) {
+                            TokenAuthenticator authenticator, MemberTiers tiers, Quota free, Quota vip) {
         this.cloner = cloner;
         this.store = store;
         this.tts = tts;
         this.authenticator = authenticator;
-        this.maxPerUser = maxPerUser;
-        this.createPerDay = createPerDay;
+        this.tiers = tiers;
+        this.free = free;
+        this.vip = vip;
     }
 
+    /** {@code tiers} 可为 null(未启用账号会员): 那时所有人都按免费档。 */
     public static RouterFunction<ServerResponse> create(
             VoiceCloner cloner, VoiceCloneStore store, TtsProvider tts,
-            TokenAuthenticator authenticator, int maxPerUser, int createPerDay) {
-        VoiceCloneRoute r = new VoiceCloneRoute(cloner, store, tts, authenticator, maxPerUser, createPerDay);
+            TokenAuthenticator authenticator, MemberTiers tiers, Quota free, Quota vip) {
+        VoiceCloneRoute r = new VoiceCloneRoute(cloner, store, tts, authenticator, tiers, free, vip);
         return RouterFunctions.route(POST("/api/voices"), r::create)
                 .andRoute(GET("/api/voices"), r::list)
                 .andRoute(POST("/api/voices/{id}/preview"), r::preview)
@@ -119,10 +132,16 @@ public final class VoiceCloneRoute {
         if (bad != null) {
             return new Object[]{400, Map.of("error", bad)};
         }
-        if (store.countByUser(uid) >= maxPerUser) {
-            return new Object[]{409, Map.of("error", "音色数量已达上限 " + maxPerUser + " 个，请先删除不用的")};
+        boolean vipUser = isVip(uid);
+        Quota quota = vipUser ? vip : free;
+        if (store.countByUser(uid) >= quota.maxVoices()) {
+            // 免费档满了顺带告诉用户会员能到几个 —— 这是升级会员的主要入口
+            return new Object[]{409, Map.of("error", vipUser || vip.maxVoices() <= quota.maxVoices()
+                    ? "音色数量已达上限 " + quota.maxVoices() + " 个，请先删除不用的"
+                    : "音色数量已达上限 " + quota.maxVoices() + " 个，升级会员可克隆 "
+                            + vip.maxVoices() + " 个，或先删除不用的")};
         }
-        if (store.countCreatedSince(uid, Instant.now().minus(Duration.ofDays(1))) >= createPerDay) {
+        if (store.countCreatedSince(uid, Instant.now().minus(Duration.ofDays(1))) >= quota.createPerDay()) {
             return new Object[]{429, Map.of("error", "今天创建得太频繁了，明天再试")};
         }
         WavAudio info = WavAudio.parse(wav);
@@ -174,8 +193,12 @@ public final class VoiceCloneRoute {
         }
         return blocking(() -> {
             List<Map<String, Object>> voices = store.list(uid).stream().map(VoiceCloneRoute::dto).toList();
+            boolean vipUser = isVip(uid);
             return Map.of("voices", voices,
-                    "quota", Map.of("used", voices.size(), "max", maxPerUser));
+                    "quota", Map.of("used", voices.size(),
+                            "max", (vipUser ? vip : free).maxVoices(),
+                            "tier", vipUser ? "vip" : "free",
+                            "vipMax", vip.maxVoices()));
         }).flatMap(body -> json(200, body));
     }
 
@@ -257,6 +280,14 @@ public final class VoiceCloneRoute {
                     "请用" + dialect + "表达。";
             default -> null;
         };
+    }
+
+    /**
+     * 是不是会员。查库(阻塞), 调用方都在 {@code blocking()} 里。
+     * 未接会员实现时一律按免费档 —— 配额只会更紧, 不会漏发权益。
+     */
+    private boolean isVip(long userId) {
+        return tiers != null && tiers.tierOf(userId) == MemberTiers.Tier.VIP;
     }
 
     private Long userId(ServerRequest req) {

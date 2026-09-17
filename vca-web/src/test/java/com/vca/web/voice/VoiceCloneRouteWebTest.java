@@ -8,6 +8,7 @@ import com.vca.domain.enums.VendorType;
 import com.vca.domain.spi.TtsProvider;
 import com.vca.domain.spi.VoiceCloneStore;
 import com.vca.domain.spi.VoiceCloner;
+import com.vca.orchestrator.auth.MemberTiers;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.client.MultipartBodyBuilder;
@@ -35,6 +36,8 @@ class VoiceCloneRouteWebTest {
     private StubStore store;
     private StubCloner cloner;
     private WebTestClient client;
+    /** 当前登录用户的等级, 各用例按需改。 */
+    private MemberTiers.Tier tier;
 
     @BeforeEach
     void setUp() {
@@ -52,15 +55,24 @@ class VoiceCloneRouteWebTest {
                 return text.map(t -> new AudioChunk(new byte[480], AudioFormat.PCM, 0, null, false));
             }
         };
+        tier = MemberTiers.Tier.FREE;
         // 令牌 → userId: "t-user-7" 解出 7, 其余一律未登录
         client = WebTestClient.bindToRouterFunction(VoiceCloneRoute.create(
                 cloner, store, tts,
                 token -> "t-user-7".equals(token) ? "7" : null,
-                2, 5)).build();
+                userId -> tier,
+                new VoiceCloneRoute.Quota(2, 5),
+                new VoiceCloneRoute.Quota(4, 5))).build();
     }
 
     private static byte[] sample(double seconds, int rate) {
         return WavAudio.wrapPcm16Mono(new byte[(int) (seconds * rate) * 2], rate);
+    }
+
+    private String list() {
+        return client.get().uri("/api/voices").header("Authorization", TOKEN).exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class).returnResult().getResponseBody();
     }
 
     private WebTestClient.ResponseSpec post(byte[] wav, String consent) {
@@ -109,6 +121,45 @@ class VoiceCloneRouteWebTest {
         post(sample(15, 16000), "true").expectStatus().isEqualTo(409);
         assertEquals(2, store.rows.size());
         assertEquals(2, cloner.calls.get());
+    }
+
+    /** 会员的权益就是这一档配额: 同一个用户, 等级不同上限不同。 */
+    @Test
+    void 会员按更高的一档配额算() {
+        tier = MemberTiers.Tier.VIP;
+        for (int i = 0; i < 4; i++) {
+            post(sample(15, 16000), "true").expectStatus().isOk();
+        }
+        post(sample(15, 16000), "true").expectStatus().isEqualTo(409);
+        assertEquals(4, store.rows.size());
+        String body = list();
+        assertTrue(body.contains("\"max\":4"), body);
+        assertTrue(body.contains("\"tier\":\"vip\""), body);
+    }
+
+    /** 免费档满了要指向会员 —— 这是升级入口, 不能只说"请先删除"。 */
+    @Test
+    void 免费档满了提示可升级会员() {
+        post(sample(15, 16000), "true").expectStatus().isOk();
+        post(sample(15, 16000), "true").expectStatus().isOk();
+        String error = post(sample(15, 16000), "true").expectStatus().isEqualTo(409)
+                .expectBody(String.class).returnResult().getResponseBody();
+        assertTrue(error != null && error.contains("升级会员可克隆 4 个"), error);
+        String body = list();
+        assertTrue(body.contains("\"max\":2"), body);
+        assertTrue(body.contains("\"tier\":\"free\""), body);
+        assertTrue(body.contains("\"vipMax\":4"), body);
+    }
+
+    /** 会员到期由 MemberTiers 实现负责降级, 路由这边只认当下这一次查询的结果。 */
+    @Test
+    void 会员到期后回到免费档上限() {
+        tier = MemberTiers.Tier.VIP;
+        post(sample(15, 16000), "true").expectStatus().isOk();
+        post(sample(15, 16000), "true").expectStatus().isOk();
+        tier = MemberTiers.Tier.FREE;
+        post(sample(15, 16000), "true").expectStatus().isEqualTo(409);
+        assertEquals(2, store.rows.size(), "已经复刻好的音色不因到期被删, 只是不能再建新的");
     }
 
     /** 音色 id 在前端是明文, 猜到别人的也不能用 —— 试听和删除都要按 userId 过滤。 */

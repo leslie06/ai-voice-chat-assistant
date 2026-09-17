@@ -3,6 +3,7 @@ package com.vca.store.account;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.vca.store.auth.PasswordUtil;
 import com.vca.store.auth.TokenUtil;
+import com.vca.orchestrator.auth.MemberTiers;
 import com.vca.store.entity.AppUser;
 import com.vca.store.mapper.AppUserMapper;
 
@@ -90,6 +91,55 @@ public class UserService {
 
     public AppUser findById(long userId) {
         return users.selectById(userId);
+    }
+
+    // ---- 会员 ----
+
+    /** 该用户当前等级; 用户不存在或会员已过期都按 FREE。 */
+    public MemberTiers.Tier tierOf(long userId) {
+        return tierOf(users.selectById(userId));
+    }
+
+    /**
+     * 到期即降级 —— 等级只认 {@code member_tier} 会漏掉过期这一半, 到期后权益还在。
+     * 这里判一次, 调用方(配额等)就不必各自记得判。
+     */
+    public static MemberTiers.Tier tierOf(AppUser user) {
+        if (user == null) {
+            return MemberTiers.Tier.FREE;
+        }
+        MemberTiers.Tier tier = MemberTiers.Tier.of(user.getMemberTier());
+        if (tier == MemberTiers.Tier.FREE) {
+            return MemberTiers.Tier.FREE;
+        }
+        LocalDateTime expires = user.getMemberExpiresAt();
+        return expires == null || expires.isAfter(LocalDateTime.now()) ? tier : MemberTiers.Tier.FREE;
+    }
+
+    /**
+     * 开通/续期会员。{@code expiresAt} 传 null = 不过期(手工开通的长期会员)。
+     *
+     * <p>支付接通后由订单回调调用这里, 别的地方不用改 —— 权益都是照 {@link #tierOf} 发的。
+     */
+    public void grantVip(long userId, LocalDateTime expiresAt) {
+        setTier(userId, MemberTiers.Tier.VIP, expiresAt);
+    }
+
+    /** 降回免费档(退款/违规处理)。 */
+    public void revokeVip(long userId) {
+        setTier(userId, MemberTiers.Tier.FREE, null);
+    }
+
+    /**
+     * 用 UpdateWrapper 而不是 updateById: MyBatis-Plus 的 updateById 默认跳过值为 null 的字段,
+     * 那样"改成长期会员(到期时间清空)"和 revokeVip 都会把旧的到期时间留在库里 —— 人已经降级了,
+     * 或者明明是长期会员, 却按一个过期时间继续算。
+     */
+    private void setTier(long userId, MemberTiers.Tier tier, LocalDateTime expiresAt) {
+        users.update(null, Wrappers.<AppUser>update()
+                .eq("id", userId)
+                .set("member_tier", tier.code())
+                .set("member_expires_at", expiresAt));
     }
 
     /** 按用户名或邮箱定位账号(找回密码用); 找不到返回 null。 */
