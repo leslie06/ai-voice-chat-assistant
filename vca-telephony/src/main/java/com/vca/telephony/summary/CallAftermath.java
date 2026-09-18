@@ -2,9 +2,12 @@ package com.vca.telephony.summary;
 
 import com.vca.orchestrator.call.CallSummary;
 import com.vca.orchestrator.call.CallSummaryStore;
+import com.vca.telephony.merchant.Merchant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.scheduler.Schedulers;
+
+import java.util.function.Function;
 
 /**
  * 通话事后处理: 生成小结 → 落库 → 推给商家。
@@ -22,21 +25,23 @@ public final class CallAftermath {
 
     private final CallSummarizer summarizer;
     private final CallSummaryStore store;
-    private final CallNotifier notifier;
-    private final String ownerId;
+    private final Function<String, CallNotifier> notifiers;
     private final int minDurationSec;
 
-    public CallAftermath(CallSummarizer summarizer, CallSummaryStore store, CallNotifier notifier,
-                         String ownerId, int minDurationSec) {
+    /**
+     * @param notifiers 按推送地址取通知器(地址为空则不推)。做成函数而不是单个实例, 是因为多商家时
+     *                  每家可以推到各自的群里, 而通知器持有 HTTP 客户端, 不该每通电话新建
+     */
+    public CallAftermath(CallSummarizer summarizer, CallSummaryStore store,
+                         Function<String, CallNotifier> notifiers, int minDurationSec) {
         this.summarizer = summarizer;
         this.store = store == null ? CallSummaryStore.NOOP : store;
-        this.notifier = notifier == null ? CallNotifier.NOOP : notifier;
-        this.ownerId = ownerId;
+        this.notifiers = notifiers == null ? url -> CallNotifier.NOOP : notifiers;
         this.minDurationSec = minDurationSec;
     }
 
     /** 通话结束时调用。<b>立即返回</b>, 真正的活儿在别的线程上。 */
-    public void onCallEnded(EndedCall call) {
+    public void onCallEnded(EndedCall call, Merchant merchant) {
         if (call == null) {
             return;
         }
@@ -44,9 +49,10 @@ public final class CallAftermath {
             log.debug("[{}] 通话仅 {}s, 不生成小结(阈值 {}s)", call.callId(), call.durationSec(), minDurationSec);
             return;
         }
-        summarizer.summarize(call, ownerId)
+        Merchant m = merchant == null ? Merchant.NONE : merchant;
+        summarizer.summarize(call, m.knowledgeOwner())
                 .subscribeOn(Schedulers.boundedElastic())
-                .subscribe(this::deliver,
+                .subscribe(summary -> deliver(summary, m),
                         e -> log.warn("[{}] 通话小结未生成: {}", call.callId(), e.toString()));
     }
 
@@ -54,17 +60,17 @@ public final class CallAftermath {
      * 落库与推送<b>各自兜异常</b>: 两件事互不依赖, 而"商家群里弹出那条消息"比留档重要 ——
      * 数据库挂了不能连带把通知也吞掉。
      */
-    private void deliver(CallSummary summary) {
+    private void deliver(CallSummary summary, Merchant merchant) {
         boolean stored = false;
         try {
             stored = store.save(summary);
         } catch (RuntimeException e) {
             log.warn("[{}] 通话小结落库失败(仍会推送): {}", summary.callId(), e.toString());
         }
-        log.info("[{}] 通话小结: 意向={}, 已落库={}, 摘要={}",
-                summary.callId(), summary.intent(), stored, summary.summary());
+        log.info("[{}] 通话小结({}): 意向={}, 已落库={}, 摘要={}",
+                summary.callId(), merchant.label(), summary.intent(), stored, summary.summary());
         try {
-            notifier.notify(summary);
+            notifiers.apply(merchant.summaryWebhook()).notify(summary);
         } catch (RuntimeException e) {
             log.warn("[{}] 通话小结推送失败: {}", summary.callId(), e.toString());
         }

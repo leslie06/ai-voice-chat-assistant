@@ -3,6 +3,7 @@ package com.vca.telephony.skill;
 import com.vca.orchestrator.lead.Lead;
 import com.vca.orchestrator.lead.LeadStore;
 import com.vca.orchestrator.skill.SkillResult;
+import com.vca.telephony.merchant.Merchant;
 import com.vca.telephony.session.CallConversationFactory.CallContext;
 import com.vca.telephony.spi.CallEvent;
 import com.vca.telephony.spi.CallLeg;
@@ -67,7 +68,8 @@ class PhoneSkillsTest {
     }
 
     private static CallContext context(StubLeg leg, Runnable endCall) {
-        return new CallContext(leg.callId(), leg.peerNumber(), leg.calledNumber(), leg, endCall);
+        return new CallContext(leg.callId(), leg.peerNumber(), leg.calledNumber(), leg, endCall,
+                new Merchant("01088886666", "美好口腔", "您好", "", "11", "user/1000", "", ""));
     }
 
     /** 通话事实(通话 id/来电号码/商家)由系统填, 模型只填它从客户那听来的 */

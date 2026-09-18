@@ -11,9 +11,13 @@
 <section name="dialplan" description="Dialplan">
   <context name="ai-agent">
 
-    <!-- 5000: 接入 VCA 语音助手 -->
+    <!--
+      5000 / 5001: 接入 VCA 语音助手。
+      两个号码是用来演示"多商家"的 —— VCA 按被叫号码(这里就是 5000/5001)决定用哪家的开场白、知识库、
+      坐席和推送地址, 见 vca.telephony.merchants。接真实线路时把这里换成中继送进来的号码。
+    -->
     <extension name="vca-inbound">
-      <condition field="destination_number" expression="^5000$">
+      <condition field="destination_number" expression="^500[01]$">
         <action application="answer"/>
         <action application="execute_extension" data="vca-connect XML ai-agent"/>
       </condition>

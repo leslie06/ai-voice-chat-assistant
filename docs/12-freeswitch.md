@@ -267,6 +267,7 @@ vca-telephony/src/main/java/com/vca/telephony/
 | `summary.enabled` | `VCA_TELEPHONY_SUMMARY_ENABLED` | `true` | 通话后小结，见 §7.8 |
 | `summary.min-duration-sec` | `VCA_TELEPHONY_SUMMARY_MIN_SEC` | `10` | 短于此的通话不摘要 |
 | `summary.webhook-url` | `VCA_TELEPHONY_SUMMARY_WEBHOOK` | 空 | 小结推送地址（企业微信/钉钉群机器人 URL 直接填） |
+| `merchants[n].*` | `VCA_TELEPHONY_MERCHANTS_n_*` | 空 | 多商家，按被叫号码路由，见 §7.9 |
 
 完整项以 `TelephonyProperties` 和 `vca-bootstrap/src/main/resources/application.yml` 为准。
 
@@ -583,6 +584,58 @@ vca:
 
 ---
 
+## 7.9 多商家：一套服务给多家店用
+
+按**客户拨的号码**区分商家。呼入时这个号码就是"打给了哪一家"，FreeSWITCH 在 socket 握手时就给了我们
+（`Caller-Destination-Number`），不需要额外对账——这是当初从 AudioSocket 换过来的收益之一。
+
+```yaml
+vca:
+  telephony:
+    # 顶层配置 = 默认商家: 没配 merchants、或号码没登记时都走它(单店部署完全不受影响)
+    greeting: 您好，这里是智能语音助手，请问有什么可以帮您的吗？
+    merchants:
+      - number: "01088886666"          # 商家的接入号, 必填
+        name: 美好口腔
+        greeting: 您好，这里是美好口腔，请问有什么可以帮您的吗？
+        knowledge-owner: "11"          # 这家自己的知识库
+        transfer-dial-string: sofia/gateway/trunk/13800138000
+        summary-webhook: https://qyapi.weixin.qq.com/...    # 推到这家自己的群
+      - number: "01099998888"
+        name: 启明少儿英语
+        greeting: 您好，这里是启明少儿英语，请问有什么可以帮您的吗？
+        knowledge-owner: "12"
+```
+
+每家可以只写要改的项，**没填的回退到顶层**，免得为了改一句开场白把整套配置抄一遍。
+用环境变量写也行（`.env.phone` 里）：
+
+```
+VCA_TELEPHONY_MERCHANTS_0_NUMBER=5000
+VCA_TELEPHONY_MERCHANTS_0_NAME=美好口腔
+VCA_TELEPHONY_MERCHANTS_0_KNOWLEDGE_OWNER=11
+```
+
+按商家走的有：开场白、人设、知识库、音色、转人工号码、小结推送地址。启动时会把每家的开场白都预合成
+（接通那一刻要立刻出声，那时才调 TTS 就是几秒静音）。
+
+**实测**（本机用 5000/5001 两个分机演示，问同一句"周末几点上班"）：
+
+| 拨打 | 认领商家 | 回答 |
+|---|---|---|
+| 5000 | 美好口腔 | 周六 9 点到 18 点，周日 9 点到 12 点 |
+| 5001 | 启明少儿英语 | 早上九点到晚上六点 |
+
+通话小结也各自推给各自的群，日志里带商家名：`通话小结(启明少儿英语): 意向=B…`。
+
+**现在是配置驱动、启动时定死**，加一家要改配置重启。等商家多到需要自助开通，把 `MerchantRegistry`
+换成查库 + 缓存即可，调用方只认这个接口。
+
+> 改 `deploy/freeswitch/conf/` 下的拨号计划后要 **重启容器**，`reloadxml` 不够——
+> 容器启动时才把 `/conf` 的模板渲染进 `/etc/freeswitch`，热重载读的是渲染后的那份。
+
+---
+
 ## 8. 排查
 
 | 现象 | 看哪里 / 原因 |
@@ -616,7 +669,7 @@ docker exec vca-freeswitch fs_cli -p "$P" -x "sofia global siptrace on"         
 | 项 | 状态 |
 |----|------|
 | 真实 SIP 中继呼入/外呼 | 未联调 |
-| 按被叫号码路由到不同商家的话术、知识库 | 号码已拿到，路由未实现（知识库现在是单个归属） |
+| 多商家自助开通 | 已实现按号码路由（§7.9），但配置驱动、加一家要重启；自助开通需要改成查库 |
 | 电话里的知识库检索 | 已完成（§7.6）。多商家按被叫号码路由还没做 |
 | 按键进对话（例如按键输入手机号） | 事件已到 `CallSession`，只打日志 |
 | 留资 / 转人工 / 主动挂机 | 已完成（§7.7） |

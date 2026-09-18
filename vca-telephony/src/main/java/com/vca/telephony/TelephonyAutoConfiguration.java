@@ -17,6 +17,8 @@ import com.vca.telephony.provider.freeswitch.FreeSwitchTelephonyProvider;
 import com.vca.telephony.session.CallConversationFactory;
 import com.vca.telephony.session.CallSession;
 import com.vca.orchestrator.call.CallSummaryStore;
+import com.vca.telephony.merchant.Merchant;
+import com.vca.telephony.merchant.MerchantRegistry;
 import com.vca.telephony.session.PendingCalls;
 import com.vca.telephony.summary.CallAftermath;
 import com.vca.telephony.summary.CallNotifier;
@@ -40,6 +42,10 @@ import org.springframework.web.reactive.function.server.ServerResponse;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
@@ -103,21 +109,39 @@ public class TelephonyAutoConfiguration {
      *
      * <p>{@code CallSummaryStore} 由 {@code vca-store} 提供, 没开落库时取不到 —— 那就只推送、不留档。
      */
+    /**
+     * 商家目录: 按客户拨的号码决定用哪家的开场白/知识库/坐席/推送地址。
+     * 没配 {@code merchants} 时只有一个默认商家(顶层配置), 与单店部署完全一致。
+     */
+    @Bean
+    MerchantRegistry merchantRegistry(TelephonyProperties props) {
+        MerchantRegistry registry = props.toMerchantRegistry();
+        if (registry.size() == 0) {
+            log.info("单商家模式: 所有来电都用顶层配置");
+        } else {
+            log.info("多商家模式: 已登记 {} 家 —— {}", registry.size(),
+                    registry.all().stream().map(m -> m.number() + "=" + m.label()).toList());
+        }
+        return registry;
+    }
+
     @Bean
     CallAftermath callAftermath(ProviderGateway gateway, TelephonyProperties props,
                                ObjectProvider<CallSummaryStore> stores) {
         TelephonyProperties.Summary cfg = props.getSummary();
         if (!cfg.isEnabled()) {
             log.info("通话后小结: 已关闭(vca.telephony.summary.enabled=false)");
-            return new CallAftermath(null, null, null, null, Integer.MAX_VALUE);
+            return new CallAftermath(null, null, null, Integer.MAX_VALUE);
         }
-        CallNotifier notifier = cfg.getWebhookUrl().isBlank()
-                ? CallNotifier.NOOP : new WebhookCallNotifier(cfg.getWebhookUrl());
-        log.info("通话后小结: 已启用(短于 {}s 的通话跳过), 推送={}", cfg.getMinDurationSec(),
-                cfg.getWebhookUrl().isBlank() ? "未配(只落库)" : "webhook");
+        // 每个推送地址一个通知器, 建好就留着: 它持有 HTTP 客户端, 不该每通电话新建
+        Map<String, CallNotifier> notifiers = new ConcurrentHashMap<>();
+        log.info("通话后小结: 已启用(短于 {}s 的通话跳过)", cfg.getMinDurationSec());
         return new CallAftermath(new CallSummarizer(gateway.llm(), props.toSummaryLlmConfig()),
-                stores.getIfAvailable(() -> CallSummaryStore.NOOP), notifier,
-                props.getKnowledgeOwner(), cfg.getMinDurationSec());
+                stores.getIfAvailable(() -> CallSummaryStore.NOOP),
+                url -> url == null || url.isBlank()
+                        ? CallNotifier.NOOP
+                        : notifiers.computeIfAbsent(url, WebhookCallNotifier::new),
+                cfg.getMinDurationSec());
     }
 
     /** 外呼接线台: 把发起的呼叫和连进来的媒体按 id 对上。呼入不经过它。 */
@@ -161,15 +185,16 @@ public class TelephonyAutoConfiguration {
                                                       PromptCache prompts,
                                                       PendingCalls pendingCalls,
                                                       Supplier<VoiceActivityDetector> vadDetectorFactory,
-                                                      CallAftermath aftermath) throws IOException {
-            byte[] greeting = prompts.get(props.getGreeting());
+                                                      CallAftermath aftermath,
+                                                      MerchantRegistry merchants) throws IOException {
+            preloadGreetings(prompts, merchants, props);
             FreeSwitchSocketServer server = new FreeSwitchSocketServer(props.toFreeSwitchConfig(),
-                    leg -> startCall(leg, props, conversations, pendingCalls, vadDetectorFactory, greeting,
-                            aftermath));
+                    leg -> startCall(leg, props, conversations, pendingCalls, vadDetectorFactory, prompts,
+                            aftermath, merchants));
             server.start();
-            log.info("电话接入已启用(FreeSWITCH): socket {}:{}, 线路 {}Hz, 单通上限 {}s, 开场白 {}",
+            log.info("电话接入已启用(FreeSWITCH): socket {}:{}, 线路 {}Hz, 单通上限 {}s",
                     props.getFreeswitch().getListenAddress(), props.getFreeswitch().getPort(),
-                    props.getSampleRate(), props.getMaxCallSeconds(), describeGreeting(greeting, props));
+                    props.getSampleRate(), props.getMaxCallSeconds());
             return server;
         }
 
@@ -209,14 +234,15 @@ public class TelephonyAutoConfiguration {
                                             PromptCache prompts,
                                             PendingCalls pendingCalls,
                                             Supplier<VoiceActivityDetector> vadDetectorFactory,
-                                            CallAftermath aftermath) throws IOException {
-            byte[] greeting = prompts.get(props.getGreeting());
+                                            CallAftermath aftermath,
+                                            MerchantRegistry merchants) throws IOException {
+            preloadGreetings(prompts, merchants, props);
             AudioSocketServer server = new AudioSocketServer(props.toAudioSocketConfig(),
-                    leg -> startCall(leg, props, conversations, pendingCalls, vadDetectorFactory, greeting,
-                            aftermath));
+                    leg -> startCall(leg, props, conversations, pendingCalls, vadDetectorFactory, prompts,
+                            aftermath, merchants));
             server.start();
-            log.info("电话接入已启用(Asterisk): AudioSocket :{}, 线路 {}Hz, 单通上限 {}s, 开场白 {}",
-                    props.getPort(), props.getSampleRate(), props.getMaxCallSeconds(), describeGreeting(greeting, props));
+            log.info("电话接入已启用(Asterisk): AudioSocket :{}, 线路 {}Hz, 单通上限 {}s",
+                    props.getPort(), props.getSampleRate(), props.getMaxCallSeconds());
             return server;
         }
 
@@ -242,12 +268,15 @@ public class TelephonyAutoConfiguration {
 
     private static void startCall(CallLeg leg, TelephonyProperties props,
                                   CallConversationFactory conversations, PendingCalls pendingCalls,
-                                  Supplier<VoiceActivityDetector> vadDetectorFactory, byte[] greeting,
-                                  CallAftermath aftermath) {
+                                  Supplier<VoiceActivityDetector> vadDetectorFactory, PromptCache prompts,
+                                  CallAftermath aftermath, MerchantRegistry merchants) {
         // 先配对: 命中说明这是我们拨出去的电话(顺带回填被叫号码), 没命中就是呼入 —— 都照常建会话
         boolean outbound = pendingCalls.attach(leg);
-        log.info("[{}] 建立通话会话: 方向={}, 对端={}, 被叫={}",
-                leg.callId(), outbound ? "外呼" : "呼入", leg.peerNumber(), leg.calledNumber());
+        // 按客户拨的号码认领商家: 呼入时它就是"打给了哪一家"
+        Merchant merchant = merchants.resolve(leg.calledNumber());
+        byte[] greeting = prompts.get(merchant.greeting());
+        log.info("[{}] 建立通话会话: 方向={}, 对端={}, 被叫={}, 商家={}",
+                leg.callId(), outbound ? "外呼" : "呼入", leg.peerNumber(), leg.calledNumber(), merchant.label());
         // 先占位再回填: 会话要在 CallSession 之前建好(它是构造参数), 而 end_call 工具又要能挂这通电话。
         // 一个 holder 打破这个循环, 工具真正被调用时 CallSession 早已就位。
         AtomicReference<CallSession> self = new AtomicReference<>();
@@ -258,15 +287,30 @@ public class TelephonyAutoConfiguration {
                     if (s != null) {
                         s.hangupAfterPlayback();
                     }
-                });
+                },
+                merchant);
         CallSession call = new CallSession(leg, conversations.create(ctx),
                 props.toVadConfig(), vadDetectorFactory.get(), props.toCallConfig(), greeting);
         self.set(call);
-        call.onEnded(aftermath::onCallEnded);
+        call.onEnded(ended -> aftermath.onCallEnded(ended, merchant));
         call.start();
     }
 
-    private static String describeGreeting(byte[] greeting, TelephonyProperties props) {
-        return greeting.length > 0 ? (greeting.length * 500 / props.getSampleRate()) + "ms" : "无";
+    /**
+     * 把每家商家的开场白都预合成好。接通那一刻要立刻出声, 这时才去调 TTS 就是几秒的静音;
+     * 多商家时每家一句, 都在启动时合成完。
+     */
+    private static void preloadGreetings(PromptCache prompts, MerchantRegistry merchants,
+                                         TelephonyProperties props) {
+        List<String> texts = new ArrayList<>();
+        texts.add(props.getGreeting());
+        merchants.all().forEach(m -> texts.add(m.greeting()));
+        for (String text : texts) {
+            if (text != null && !text.isBlank()) {
+                byte[] pcm = prompts.get(text);
+                log.info("开场白已预合成({}ms): {}", pcm.length * 500 / props.getSampleRate(),
+                        text.length() > 20 ? text.substring(0, 20) + "…" : text);
+            }
+        }
     }
 }

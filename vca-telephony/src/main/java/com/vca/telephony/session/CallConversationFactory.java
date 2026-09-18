@@ -1,6 +1,7 @@
 package com.vca.telephony.session;
 
 import com.vca.orchestrator.session.ConversationSession;
+import com.vca.telephony.merchant.Merchant;
 import com.vca.telephony.spi.CallLeg;
 
 /**
@@ -29,7 +30,9 @@ public interface CallConversationFactory {
      * @param session     这一路通话本身, 供转人工工具桥接
      * @param endCall     "说完这句就挂机": end_call 工具用。<b>不能直接调 {@code session.hangup}</b> ——
      *                    告别语还在下行缓冲里, 立刻挂客户只能听到半句; 由 {@code CallSession} 等排空后执行
+     * @param merchant    这通电话属于哪家商家(按被叫号码解析)。知识库、人设、坐席号码都取自它
      */
-    record CallContext(String callId, String peerNumber, String calledNumber, CallLeg session, Runnable endCall) {
+    record CallContext(String callId, String peerNumber, String calledNumber, CallLeg session, Runnable endCall,
+                       Merchant merchant) {
     }
 }

@@ -5,6 +5,7 @@ import com.vca.orchestrator.skill.Skill;
 import com.vca.orchestrator.skill.SkillRegistry;
 import com.vca.orchestrator.lead.LeadStore;
 import com.vca.telephony.TelephonyProperties;
+import com.vca.telephony.merchant.Merchant;
 import com.vca.telephony.skill.EndCallSkill;
 import com.vca.telephony.skill.SaveLeadSkill;
 import com.vca.telephony.skill.TransferToHumanSkill;
@@ -70,30 +71,33 @@ public class TelephonyWiring {
         List<Skill> shared = telephonySkills(props.getTools(), skills);
         logKnowledge(props.getKnowledgeOwner());
         logAgentTools(props);
+        // 多商家时上面这两行说的是"默认商家"的情况; 每家实际生效的配置在通话开始那行日志里
         LeadStore leadStore = leads.getIfAvailable(() -> LeadStore.NOOP);
         return call -> {
+            // 商家由被叫号码决定(单店时就是那个默认商家): 知识库、人设、音色、坐席号码都跟着它走
+            Merchant merchant = call.merchant() == null ? Merchant.NONE : call.merchant();
             // 电话专用工具按通话建: 通话 id、来电号码、转给谁都是这一路的事实, 不该让模型去传
             List<Skill> all = new ArrayList<>(shared);
-            all.addAll(agentTools(props, call, leadStore));
+            all.addAll(agentTools(props, call, merchant, leadStore));
             ConversationSessionFactory.Overrides overrides = new ConversationSessionFactory.Overrides(
-                    new SkillRegistry(all), props.getTtsVoice(), props.getSystemPrompt(), props.getLlmModel(),
+                    new SkillRegistry(all), merchant.ttsVoice(), merchant.systemPrompt(), props.getLlmModel(),
                     false,    // 电话不做自动联网注入: 实测一次 2.3 秒, 是体感延迟里最大的一块
-                    props.getKnowledgeOwner());
+                    merchant.knowledgeOwner());
             return factory.create(call.callId(), null, TurnListener.NOOP, overrides);
         };
     }
 
-    /** 按 {@code vca.telephony.agent-tools} 建这一路通话的电话专用工具。 */
+    /** 按 {@code vca.telephony.agent-tools} 建这一路通话的电话专用工具; 归属与坐席号码取自这家商家。 */
     private static List<Skill> agentTools(TelephonyProperties props, CallConversationFactory.CallContext call,
-                                          LeadStore leadStore) {
+                                          Merchant merchant, LeadStore leadStore) {
         List<String> on = props.getAgentTools();
         List<Skill> tools = new ArrayList<>(3);
         if (on.contains(SaveLeadSkill.NAME)) {
-            tools.add(new SaveLeadSkill(leadStore, call, props.getKnowledgeOwner()));
+            tools.add(new SaveLeadSkill(leadStore, call, merchant.knowledgeOwner()));
         }
-        // 没配坐席号码就不下发: 宁可 AI 说"我让同事回电", 也不能让客户在转不出去的电话里干等
-        if (on.contains(TransferToHumanSkill.NAME) && !props.getTransferDialString().isBlank()) {
-            tools.add(new TransferToHumanSkill(call, props.getTransferDialString()));
+        // 这家没配坐席号码就不下发: 宁可 AI 说"我让同事回电", 也不能让客户在转不出去的电话里干等
+        if (on.contains(TransferToHumanSkill.NAME) && !merchant.transferDialString().isBlank()) {
+            tools.add(new TransferToHumanSkill(call, merchant.transferDialString()));
         }
         if (on.contains(EndCallSkill.NAME)) {
             tools.add(new EndCallSkill(call.callId(), call.endCall()));

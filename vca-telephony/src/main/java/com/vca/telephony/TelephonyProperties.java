@@ -140,6 +140,92 @@ public class TelephonyProperties {
     private Summary summary = new Summary();
 
     /**
+     * 多商家: 一套服务同时给多家店用, <b>按客户拨的号码区分</b>。每家一个接入号, 各自的开场白、知识库、
+     * 坐席、推送地址互不相干; 没填的项回退到顶层那套配置。
+     *
+     * <p><b>不配就是单店</b>, 行为与以前完全一致 —— 顶层配置即默认商家, 号码没匹配上也走它。
+     */
+    private List<MerchantProps> merchants = new ArrayList<>();
+
+    /** 一家商家的配置。留空的项回退到顶层同名配置。 */
+    public static class MerchantProps {
+        /** 接入号码: 客户拨的那个号。必填, 否则这条被忽略 */
+        private String number = "";
+        /** 商家名, 只用于日志和推送消息 */
+        private String name = "";
+        private String greeting = "";
+        private String systemPrompt = "";
+        private String knowledgeOwner = "";
+        private String transferDialString = "";
+        private String summaryWebhook = "";
+        private String ttsVoice = "";
+
+        public String getNumber() {
+            return number;
+        }
+
+        public void setNumber(String v) {
+            this.number = v == null ? "" : v;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String v) {
+            this.name = v == null ? "" : v;
+        }
+
+        public String getGreeting() {
+            return greeting;
+        }
+
+        public void setGreeting(String v) {
+            this.greeting = v == null ? "" : v;
+        }
+
+        public String getSystemPrompt() {
+            return systemPrompt;
+        }
+
+        public void setSystemPrompt(String v) {
+            this.systemPrompt = v == null ? "" : v;
+        }
+
+        public String getKnowledgeOwner() {
+            return knowledgeOwner;
+        }
+
+        public void setKnowledgeOwner(String v) {
+            this.knowledgeOwner = v == null ? "" : v;
+        }
+
+        public String getTransferDialString() {
+            return transferDialString;
+        }
+
+        public void setTransferDialString(String v) {
+            this.transferDialString = v == null ? "" : v;
+        }
+
+        public String getSummaryWebhook() {
+            return summaryWebhook;
+        }
+
+        public void setSummaryWebhook(String v) {
+            this.summaryWebhook = v == null ? "" : v;
+        }
+
+        public String getTtsVoice() {
+            return ttsVoice;
+        }
+
+        public void setTtsVoice(String v) {
+            this.ttsVoice = v == null ? "" : v;
+        }
+    }
+
+    /**
      * 挂机后的事后处理: 用大模型把通话压成两三句摘要 + 意向等级, 落库并推给商家。
      *
      * <p>这是商家真正会看的东西 —— 没人会去听录音, 但群里弹出来的一条"意向 A, 想约周六种植牙面诊"会看。
@@ -802,6 +888,39 @@ public class TelephonyProperties {
 
     public void setTtsSampleRate(int ttsSampleRate) {
         this.ttsSampleRate = ttsSampleRate;
+    }
+
+    public List<MerchantProps> getMerchants() {
+        return merchants;
+    }
+
+    public void setMerchants(List<MerchantProps> merchants) {
+        this.merchants = merchants == null ? new ArrayList<>() : merchants;
+    }
+
+    /**
+     * 组装商家目录。顶层配置即"默认商家": 没配 {@code merchants} 时所有来电都走它(单店部署),
+     * 配了但号码没匹配上时也走它。每家没填的项同样回退到顶层, 免得为了改一句开场白把整套配置抄一遍。
+     */
+    public com.vca.telephony.merchant.MerchantRegistry toMerchantRegistry() {
+        com.vca.telephony.merchant.Merchant fallback = new com.vca.telephony.merchant.Merchant(
+                "", "默认", greeting, systemPrompt, knowledgeOwner, transferDialString,
+                summary.getWebhookUrl(), ttsVoice);
+        List<com.vca.telephony.merchant.Merchant> list = merchants.stream()
+                .map(m -> new com.vca.telephony.merchant.Merchant(
+                        m.getNumber(), m.getName(),
+                        orDefault(m.getGreeting(), greeting),
+                        orDefault(m.getSystemPrompt(), systemPrompt),
+                        orDefault(m.getKnowledgeOwner(), knowledgeOwner),
+                        orDefault(m.getTransferDialString(), transferDialString),
+                        orDefault(m.getSummaryWebhook(), summary.getWebhookUrl()),
+                        orDefault(m.getTtsVoice(), ttsVoice)))
+                .toList();
+        return new com.vca.telephony.merchant.MerchantRegistry(fallback, list);
+    }
+
+    private static String orDefault(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 
     public Summary getSummary() {

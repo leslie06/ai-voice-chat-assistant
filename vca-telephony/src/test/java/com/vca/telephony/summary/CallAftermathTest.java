@@ -6,6 +6,7 @@ import com.vca.domain.model.Message;
 import com.vca.domain.spi.LlmProvider;
 import com.vca.orchestrator.call.CallSummary;
 import com.vca.orchestrator.call.CallSummaryStore;
+import com.vca.telephony.merchant.Merchant;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 
@@ -43,11 +44,15 @@ class CallAftermathTest {
         return new EndedCall("call-7", "13800138000", "01088886666", durationSec, "peer-hangup", HISTORY);
     }
 
+    /** 测试里的商家: 归属账号 11, 推送地址随便填一个(通知器由下面的假实现给, 不真发) */
+    private static final Merchant MERCHANT =
+            new Merchant("01088886666", "美好口腔", "您好", "", "11", "user/1000", "https://hook", "");
+
     private static CallAftermath aftermath(LlmProvider llm, CallSummaryStore store, CallNotifier notifier,
                                            int minDurationSec) {
         CallSummarizer summarizer = new CallSummarizer(llm,
                 new LlmConfig(VendorType.QWEN, "qwen-flash", CallSummarizer.PROMPT, 0.2, 512));
-        return new CallAftermath(summarizer, store, notifier, "11", minDurationSec);
+        return new CallAftermath(summarizer, store, url -> notifier, minDurationSec);
     }
 
     @Test
@@ -61,7 +66,7 @@ class CallAftermathTest {
                 意向: A
                 跟进: 周六上午前电话确认时间
                 """, calls), s -> saved.add(s), pushed::add, 10)
-                .onCallEnded(call(45));
+                .onCallEnded(call(45), MERCHANT);
 
         awaitUntil(() -> !saved.isEmpty() && !pushed.isEmpty());
         CallSummary s = saved.get(0);
@@ -83,7 +88,7 @@ class CallAftermathTest {
 
         aftermath(llmReturning("客户咨询了洗牙价格，没有留联系方式。", new AtomicInteger()),
                 s -> saved.add(s), CallNotifier.NOOP, 10)
-                .onCallEnded(call(30));
+                .onCallEnded(call(30), MERCHANT);
 
         awaitUntil(() -> !saved.isEmpty());
         assertThat(saved.get(0).summary()).contains("洗牙价格");
@@ -98,7 +103,7 @@ class CallAftermathTest {
 
         aftermath(llmReturning("摘要: 客户要改预约时间。\n意向: B（有意向待跟进）\n跟进: 无\n", new AtomicInteger()),
                 s -> saved.add(s), CallNotifier.NOOP, 10)
-                .onCallEnded(call(20));
+                .onCallEnded(call(20), MERCHANT);
 
         awaitUntil(() -> !saved.isEmpty());
         assertThat(saved.get(0).intent()).isEqualTo("B");
@@ -118,7 +123,7 @@ class CallAftermathTest {
                 意向: 明确表达种植牙面诊需求，已约定时间。
                 跟进: 24 小时内联系客户确认
                 """, new AtomicInteger()), s -> saved.add(s), CallNotifier.NOOP, 10)
-                .onCallEnded(call(31));
+                .onCallEnded(call(31), MERCHANT);
 
         awaitUntil(() -> !saved.isEmpty());
         assertThat(saved.get(0).intent()).isEqualTo("A");
@@ -131,7 +136,7 @@ class CallAftermathTest {
 
         aftermath(llmReturning("摘要: 通话内容不明。\n意向: 说不好。\n跟进: 无\n", new AtomicInteger()),
                 s -> saved.add(s), CallNotifier.NOOP, 10)
-                .onCallEnded(call(31));
+                .onCallEnded(call(31), MERCHANT);
 
         awaitUntil(() -> !saved.isEmpty());
         assertThat(saved.get(0).intent()).isEqualTo("C");
@@ -144,7 +149,7 @@ class CallAftermathTest {
         List<CallSummary> saved = new CopyOnWriteArrayList<>();
 
         aftermath(llmReturning("摘要: x\n意向: D\n跟进: 无\n", calls), s -> saved.add(s), CallNotifier.NOOP, 10)
-                .onCallEnded(call(4));
+                .onCallEnded(call(4), MERCHANT);
 
         Thread.sleep(300);
         assertThat(calls.get()).as("不该调用大模型").isZero();
@@ -160,7 +165,7 @@ class CallAftermathTest {
                 List.of(Message.system("你是电话客服助手")));
 
         aftermath(llmReturning("不该被调用", calls), s -> saved.add(s), CallNotifier.NOOP, 10)
-                .onCallEnded(silent);
+                .onCallEnded(silent, MERCHANT);
 
         awaitUntil(() -> !saved.isEmpty());
         assertThat(calls.get()).isZero();
@@ -177,7 +182,7 @@ class CallAftermathTest {
                 s -> {
                     throw new IllegalStateException("db down");
                 }, pushed::add, 10)
-                .onCallEnded(call(15));
+                .onCallEnded(call(15), MERCHANT);
 
         awaitUntil(() -> !pushed.isEmpty());
         assertThat(pushed.get(0).summary()).contains("地址");
