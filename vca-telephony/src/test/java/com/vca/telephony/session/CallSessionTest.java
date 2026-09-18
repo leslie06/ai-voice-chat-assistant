@@ -142,6 +142,23 @@ class CallSessionTest {
         };
     }
 
+    /** 识别直接报错: 线上是所有候选厂商都被熔断跳过, 对通话来说就是这一轮彻底失败 */
+    private static AsrProvider brokenAsr(AtomicInteger turns) {
+        return new AsrProvider() {
+            @Override
+            public VendorType vendor() {
+                return VendorType.ALIYUN;
+            }
+
+            @Override
+            public Flux<AsrEvent> transcribe(Flux<AudioFrame> audio, AsrConfig cfg) {
+                turns.incrementAndGet();
+                return audio.thenMany(Flux.error(com.vca.domain.exception.ProviderException.fatal(
+                        VendorType.ALIYUN, com.vca.domain.enums.Capability.ASR, "所有候选厂商均不可用", null)));
+            }
+        };
+    }
+
     private static ConversationSession conversation(AsrProvider asr) {
         SessionContext ctx = SessionContext.pipeline(
                 "call-1", null,
@@ -153,9 +170,14 @@ class CallSessionTest {
     }
 
     private static CallSession callSession(FakeCallLeg leg, AtomicInteger turns, byte[] greeting) {
+        return callSession(leg, fakeAsr("我想了解一下", turns), greeting, null);
+    }
+
+    private static CallSession callSession(FakeCallLeg leg, AsrProvider asr, byte[] greeting,
+                                           byte[] errorPrompt) {
         CallConfig cfg = new CallConfig(20, 30_000, TTS_RATE, 300, true);
-        CallSession call = new CallSession(leg, conversation(fakeAsr("我想了解一下", turns)),
-                VadConfig.defaults(), new EnergyVad(), cfg, greeting);
+        CallSession call = new CallSession(leg, conversation(asr),
+                VadConfig.defaults(), new EnergyVad(), cfg, greeting, errorPrompt);
         call.attach();
         return call;
     }
@@ -367,6 +389,45 @@ class CallSessionTest {
     // ---- 工具 ----
 
     /** 说 160ms(过 onsetMs=150) + 静 800ms(过 silenceMs) → VAD 判定一轮说完 */
+    /**
+     * 回合彻底失败(厂商全被熔断跳过)时, 必须顶一句兜底话术。
+     *
+     * <p>线上事故的用户侧表现就是这个: AI 答了一句之后突然不吭声, 客户以为断线直接挂断。
+     * 静默是最差的失败方式 —— 兜底话术至少能让客户再说一遍, 而那时熔断多半已经恢复。
+     */
+    @Test
+    void turnFailureSpeaksTheFallbackInsteadOfGoingSilent() {
+        FakeCallLeg leg = new FakeCallLeg();
+        AtomicInteger turns = new AtomicInteger();
+        byte[] fallback = new byte[640];   // 2 帧兜底话术
+        CallSession call = callSession(leg, brokenAsr(turns), null, fallback);
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        speakThenPause(leg);
+
+        assertThat(turns.get()).isEqualTo(1);
+        awaitUntil(() -> call.pendingPlaybackMs() > 0, Duration.ofSeconds(2));
+        for (int i = 0; i < 5; i++) {
+            call.tick();
+        }
+        assertThat(leg.written).as("客户应该听到兜底话术, 而不是一片安静").hasSize(2);
+        assertThat(call.isClosed()).as("兜底之后通话继续, 不能挂断").isFalse();
+    }
+
+    /** 没配兜底话术时维持原样: 静默, 不能凭空造出音频 */
+    @Test
+    void turnFailureStaysSilentWhenNoFallbackConfigured() {
+        FakeCallLeg leg = new FakeCallLeg();
+        CallSession call = callSession(leg, brokenAsr(new AtomicInteger()), null, null);
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        speakThenPause(leg);
+        for (int i = 0; i < 20; i++) {
+            call.tick();
+        }
+        assertThat(leg.written).isEmpty();
+    }
+
     private static void speakThenPause(FakeCallLeg leg) {
         for (int i = 0; i < 10; i++) {
             leg.inbound.tryEmitNext(speech());

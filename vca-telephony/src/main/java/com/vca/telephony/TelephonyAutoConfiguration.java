@@ -275,6 +275,7 @@ public class TelephonyAutoConfiguration {
         // 按客户拨的号码认领商家: 呼入时它就是"打给了哪一家"
         Merchant merchant = merchants.resolve(leg.calledNumber());
         byte[] greeting = prompts.get(merchant.greeting());
+        byte[] errorPrompt = prompts.get(props.getErrorPrompt());
         log.info("[{}] 建立通话会话: 方向={}, 对端={}, 被叫={}, 商家={}",
                 leg.callId(), outbound ? "外呼" : "呼入", leg.peerNumber(), leg.calledNumber(), merchant.label());
         // 先占位再回填: 会话要在 CallSession 之前建好(它是构造参数), 而 end_call 工具又要能挂这通电话。
@@ -290,25 +291,27 @@ public class TelephonyAutoConfiguration {
                 },
                 merchant);
         CallSession call = new CallSession(leg, conversations.create(ctx),
-                props.toVadConfig(), vadDetectorFactory.get(), props.toCallConfig(), greeting);
+                props.toVadConfig(), vadDetectorFactory.get(), props.toCallConfig(), greeting, errorPrompt);
         self.set(call);
         call.onEnded(ended -> aftermath.onCallEnded(ended, merchant));
         call.start();
     }
 
     /**
-     * 把每家商家的开场白都预合成好。接通那一刻要立刻出声, 这时才去调 TTS 就是几秒的静音;
-     * 多商家时每家一句, 都在启动时合成完。
+     * 把固定话术(每家商家的开场白 + 兜底话术)都预合成好。接通那一刻要立刻出声, 这时才去调 TTS
+     * 就是几秒的静音; 多商家时每家一句, 都在启动时合成完。
      */
     private static void preloadGreetings(PromptCache prompts, MerchantRegistry merchants,
                                          TelephonyProperties props) {
         List<String> texts = new ArrayList<>();
         texts.add(props.getGreeting());
+        // 兜底话术也要提前合成: 真出事的时候 TTS 可能正是挂掉的那一环, 现合成等于没有兜底
+        texts.add(props.getErrorPrompt());
         merchants.all().forEach(m -> texts.add(m.greeting()));
         for (String text : texts) {
             if (text != null && !text.isBlank()) {
                 byte[] pcm = prompts.get(text);
-                log.info("开场白已预合成({}ms): {}", pcm.length * 500 / props.getSampleRate(),
+                log.info("话术已预合成({}ms): {}", pcm.length * 500 / props.getSampleRate(),
                         text.length() > 20 ? text.substring(0, 20) + "…" : text);
             }
         }

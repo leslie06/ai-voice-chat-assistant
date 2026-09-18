@@ -26,6 +26,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *   <li>已经吐过元素再出错: 不再转移(避免重复输出), 直接抛错。</li>
  * </ul>
  *
+ * <p><b>成功的记账口径 = 正常结束 或 "吐过元素后被取消"</b>。只认"正常结束"会漏掉一大类健康调用:
+ * ASR 的消费方拿到 final 就 {@code next()} 取走并取消整条流, 永远走不到 onComplete; 打断也一样。
+ * 这类流对熔断器来说既不是成功也不是失败 —— 于是熔断器一旦被一阵真故障打开, 后面每次半开试探都
+ * 因"取消"而无人报回, 状态永远停在半开, 每 openDuration 只放一次, 其余回合全部被跳过。表现就是
+ * 故障早已恢复, 电话里的 AI 却大部分回合不吭声。吐过元素 = 厂商确实产出了可用结果, 按成功记。</p>
+ *
  * <p>注意: 出错转移会重订阅 invoker 返回的流。对 LLM(输入是静态历史)安全; 对 ASR/TTS
  * (输入是实时热流)只有"订阅前跳过熔断候选"这一类转移是安全的, 实时输入的重放需上层另行保证。
  */
@@ -68,12 +74,24 @@ public class GovernanceExecutor {
         }
 
         AtomicBoolean emitted = new AtomicBoolean(false);
+        // 成功只记一次: 正常结束与取消不会同时到, 但记账口径涉及熔断状态, 宁可显式去重
+        AtomicBoolean settled = new AtomicBoolean(false);
         Flux<T> guarded = quota.gate(cap, c.vendor(), c.maxConcurrency(),
                 Flux.defer(() -> invoker.apply(c)));
 
         return guarded
                 .doOnNext(x -> emitted.set(true))
-                .doOnComplete(() -> circuits.recordSuccess(cap, c.vendor()))
+                .doOnComplete(() -> {
+                    if (settled.compareAndSet(false, true)) {
+                        circuits.recordSuccess(cap, c.vendor());
+                    }
+                })
+                // 吐过元素后被取消(ASR 取到 final 即取消、打断): 厂商已产出可用结果, 算成功
+                .doOnCancel(() -> {
+                    if (emitted.get() && settled.compareAndSet(false, true)) {
+                        circuits.recordSuccess(cap, c.vendor());
+                    }
+                })
                 .onErrorResume(err -> {
                     boolean quotaFull = err instanceof ProviderException pe && pe.isQuotaExceeded();
                     if (!quotaFull) {

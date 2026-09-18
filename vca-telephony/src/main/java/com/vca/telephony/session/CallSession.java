@@ -55,6 +55,8 @@ public final class CallSession {
 
     /** 预合成开场白(已是线路采样率的 PCM); 为空则接通后直接进入聆听 */
     private final byte[] greeting;
+    /** 预合成的兜底话术: 回合出错且一个字都没播出去时顶上, 别让客户对着一片安静 */
+    private final byte[] errorPrompt;
     /** 空闲时补发的静音帧; 接入层不需要连续媒体时为 null */
     private final byte[] silenceFrame;
 
@@ -79,6 +81,8 @@ public final class CallSession {
 
     private Sinks.Many<AudioFrame> turnSink;
     private Disposable turnSubscription;
+    /** 本轮有没有真的播出过音频; 决定出错时要不要顶一句兜底话术 */
+    private boolean turnProducedAudio;
 
     /**
      * @param vadConfig VAD 阈值。<b>务必用电话专用的一组</b>: 浏览器那套是按 48k 麦克风调的,
@@ -88,12 +92,24 @@ public final class CallSession {
      */
     public CallSession(CallLeg leg, ConversationSession conversation, VadConfig vadConfig,
                        VoiceActivityDetector detector, CallConfig cfg, byte[] greeting) {
+        this(leg, conversation, vadConfig, detector, cfg, greeting, null);
+    }
+
+    /**
+     * @param errorPrompt 预合成兜底话术(线路采样率 PCM)。回合彻底失败时播它 —— 厂商熔断、密钥过期、
+     *                    网络抖动这类事故在电话里的表现都是"AI 突然不吭声", 客户只会以为断线了就挂断,
+     *                    连重说一遍的机会都没有。null 则维持原样(静默)。
+     */
+    public CallSession(CallLeg leg, ConversationSession conversation, VadConfig vadConfig,
+                       VoiceActivityDetector detector, CallConfig cfg, byte[] greeting,
+                       byte[] errorPrompt) {
         this.leg = leg;
         this.conversation = conversation;
         this.cfg = cfg == null ? CallConfig.defaults() : cfg;
         this.mediaRate = leg.sampleRate();
         this.pacing = new PacingBuffer(mediaRate, this.cfg.pacingMs(), this.cfg.maxBufferedMs());
         this.greeting = greeting;
+        this.errorPrompt = errorPrompt;
         this.silenceFrame = leg.needsContinuousMedia() ? new byte[pacing.frameBytes()] : null;
         this.vad = new HandsFreeVad(vadConfig, vadListener(), detector);
     }
@@ -213,6 +229,7 @@ public final class CallSession {
         }
         resumeEpoch = -1;
         seq.set(0);
+        turnProducedAudio = false;
         final long myEpoch = ++epoch;
         turnSink = Sinks.many().unicast().onBackpressureBuffer();
         turnSubscription = conversation.handleUserTurn(turnSink.asFlux())
@@ -248,6 +265,7 @@ public final class CallSession {
         if (data == null || data.length == 0) {
             return;   // 收尾空块
         }
+        turnProducedAudio = true;
         pacing.offer(toMediaRate(data));
     }
 
@@ -271,6 +289,11 @@ public final class CallSession {
         }
         if (err != null) {
             log.warn("[{}] 回合出错: {}", leg.callId(), err.toString());
+            // 一个字都没说出去就失败了 = 客户听到的是一片安静, 顶一句兜底话术请他再说一遍。
+            // 已经播过一部分再出错的不补, 免得话说到一半突然插进来一句莫名其妙的道歉。
+            if (!turnProducedAudio && !closed && errorPrompt != null && errorPrompt.length > 0) {
+                pacing.offer(errorPrompt);
+            }
         }
         resetTurn();
         // 不在这里 resumeListening: 缓冲里通常还压着好几秒没播的音频, 那段时间 VAD 必须留在 WAIT

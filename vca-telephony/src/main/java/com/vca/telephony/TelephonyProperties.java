@@ -122,6 +122,15 @@ public class TelephonyProperties {
     /** 开场白文本。启动时预合成并缓存, 接通瞬间直接出声(首包延迟≈0)。留空则接通后直接进聆听。 */
     private String greeting = "";
 
+    /**
+     * 回合彻底失败时的兜底话术, 与开场白一样在启动时预合成。
+     *
+     * <p>厂商熔断、密钥过期、网络抖动在电话里的表现都一样: AI 突然不吭声。客户不知道发生了什么,
+     * 只会以为断线了直接挂断 —— 连重说一遍的机会都没有。预合成的原因也和开场白一致: 出事的时候
+     * TTS 本身可能正是挂掉的那一环, 现合成等于没有兜底。留空则维持静默。
+     */
+    private String errorPrompt = "不好意思，我这边没太听清，您再说一遍好吗？";
+
     /** 开场白合成用的 TTS 厂商与采样率。 */
     private VendorType ttsVendor = VendorType.ALIYUN;
 
@@ -864,6 +873,14 @@ public class TelephonyProperties {
 
     public void setGreeting(String greeting) {
         this.greeting = greeting;
+    }
+
+    public String getErrorPrompt() {
+        return errorPrompt;
+    }
+
+    public void setErrorPrompt(String errorPrompt) {
+        this.errorPrompt = errorPrompt == null ? "" : errorPrompt;
     }
 
     public VendorType getTtsVendor() {

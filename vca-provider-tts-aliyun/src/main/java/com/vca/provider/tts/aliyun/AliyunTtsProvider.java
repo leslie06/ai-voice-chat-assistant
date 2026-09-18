@@ -17,10 +17,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -85,9 +87,28 @@ public class AliyunTtsProvider implements TtsProvider {
             WarmSession fresh = WarmSession.openOrNull(props, cfg);
             if (fresh != null) {
                 log.debug("TTS 提前建连, key={}", k);
+                scheduleAbandon(k, fresh);
             }
             return fresh;
         });
+    }
+
+    /**
+     * 预热的连接<b>一直没人来认领</b>时, 到点主动关掉。
+     *
+     * <p>回合在大模型出字之前就失败(比如识别被熔断跳过)或客户直接挂机, 这条连接就留在槽里没有出口:
+     * 既不会被 {@code synthesize} 认领, 也等不到下一次同 key 的 prewarm 来顶替。结果是它一路挂到服务端的
+     * 空闲超时(约 23s), 在日志里留下一条 {@code request timeout after 23 seconds} 的 task-failed ——
+     * 时间上已经离开事发回合很远, 排查时极具误导性。
+     */
+    private void scheduleAbandon(String key, WarmSession session) {
+        Schedulers.parallel().schedule(() -> {
+            // 两参 remove: 只有槽里还是这一条(没被认领、没被顶替)才关
+            if (prewarmed.remove(key, session)) {
+                session.abortIfUnused();
+                log.debug("TTS 预热连接闲置 {}s 无人认领, 已关闭, key={}", WARM_MAX_IDLE.toSeconds(), key);
+            }
+        }, WARM_MAX_IDLE.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     private static String warmKey(TtsConfig cfg) {
