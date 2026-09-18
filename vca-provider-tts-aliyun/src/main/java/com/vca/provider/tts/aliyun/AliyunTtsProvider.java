@@ -240,6 +240,8 @@ public class AliyunTtsProvider implements TtsProvider {
          */
         private final ReplayProcessor<String> textStream = ReplayProcessor.create();
         private final Flux<AudioChunk> audio;
+        /** replay().connect() 的句柄: 关连接只能靠它 —— 见 {@link #cancelQuietly()} */
+        private final reactor.core.Disposable connection;
         private final AtomicBoolean used = new AtomicBoolean();
         private final long openedAtNanos = System.nanoTime();
         private final String model;
@@ -267,7 +269,7 @@ public class AliyunTtsProvider implements TtsProvider {
                     .concatMap(r -> toChunk(r, warmSeq))
                     .onErrorMap(AliyunTtsProvider::toProviderException)
                     .replay();
-            hot.connect();   // 立刻订阅 = 立刻握手建连
+            this.connection = hot.connect();   // 立刻订阅 = 立刻握手建连
             this.audio = hot;
         }
 
@@ -309,12 +311,23 @@ public class AliyunTtsProvider implements TtsProvider {
             }
         }
 
+        /**
+         * 关掉这条连接。<b>两步都要做</b>: {@code streamingCancel()} 只在任务已经真正跑起来时有效,
+         * 一条建好却还没喂过文本的连接它是管不着的 —— 那种连接会一直挂到服务端的空闲超时(约 23s),
+         * 在日志里留下一条时间上离事发回合很远的 task-failed。退订 {@code replay().connect()} 拿到的
+         * 句柄才是真正把 WebSocket 拆掉的那一步。
+         */
         private void cancelQuietly() {
             try {
                 synthesizer.streamingCancel();
             } catch (Exception e) {
                 // 任务已正常结束时取消会抛, 属正常情况
                 log.debug("取消 TTS 预热连接: {}", e.toString());
+            }
+            try {
+                connection.dispose();
+            } catch (Exception e) {
+                log.debug("关闭 TTS 预热连接: {}", e.toString());
             }
         }
     }
