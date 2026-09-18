@@ -6,6 +6,9 @@ import com.vca.telephony.provider.audiosocket.AudioSocketConfig;
 import com.vca.telephony.session.CallConfig;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * 电话接入配置, 前缀 {@code vca.telephony}。<b>默认关闭</b>, 关闭时对现有 Web 链路零影响。
  */
@@ -28,6 +31,31 @@ public class TelephonyProperties {
 
     /** FreeSWITCH 接入参数(provider=freeswitch 时生效) */
     private FreeSwitch freeswitch = new FreeSwitch();
+
+    /**
+     * 电话回合下发给模型的工具名白名单。<b>默认空 = 一个都不发</b>。
+     *
+     * <p>为什么电话默认不发: 工具声明每轮都要随 prompt 一起送进模型, 直接抬高首个 token 的延迟,
+     * 而浏览器那套工具(点歌、天气、联网搜索、记忆)在电话客服里基本用不上 —— 电话对延迟远比浏览器敏感。
+     * 等做了留资/转人工这类电话专用工具, 在这里按名字放行即可, 例如
+     * {@code vca.telephony.tools=search_knowledge}。
+     */
+    private List<String> tools = new ArrayList<>();
+
+    /**
+     * 电话回合的人设。<b>留空则沿用浏览器那套</b>({@code vca.web.system-prompt}), 但不建议:
+     * 浏览器人设六百多字, 还专门讲了怎么用工具 —— 电话这边工具是关的, 这些字每轮都要重新过一遍模型,
+     * 直接抬高首字延迟。默认值见 {@code application.yml} 的 {@code prompts.phone-agent}。
+     */
+    private String systemPrompt = "";
+
+    /**
+     * 电话回合用的对话模型。留空 = 沿用 {@code vca.web.llm-model}。
+     *
+     * <p>电话上首字延迟比回答深度重要得多: 客服问答大多是"几点开门""怎么走"这类短问题,
+     * 带思考链的大模型会先生成一段思考再出第一个字, 电话里这段就是纯等待。
+     */
+    private String llmModel = "";
 
     /** [Asterisk] AudioSocket 监听端口。Asterisk 的 dialplan 会连到这里。 */
     private int port = 9092;
@@ -376,8 +404,11 @@ public class TelephonyProperties {
         /** 人声判定阈值。窄带 + 线路底噪下比浏览器略高。 */
         private double speechThreshold = 0.02;
         private int onsetMs = 150;
-        /** 句尾静音判停(ms)。电话上人说话停顿更短, 比浏览器的 800 略紧。 */
-        private int silenceMs = 700;
+        /**
+         * 句尾静音判停(ms)。电话上人说话停顿更短, 比浏览器的 800 紧。
+         * 500 是实测值: 这段等待完整计入体感延迟, 再短就容易把人说话中间的停顿判成说完。
+         */
+        private int silenceMs = 500;
         private double bargeThreshold = 0.025;
         private int bargeMs = 250;
         private int prerollMs = 400;
@@ -518,6 +549,30 @@ public class TelephonyProperties {
 
     public void setProvider(Provider provider) {
         this.provider = provider;
+    }
+
+    public List<String> getTools() {
+        return tools;
+    }
+
+    public String getLlmModel() {
+        return llmModel;
+    }
+
+    public void setLlmModel(String llmModel) {
+        this.llmModel = llmModel == null ? "" : llmModel;
+    }
+
+    public String getSystemPrompt() {
+        return systemPrompt;
+    }
+
+    public void setSystemPrompt(String systemPrompt) {
+        this.systemPrompt = systemPrompt == null ? "" : systemPrompt;
+    }
+
+    public void setTools(List<String> tools) {
+        this.tools = tools == null ? new ArrayList<>() : tools;
     }
 
     public FreeSwitch getFreeswitch() {

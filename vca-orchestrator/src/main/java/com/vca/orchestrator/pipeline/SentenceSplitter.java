@@ -16,6 +16,7 @@ import java.util.List;
  *   <li>遇到硬终结符(。！？等)立即成句;</li>
  *   <li>当前句已达 {@code softCutMinChars} 且遇到软分隔符(，、)时成句, 以更早开播;</li>
  *   <li>当前句超过 {@code maxChars} 仍无分隔符则强制切一刀;</li>
+ *   <li><b>本轮第一句用更小的阈值</b>(见 {@link SentenceSplitterConfig}): 体感延迟只由它决定;</li>
  *   <li>流结束时, 把残留缓冲作为最后一句吐出。</li>
  * </ol>
  *
@@ -41,25 +42,27 @@ public class SentenceSplitter {
     public Flux<String> split(Flux<String> tokens) {
         return Flux.defer(() -> {
             StringBuilder buffer = new StringBuilder();
+            int[] emitted = {0};   // 本轮已成句数; 仅 concatMapIterable 的串行回调里读写
             return tokens
                     .concatMapIterable(token -> {
                         buffer.append(token);
-                        return drain(buffer);
+                        return drain(buffer, emitted);
                     })
                     .concatWith(Flux.defer(() -> flushRemainder(buffer)));
         });
     }
 
     /** 从缓冲区抽出所有已成型的句子, 残留部分留在 buffer 里 */
-    private List<String> drain(StringBuilder buffer) {
+    private List<String> drain(StringBuilder buffer, int[] emitted) {
         List<String> sentences = new ArrayList<>();
         int cut = 0; // 已成句的边界(下一句的起点)
         for (int i = 0; i < buffer.length(); i++) {
             char c = buffer.charAt(i);
             int segLen = i - cut + 1;
+            int emittedSoFar = emitted[0] + sentences.size();
             boolean hard = config.isHard(c);
-            boolean soft = config.isSoft(c) && segLen >= config.softCutMinChars();
-            boolean tooLong = segLen >= config.maxChars();
+            boolean soft = config.isSoft(c) && segLen >= config.softCutMinChars(emittedSoFar);
+            boolean tooLong = segLen >= config.maxChars(emittedSoFar);
 
             if (hard || soft || tooLong) {
                 String seg = buffer.substring(cut, i + 1).trim();
@@ -75,6 +78,7 @@ public class SentenceSplitter {
         if (cut > 0) {
             buffer.delete(0, cut);
         }
+        emitted[0] += sentences.size();
         return sentences;
     }
 

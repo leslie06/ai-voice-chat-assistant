@@ -200,6 +200,15 @@ vca:
     # freeswitch(默认): 事件套接字 + unicast UDP, 都是 FreeSWITCH 自带能力
     # asterisk(备选):  AudioSocket + AMI
     provider: ${VCA_TELEPHONY_PROVIDER:freeswitch}
+    # 电话人设。比浏览器那套短得多: 每轮都要重新过一遍模型, 直接计入首字延迟。
+    system-prompt: ${VCA_TELEPHONY_SYSTEM_PROMPT:${prompts.phone-agent}}
+    # 电话对话模型。留空 = 沿用 vca.web.llm-model。电话要的是首字快:
+    # 带思考链的模型(如 qwen3.7-plus)会先生成一段思考才吐第一个字, 电话里这段就是纯等待。
+    llm-model: ${VCA_TELEPHONY_LLM_MODEL:}
+    # 电话回合下发给模型的工具(按名字白名单)。默认一个都不发 —— 工具声明每轮都随 prompt 送进模型,
+    # 抬高首字延迟, 而浏览器那套工具(点歌/天气/联网/记忆)在电话客服里用不上。
+    # 等做了留资、转人工这类电话专用工具, 在这里按名字放行。
+    tools: ${VCA_TELEPHONY_TOOLS:}
     # 电话网窄带固定 8000; 高清语音线路可能是 16000。
     sample-rate: ${VCA_TELEPHONY_SAMPLE_RATE:8000}
     freeswitch:
@@ -239,7 +248,8 @@ vca:
     # 电话专用 VAD 阈值 —— 不要复用 vca.web.vad 那组(那是按 48k 麦克风调的)。
     vad:
       speech-threshold: ${VCA_TELEPHONY_VAD_SPEECH:0.02}
-      silence-ms: ${VCA_TELEPHONY_VAD_SILENCE_MS:700}
+      # 这段等待完整计入体感延迟; 500 是实测值, 再短容易把说话中间的停顿判成说完。
+      silence-ms: ${VCA_TELEPHONY_VAD_SILENCE_MS:500}
       barge-threshold: ${VCA_TELEPHONY_VAD_BARGE:0.025}
       barge-ms: ${VCA_TELEPHONY_VAD_BARGE_MS:250}
       # 起播保护期: 挡线路回声导致的自打断。
@@ -457,6 +467,15 @@ prompts:
     你接入了一组工具(function)。凡是需要实时信息或执行动作的请求——比如问当前日期/时间/星期几、点歌放音乐——都必须调用对应工具拿到真实结果再回答，绝不能凭记忆编造时间或假装已经播放。普通闲聊则正常直接回答，不要无谓地调用工具。
 
     【最重要的纪律】我们正处在一段持续的对话里，上面的历史消息只是已经发生过的上下文。你要自然地结合上文理解我的意思，然后只针对我【当前这一句】说新内容、接着往下聊。绝对不要复述、不要重复、不要续写你之前已经说过的任何话，也不要重复打招呼或自我介绍——每一轮都只说还没说过的话。
+
+  # 电话客服(电话接入默认): 比语音助手更短更硬。电话对延迟最敏感, 人设每轮都要过一遍模型,
+  # 所以只留真正影响回答形态的几条; 也不提工具——电话侧默认不下发工具。
+  phone-agent: |
+    你是电话客服助手，正在接听一通电话。你说的每句话都会被朗读出来，必须完全口语化，不要 markdown、不要列表、不要任何书面格式。
+    最重要的是简短：先给结论，一般一句话说完，最多两句。
+    只回答对方当前问的这件事。不知道就直说，绝不编造。
+    对方说得不清楚时，用一句话反问。
+    不要复述对方的话，也不要重复你已经说过的内容。
 
   # AI助手(文字版, 结构化长答案; 不适合语音——会被 TTS 把 markdown/列表一并念出来)
   assistant: |

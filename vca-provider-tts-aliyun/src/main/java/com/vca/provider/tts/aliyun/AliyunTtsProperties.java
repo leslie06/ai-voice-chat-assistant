@@ -93,6 +93,18 @@ public class AliyunTtsProperties {
         return m != null && m.startsWith("qwen-audio-");
     }
 
+    /**
+     * 该音色的模型是否支持"流式输入"(duplex)协议 —— 即可以先建连、文本随后逐段送。
+     *
+     * <p>{@code AliyunTtsProvider} 用它把建连(实测约 1.2 秒)藏进大模型生成第一句的时间里。
+     * <b>只有 Qwen-Audio-3.0 全系支持</b>; {@code cosyvoice-v3-flash} 走这个协议会报
+     * "Missing required parameter 'payload.task_group'", 所以那边继续用逐句的非流式输入。
+     */
+    public boolean supportsStreamingInput(String voice) {
+        String m = modelFor(voice);
+        return m != null && m.startsWith("qwen-audio-");
+    }
+
     private static String[] longestFirst(String... models) {
         String[] copy = models.clone();
         java.util.Arrays.sort(copy, (a, b) -> {

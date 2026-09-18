@@ -58,24 +58,50 @@ public class ConversationSessionFactory {
         this.webSearch = webSearch == null ? WebSearchProvider.NOOP : webSearch;
     }
 
+    /**
+     * 接入层对本路会话的覆盖项。浏览器传 {@link #none()}; 电话接入用它砍掉用不上的工具、换电话专用音色与人设。
+     *
+     * @param skills        本路会话下发给模型的工具集; null = 用全局注册表
+     * @param ttsVoice      本路会话的合成音色; 留空 = 用 {@code vca.web.tts-voice}
+     * @param systemPrompt  本路会话的人设; 留空 = 用 {@code vca.web.system-prompt}
+     * @param llmModel      本路会话的对话模型; 留空 = 用 {@code vca.web.llm-model}
+     * @param webSearchAuto 是否允许自动联网注入; null = 用 {@code vca.web.web-search-auto}。
+     *                      电话侧关掉它 —— 实测一次注入要 2.3 秒, 是体感延迟里最大的一块
+     */
+    public record Overrides(SkillRegistry skills, String ttsVoice, String systemPrompt, String llmModel,
+                           Boolean webSearchAuto) {
+        private static final Overrides NONE = new Overrides(null, null, null, null, null);
+
+        public static Overrides none() {
+            return NONE;
+        }
+    }
+
     public ConversationSession create(String sessionId, TurnListener listener) {
         return create(sessionId, null, listener);
+    }
+
+    public ConversationSession create(String sessionId, String userId, TurnListener listener) {
+        return create(sessionId, userId, listener, Overrides.none());
     }
 
     /**
      * 建一路会话。{@code userId} 非空时启用长期记忆(回灌该用户的跨会话记忆, 并允许 remember 工具写入);
      * 为空(未登录/账号系统未启用)时记忆为 NOOP。
      */
-    public ConversationSession create(String sessionId, String userId, TurnListener listener) {
-        SessionContext ctx = combinedContext(sessionId);
+    public ConversationSession create(String sessionId, String userId, TurnListener listener, Overrides overrides) {
+        Overrides ov = overrides == null ? Overrides.none() : overrides;
+        SessionContext ctx = combinedContext(sessionId, ov.ttsVoice(), ov.systemPrompt(), ov.llmModel());
 
         ConversationSession session = new ConversationSession(
                 ctx, gateway.asr(), gateway.llm(), gateway.tts(), gateway.s2s(), splitter,
-                props.getHistoryMaxMessages(), metrics, skills);
+                props.getHistoryMaxMessages(), metrics,
+                ov.skills() == null ? skills : ov.skills());
         session.setTurnListener(listener);
         session.setRecorder(recorder);
-        // 联网搜索不分用户(实时信息非个人数据), 无条件启用
-        session.setWebSearch(webSearch, props.isWebSearchAuto(), props.getWebSearchCount());
+        // 联网搜索不分用户(实时信息非个人数据), 无条件启用; 自动注入可由接入层关掉(电话默认关)
+        boolean searchAuto = ov.webSearchAuto() == null ? props.isWebSearchAuto() : ov.webSearchAuto();
+        session.setWebSearch(webSearch, searchAuto, props.getWebSearchCount());
         // 多步 Agent 规划: 命中复杂回合先规划再执行(需配合工具, 故技能为空时该开关在会话内自然失效)
         session.setAgentEnabled(props.isAgentEnabled());
         // 视觉模型: 带图回合自动切换(留空则沿用当前对话模型, 需其自身支持视觉)
@@ -92,15 +118,21 @@ public class ConversationSessionFactory {
      * 初始模式取自 {@code vca.web.mode}; 两套都复用同一份 system prompt(人设), 切模式时人设不变。
      * 端到端模型只吃音频, 打字时回退到这份 LLM 出文字回复(不发声), s2s 下也能打字提问。
      */
-    private SessionContext combinedContext(String sessionId) {
+    private SessionContext combinedContext(String sessionId, String ttsVoiceOverride, String promptOverride,
+                                           String llmModelOverride) {
         AsrConfig asr = new AsrConfig(props.getAsrVendor(), props.getAsrLanguage(),
                 16000, java.util.List.of(), true);
-        LlmConfig llm = new LlmConfig(
-                props.getLlmVendor(), props.getLlmModel(), props.getSystemPrompt(), 0.7, 1024);
-        TtsConfig tts = TtsConfig.defaults(props.getTtsVendor(), props.getTtsVoice());
+        String prompt = promptOverride == null || promptOverride.isBlank()
+                ? props.getSystemPrompt() : promptOverride;
+        String llmModel = llmModelOverride == null || llmModelOverride.isBlank()
+                ? props.getLlmModel() : llmModelOverride;
+        LlmConfig llm = new LlmConfig(props.getLlmVendor(), llmModel, prompt, 0.7, 1024);
+        String voice = ttsVoiceOverride == null || ttsVoiceOverride.isBlank()
+                ? props.getTtsVoice() : ttsVoiceOverride;
+        TtsConfig tts = TtsConfig.defaults(props.getTtsVendor(), voice);
         S2sConfig s2s = new S2sConfig(
                 props.getS2sVendor(), props.getS2sModel(), props.getS2sVoice(),
-                props.getSystemPrompt(), AudioFormat.PCM);
+                prompt, AudioFormat.PCM);
         SessionContext.Mode initial = props.isS2sMode()
                 ? SessionContext.Mode.SPEECH_TO_SPEECH : SessionContext.Mode.PIPELINE;
         return SessionContext.combined(sessionId, null, initial, asr, llm, tts, s2s);

@@ -53,6 +53,46 @@ class SentenceSplitterTest {
                 .verifyComplete();
     }
 
+    /**
+     * 首句用更小的阈值: 体感延迟完全由第一句决定, 它切出来才能开始合成。
+     * 后续句子回到正常阈值, 不然整段都被切碎、语气发飘。
+     */
+    @Test
+    void firstSentenceIsCutEarlierThanTheRest() {
+        SentenceSplitter s = new SentenceSplitter(
+                new SentenceSplitterConfig("。！？", "，", 8, 40, 4, 16));
+
+        StepVerifier.create(s.split(tokensOf("今天是星期四，另外这一句要够长才在逗号处切，好的。")))
+                .expectNext("今天是星期四，")       // 首句 6 字 ≥ 4, 提前切出去开播
+                .expectNext("另外这一句要够长才在逗号处切，")   // 后续句按 8 字阈值
+                .expectNext("好的。")
+                .verifyComplete();
+    }
+
+    /** 首句没有任何标点时也要按 firstMaxChars 强制切, 否则第一句憋住 TTS */
+    @Test
+    void firstSentenceIsForceCutWithoutPunctuation() {
+        SentenceSplitter s = new SentenceSplitter(
+                new SentenceSplitterConfig("。", "，", 8, 40, 4, 6));
+
+        StepVerifier.create(s.split(tokensOf("一二三四五六七八九十甲乙")))
+                .expectNext("一二三四五六")   // 首句 6 字强制切
+                .expectNext("七八九十甲乙")   // 之后按 maxChars=40, 到流结束才吐残留
+                .verifyComplete();
+    }
+
+    /** 旧的四参构造仍可用: 首句与后续同阈值 */
+    @Test
+    void legacyConfigKeepsUniformThresholds() {
+        SentenceSplitter s = new SentenceSplitter(
+                new SentenceSplitterConfig("。", "，", 8, 40));
+
+        StepVerifier.create(s.split(tokensOf("短句，后面还有很长很长的一段内容需要凑够八个字，结束。")))
+                .expectNext("短句，后面还有很长很长的一段内容需要凑够八个字，")   // 首句也要 8 字才在逗号处切
+                .expectNext("结束。")
+                .verifyComplete();
+    }
+
     @Test
     void forceCutWhenExceedingMaxChars() {
         // 无任何分隔符的超长串, 到 maxChars 强制切

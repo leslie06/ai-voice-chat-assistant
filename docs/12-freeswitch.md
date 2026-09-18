@@ -256,8 +256,11 @@ vca-telephony/src/main/java/com/vca/telephony/
 | `max-call-seconds` | `VCA_TELEPHONY_MAX_CALL_SECONDS` | `300` | 单通上限 |
 | `vad.speech-threshold` | `VCA_TELEPHONY_VAD_SPEECH` | `0.02` | 开口判定音量 |
 | `vad.onset-ms` | `VCA_TELEPHONY_VAD_ONSETMS` | `150` | 持续多久算开口 |
-| `vad.silence-ms` | `VCA_TELEPHONY_VAD_SILENCE_MS` | `700` | 句尾静音判停 |
+| `vad.silence-ms` | `VCA_TELEPHONY_VAD_SILENCE_MS` | `500` | 句尾静音判停 |
 | `vad.barge-threshold` / `barge-ms` | `VCA_TELEPHONY_VAD_BARGE` / `VCA_TELEPHONY_VAD_BARGE_MS` | `0.025` / `250` | 打断判定 |
+| `system-prompt` | `VCA_TELEPHONY_SYSTEM_PROMPT` | `prompts.phone-agent` | 电话人设（短，见 §7.5） |
+| `llm-model` | `VCA_TELEPHONY_LLM_MODEL` | 空 | 电话对话模型；用通义时建议 `qwen-flash` |
+| `tools` | `VCA_TELEPHONY_TOOLS` | 空 | 电话回合下发的工具白名单，默认一个都不发 |
 
 完整项以 `TelephonyProperties` 和 `vca-bootstrap/src/main/resources/application.yml` 为准。
 
@@ -385,6 +388,42 @@ perl -e 'sleep 30; print "h\nq\n"' | pjsua --null-audio --no-vad --local-port 50
 
 ---
 
+## 7.5 延迟：从 7.5 秒降到 2 秒
+
+电话对延迟远比浏览器敏感——对面听不到回应，几秒钟就会"喂？喂？"。按"用户说完最后一个字"到"听见第一声回复"计时，
+用 pjsua 自动拨号实测（同一段提问音频，每项跑 3~4 通取平均）：
+
+| 环节 | 优化前 | 优化后 | 做了什么 |
+|---|---|---|---|
+| 判停 + 语音识别 | 0.9s | 0.8s | 句尾判停 700ms → 500ms（`vca.telephony.vad.silence-ms` 默认值已改） |
+| 自动联网注入 | 2.3s | 0 | 电话侧关掉（`TelephonyWiring` 写死 false）。客服问答用不上，而它每轮都要等搜索结果 |
+| 大模型首字 | 2.2s | 0.3s | 不下发工具（`vca.telephony.tools` 默认空）；换短人设（`prompts.phone-agent`）；换首字快的模型（`vca.telephony.llm-model=qwen-flash`） |
+| 合成首声 | 2.1s | 0.7s | 提前建连（见下） |
+| **合计（稳态）** | **7.5s** | **1.7~2.1s** | 进程刚启动的第一通约 3s，之后稳定 |
+
+三处值得单独说明：
+
+**合成提前建连。** 云厂商的合成每次都要新建 WebSocket，实测握手约 1.2 秒，而合成首帧只要 0.6 秒。
+原来是"第一句生成出来了才去建连"，这 1.2 秒完整落在用户的等待里。现在回合一开始（用户刚说完、还在识别）
+就调 `TtsProvider.prewarm` 把连接建好，握手与识别、生成完全重叠，第一句到了直接发文本。
+实现见 `AliyunTtsProvider.WarmSession`：用 Qwen-Audio-3.0 的流式输入协议，文本流必须用会暂存的
+`ReplayProcessor`——建连是异步的，大模型比握手快时用 `PublishProcessor` 会把这一句直接丢掉，
+线上表现是服务端收到 run-task 紧跟 finish-task、回一个 `task_failed`，这一轮没有声音。
+CosyVoice 不支持这个协议，自动退回逐句建连。
+
+**首句更早切出去。** 一轮回复的体感延迟完全由第一句决定——它切出来才能开始合成。所以首句用更小的阈值
+（`SentenceSplitterConfig` 的 `firstSoftCutMinChars=4` / `firstMaxChars=16`），后续句子仍按正常阈值，
+保证语气连贯。中文回复的开头（"好的，"/"今天是星期四，"）本来就能独立成句。
+
+**模型选型。** `qwen3.7-plus` 会先生成一段思考再吐第一个字，实测首字 8 秒以上（应用内因参数不同为 1~2 秒）；
+`qwen-flash` 稳定 0.3 秒。电话客服的问题大多是"几点开门""怎么走"，深度不是瓶颈，首字才是。
+换模型是配置项，不同厂商名字不同，所以默认留空（沿用浏览器的），用通义时建议设成 `qwen-flash`。
+
+> 这些优化只作用于电话链路：浏览器那边工具、联网、人设、模型都没变。共用的只有"首句更早切"与"合成提前建连"，
+> 两者对浏览器同样是纯收益。
+
+---
+
 ## 8. 排查
 
 | 现象 | 看哪里 / 原因 |
@@ -396,6 +435,7 @@ perl -e 'sleep 30; print "h\nq\n"' | pjsua --null-audio --no-vad --local-port 50
 | 外呼报 `MANDATORY_IE_MISSING` | 目录缺 `dial-string` |
 | Linphone 注册成功（绿点）但拨号卡住、报 Call could not be created | **账号 Domain 末尾多了空格**。注册请求带着空格碰巧认证通过，拨号时 Linphone 去掉了空格，找不到保存的密码，不再重发带认证的请求。删掉账号重新手输 `127.0.0.1` |
 | Linphone 拨号报 Call could not be created，顶部挂着"Appel en cours" | 上一通卡住的呼叫还在，Linphone 不让新建。点进去挂断，或 Cmd+Q 重开 |
+| 回复慢（说完到出声超过 3 秒） | 见 §7.5 的分段表，按日志里"判停+识别 / LLM 首 token / TTS 首音频"三个耗时定位是哪一段 |
 | 说了话 AI 没反应，日志"开口诊断"峰值不到 0.02 | 麦克风音量太小，或一个字太短没撑够 `onset-ms`。实测 Linphone 采到的"喂"峰值只有 0.054、超过门槛只有 100ms。调大 macOS 输入音量；本地测试可临时 `VCA_TELEPHONY_VAD_SPEECH=0.01 VCA_TELEPHONY_VAD_ONSETMS=100` |
 | AI 说两个字就自己停 | 外放回声被当成插话，戴耳机 |
 | FreeSWITCH 重启后外呼失败 | 正常，`EslClient` 会在 30 秒内自动重连，日志"已重连" |
@@ -422,7 +462,8 @@ docker exec vca-freeswitch fs_cli -p "$P" -x "sofia global siptrace on"         
 | 按键进对话（例如按键输入手机号） | 事件已到 `CallSession`，只打日志 |
 | 转人工 | 未实现（思路：`uuid_transfer` 或 `sendmsg execute bridge`） |
 | 并发路数上限 | 未实现，批量外呼前必须补 |
-| 电话 VAD 阈值 | 默认值是经验起步值，真实线路需用录音回归 |
+| 电话 VAD 阈值 | 默认值是经验起步值，真实线路需用录音回归。软电话麦克风偏小时用 `VCA_TELEPHONY_VAD_SPEECH=0.01 VCA_TELEPHONY_VAD_ONSETMS=100` |
+| 首通电话偏慢 | 进程刚启动时到大模型/合成的连接是冷的，第一通约 3 秒，之后 1.7~2.1 秒 |
 
 ---
 

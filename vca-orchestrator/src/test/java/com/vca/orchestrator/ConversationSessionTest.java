@@ -110,9 +110,11 @@ class ConversationSessionTest {
                 fakeLlm("今天天气不错，适合出去散步。你想去哪？"),
                 fakeTts(Duration.ZERO));
 
-        // 句子级流水线: 两句 → 两个音频块, 文本随块带出
+        // 句子级流水线: 边生成边切句 → 每句一个音频块, 文本随块带出。
+        // 首句在逗号处就切出去(首句阈值更小): 体感延迟只由第一块决定, 早一点开播就早一点出声。
         StepVerifier.create(session.handleUserTurn(dummyAudio()))
-                .expectNextMatches(c -> c.text().equals("今天天气不错，适合出去散步。"))
+                .expectNextMatches(c -> c.text().equals("今天天气不错，"))
+                .expectNextMatches(c -> c.text().equals("适合出去散步。"))
                 .expectNextMatches(c -> c.text().equals("你想去哪？"))
                 .verifyComplete();
 

@@ -31,4 +31,17 @@ public interface TtsProvider {
      * @return 音频块流
      */
     Flux<AudioChunk> synthesize(Flux<String> textSegments, TtsConfig cfg);
+
+    /**
+     * 预热: 回合一开始(用户刚说完、还在识别)就把合成连接建起来, 让建连与 ASR/LLM 重叠。
+     *
+     * <p>为什么值得单开一个方法: 云厂商的合成要新建 WebSocket, 实测握手约 1.2 秒, 而合成首帧只要 0.6 秒。
+     * 等第一句话生成出来再建连, 这 1.2 秒完整落在用户的等待里; 提前建好就几乎不可见。
+     *
+     * <p>约定: <b>调用它永远是可选的、无害的</b> —— 默认空实现; 预热了但没用上(空回复/打断/换了厂商)
+     * 由实现方自己回收。所以调用方不需要处理返回值, 也不需要成对调用。
+     */
+    default void prewarm(TtsConfig cfg) {
+        // 默认不预热
+    }
 }

@@ -624,10 +624,28 @@ public class ConversationSession {
      */
     public Flux<AudioChunk> handleUserTurn(Flux<AudioFrame> userAudio) {
         Sinks.One<Void> interrupt = beginTurn();
+        prewarmTts();
         Flux<AudioChunk> turn = mode == SessionContext.Mode.PIPELINE
                 ? pipelineTurn(userAudio)
                 : speechToSpeechTurn(userAudio);
         return finishTurn(turn, interrupt);
+    }
+
+    /**
+     * 回合一开始就让 TTS 把连接建起来(见 {@link TtsProvider#prewarm})。
+     *
+     * <p>放在这里而不是真要合成的时候: 云厂商建连要一秒上下, 而这一秒本来就能和"识别 + 大模型生成第一句"
+     * 完全重叠 —— 等第一句出来再建连, 这一秒就白白落在用户的等待里。预热失败或没用上都无害。
+     */
+    private void prewarmTts() {
+        if (tts == null || mode != SessionContext.Mode.PIPELINE || activeTtsConfig == null) {
+            return;
+        }
+        try {
+            tts.prewarm(activeTtsConfig);
+        } catch (RuntimeException e) {
+            log.debug("TTS 预热失败(忽略): {}", e.toString());
+        }
     }
 
     /**

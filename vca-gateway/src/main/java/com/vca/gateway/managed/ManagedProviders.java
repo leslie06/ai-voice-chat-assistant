@@ -32,6 +32,8 @@ import java.util.List;
  */
 public final class ManagedProviders {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ManagedProviders.class);
+
     private ManagedProviders() {
     }
 
@@ -148,6 +150,21 @@ public final class ManagedProviders {
                 TtsConfig vc = new TtsConfig(cand.vendor(), voice, cfg.format(),
                         cfg.sampleRate(), cfg.speed(), instruction);
                 return p.synthesize(textSegments, vc);
+            });
+        }
+
+        /**
+         * 预热只对<b>会话指定的厂商</b>做, 不遍历候选: 预热是纯优化, 猜错(真合成时故障转移到别家)
+         * 最多是白建一条连接, 由实现方自己回收; 为它去跑一遍熔断/配额选路反而喧宾夺主。
+         */
+        @Override
+        public void prewarm(TtsConfig cfg) {
+            registry.tts(cfg.vendor()).ifPresent(p -> {
+                try {
+                    p.prewarm(cfg);
+                } catch (RuntimeException e) {
+                    log.debug("TTS 预热失败(忽略, 不影响本回合): {}", e.toString());
+                }
             });
         }
     }

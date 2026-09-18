@@ -1,11 +1,19 @@
 package com.vca.bootstrap;
 
 import com.vca.orchestrator.session.TurnListener;
+import com.vca.orchestrator.skill.Skill;
+import com.vca.orchestrator.skill.SkillRegistry;
+import com.vca.telephony.TelephonyProperties;
 import com.vca.telephony.session.CallConversationFactory;
 import com.vca.web.session.ConversationSessionFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
 
 /**
  * 把电话接入层接到编排层。
@@ -28,15 +36,52 @@ import org.springframework.context.annotation.Configuration;
 @ConditionalOnProperty(prefix = "vca.telephony", name = "enabled", havingValue = "true")
 public class TelephonyWiring {
 
+    private static final Logger log = LoggerFactory.getLogger(TelephonyWiring.class);
+
     /**
      * 一路通话一个编排会话。{@code callId} 用的是媒体服务器的通道 id(FreeSWITCH 的 Unique-ID /
      * Asterisk AudioSocket 的 UUID), 同时当 sessionId 落库, 因此通话记录能和媒体服务器侧的通道、录音对上。
      *
      * <p>{@code userId} 为 null: 电话对端是外部客户, 不是本系统的登录用户, 不该启用跨会话个人记忆。
      * {@code TurnListener} 暂用 NOOP —— 等做意向分级时, 这里换成把 ASR/回复文本喂给打分器的实现。
+     *
+     * <p>与浏览器的两处差异经 {@link ConversationSessionFactory.Overrides} 传入:
+     * <ul>
+     *   <li><b>工具按 {@code vca.telephony.tools} 白名单过滤, 默认一个都不发</b> —— 工具声明每轮都随 prompt
+     *       送进模型, 直接抬高首个 token 的延迟, 而浏览器那套工具在电话客服里用不上;</li>
+     *   <li>音色取 {@code vca.telephony.tts-voice}(留空则沿用浏览器的), 与开场白预合成用的是同一个值;</li>
+     *   <li>人设取 {@code vca.telephony.system-prompt} —— 浏览器那套六百多字且专讲工具用法, 电话上是纯开销;</li>
+     *   <li>对话模型取 {@code vca.telephony.llm-model} —— 电话要的是首字快, 不是想得深;</li>
+     *   <li><b>关掉自动联网注入</b> —— 实测一次注入 2.3 秒, 是体感延迟里最大的一块。</li>
+     * </ul>
      */
     @Bean
-    CallConversationFactory callConversationFactory(ConversationSessionFactory factory) {
-        return callId -> factory.create(callId, null, TurnListener.NOOP);
+    CallConversationFactory callConversationFactory(ConversationSessionFactory factory,
+                                                    TelephonyProperties props,
+                                                    ObjectProvider<Skill> skills) {
+        ConversationSessionFactory.Overrides overrides = new ConversationSessionFactory.Overrides(
+                telephonySkills(props.getTools(), skills), props.getTtsVoice(), props.getSystemPrompt(),
+                props.getLlmModel(),
+                false);   // 电话不做自动联网注入: 实测一次 2.3 秒, 是体感延迟里最大的一块
+        return callId -> factory.create(callId, null, TurnListener.NOOP, overrides);
+    }
+
+    /** 按名字过滤出电话侧允许用的工具。名字写错不静默 —— 打一条 warn, 否则会变成"配了但没生效"。 */
+    private static SkillRegistry telephonySkills(List<String> allowed, ObjectProvider<Skill> skills) {
+        if (allowed == null || allowed.isEmpty()) {
+            log.info("电话回合不下发工具(vca.telephony.tools 为空) —— 为压低首字延迟");
+            return SkillRegistry.empty();
+        }
+        List<Skill> picked = skills.orderedStream()
+                .filter(s -> allowed.contains(s.name()))
+                .toList();
+        List<String> missing = allowed.stream()
+                .filter(name -> picked.stream().noneMatch(s -> s.name().equals(name)))
+                .toList();
+        if (!missing.isEmpty()) {
+            log.warn("vca.telephony.tools 里这些工具不存在, 已忽略: {}", missing);
+        }
+        log.info("电话回合下发工具: {}", picked.stream().map(Skill::name).toList());
+        return new SkillRegistry(picked);
     }
 }
