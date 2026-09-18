@@ -72,6 +72,18 @@ public interface CallLeg {
     /** 信令事件流 */
     Flux<CallEvent> events();
 
+    /**
+     * 转人工: 把这一路通话桥接到 {@code dialString} 指定的分机/号码, 之后本进程不再参与对话。
+     *
+     * <p>{@code dialString} 是<b>媒体服务器的拨号串</b>(如 {@code sofia/gateway/trunk/13800138000}),
+     * 由接入层按配置拼好 —— 号码怎么拨出去是线路的事, 技能层只知道"转给谁"。
+     *
+     * @return false = 该接入层不支持转接(默认), 上层据此告诉客户"转不过去"而不是假装转了
+     */
+    default boolean transfer(String dialString) {
+        return false;
+    }
+
     /** 主动挂机 */
     void hangup(String reason);
 }

@@ -177,3 +177,22 @@ CREATE TABLE IF NOT EXISTS knowledge_chunk (
     KEY idx_chunk_user (user_id, id),
     KEY idx_chunk_doc (doc_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'RAG 文档切块';
+
+-- 电话线索: 客户在通话里留下的预约/留资信息。按 owner_id(商家账号)归属, 与知识库同一个账号体系。
+-- call_id 与 conversation_turn.session_id、录音文件名一致, 凭它能回听这通电话。
+CREATE TABLE IF NOT EXISTS phone_lead (
+    id             BIGINT       NOT NULL AUTO_INCREMENT,
+    call_id        VARCHAR(64)  NOT NULL,
+    owner_id       BIGINT       NOT NULL COMMENT '商家账号 id',
+    peer_number    VARCHAR(32)  COMMENT '来电号码; 线路没送号时为空',
+    called_number  VARCHAR(32)  COMMENT '客户拨打的号码(商家接入号)',
+    name           VARCHAR(64)  COMMENT '客户称呼',
+    phone          VARCHAR(32)  COMMENT '客户留的回电号码',
+    intent         VARCHAR(255) COMMENT '意向/想做的项目',
+    preferred_time VARCHAR(128) COMMENT '期望到店或回电时间(客户原话)',
+    note           VARCHAR(512) COMMENT '备注',
+    created_at     DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    KEY idx_lead_owner (owner_id, id),
+    KEY idx_lead_call (call_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '电话线索';

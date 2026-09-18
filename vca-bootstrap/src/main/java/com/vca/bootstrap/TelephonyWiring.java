@@ -3,7 +3,11 @@ package com.vca.bootstrap;
 import com.vca.orchestrator.session.TurnListener;
 import com.vca.orchestrator.skill.Skill;
 import com.vca.orchestrator.skill.SkillRegistry;
+import com.vca.orchestrator.lead.LeadStore;
 import com.vca.telephony.TelephonyProperties;
+import com.vca.telephony.skill.EndCallSkill;
+import com.vca.telephony.skill.SaveLeadSkill;
+import com.vca.telephony.skill.TransferToHumanSkill;
 import com.vca.telephony.session.CallConversationFactory;
 import com.vca.web.session.ConversationSessionFactory;
 import org.slf4j.Logger;
@@ -13,6 +17,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -60,14 +65,49 @@ public class TelephonyWiring {
     @Bean
     CallConversationFactory callConversationFactory(ConversationSessionFactory factory,
                                                     TelephonyProperties props,
-                                                    ObjectProvider<Skill> skills) {
-        ConversationSessionFactory.Overrides overrides = new ConversationSessionFactory.Overrides(
-                telephonySkills(props.getTools(), skills), props.getTtsVoice(), props.getSystemPrompt(),
-                props.getLlmModel(),
-                false,    // 电话不做自动联网注入: 实测一次 2.3 秒, 是体感延迟里最大的一块
-                props.getKnowledgeOwner());
+                                                    ObjectProvider<Skill> skills,
+                                                    ObjectProvider<LeadStore> leads) {
+        List<Skill> shared = telephonySkills(props.getTools(), skills);
         logKnowledge(props.getKnowledgeOwner());
-        return callId -> factory.create(callId, null, TurnListener.NOOP, overrides);
+        logAgentTools(props);
+        LeadStore leadStore = leads.getIfAvailable(() -> LeadStore.NOOP);
+        return call -> {
+            // 电话专用工具按通话建: 通话 id、来电号码、转给谁都是这一路的事实, 不该让模型去传
+            List<Skill> all = new ArrayList<>(shared);
+            all.addAll(agentTools(props, call, leadStore));
+            ConversationSessionFactory.Overrides overrides = new ConversationSessionFactory.Overrides(
+                    new SkillRegistry(all), props.getTtsVoice(), props.getSystemPrompt(), props.getLlmModel(),
+                    false,    // 电话不做自动联网注入: 实测一次 2.3 秒, 是体感延迟里最大的一块
+                    props.getKnowledgeOwner());
+            return factory.create(call.callId(), null, TurnListener.NOOP, overrides);
+        };
+    }
+
+    /** 按 {@code vca.telephony.agent-tools} 建这一路通话的电话专用工具。 */
+    private static List<Skill> agentTools(TelephonyProperties props, CallConversationFactory.CallContext call,
+                                          LeadStore leadStore) {
+        List<String> on = props.getAgentTools();
+        List<Skill> tools = new ArrayList<>(3);
+        if (on.contains(SaveLeadSkill.NAME)) {
+            tools.add(new SaveLeadSkill(leadStore, call, props.getKnowledgeOwner()));
+        }
+        // 没配坐席号码就不下发: 宁可 AI 说"我让同事回电", 也不能让客户在转不出去的电话里干等
+        if (on.contains(TransferToHumanSkill.NAME) && !props.getTransferDialString().isBlank()) {
+            tools.add(new TransferToHumanSkill(call, props.getTransferDialString()));
+        }
+        if (on.contains(EndCallSkill.NAME)) {
+            tools.add(new EndCallSkill(call.callId(), call.endCall()));
+        }
+        return tools;
+    }
+
+    private static void logAgentTools(TelephonyProperties props) {
+        List<String> on = new ArrayList<>(props.getAgentTools());
+        if (props.getTransferDialString().isBlank()) {
+            on.remove(TransferToHumanSkill.NAME);
+        }
+        log.info("电话专用工具: {}{}", on.isEmpty() ? "无" : on,
+                props.getTransferDialString().isBlank() ? " (未配坐席号码, 转人工不下发)" : "");
     }
 
     private static void logKnowledge(String owner) {
@@ -78,11 +118,11 @@ public class TelephonyWiring {
         }
     }
 
-    /** 按名字过滤出电话侧允许用的工具。名字写错不静默 —— 打一条 warn, 否则会变成"配了但没生效"。 */
-    private static SkillRegistry telephonySkills(List<String> allowed, ObjectProvider<Skill> skills) {
+    /** 按名字过滤出电话侧允许用的<b>通用</b>工具(浏览器那套里挑)。名字写错不静默, 否则会变成"配了但没生效"。 */
+    private static List<Skill> telephonySkills(List<String> allowed, ObjectProvider<Skill> skills) {
         if (allowed == null || allowed.isEmpty()) {
-            log.info("电话回合不下发工具(vca.telephony.tools 为空) —— 为压低首字延迟");
-            return SkillRegistry.empty();
+            log.info("电话不下发浏览器那套通用工具(vca.telephony.tools 为空) —— 为压低首字延迟");
+            return List.of();
         }
         List<Skill> picked = skills.orderedStream()
                 .filter(s -> allowed.contains(s.name()))
@@ -93,7 +133,7 @@ public class TelephonyWiring {
         if (!missing.isEmpty()) {
             log.warn("vca.telephony.tools 里这些工具不存在, 已忽略: {}", missing);
         }
-        log.info("电话回合下发工具: {}", picked.stream().map(Skill::name).toList());
-        return new SkillRegistry(picked);
+        log.info("电话额外下发的通用工具: {}", picked.stream().map(Skill::name).toList());
+        return picked;
     }
 }

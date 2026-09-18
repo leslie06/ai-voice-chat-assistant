@@ -225,6 +225,55 @@ class CallSessionTest {
         assertThat(call.pendingPlaybackMs()).isZero();
     }
 
+    /**
+     * end_call 工具置位后, 必须等缓冲里的告别语播完才挂 —— 直接挂客户只能听到半句。
+     */
+    @Test
+    void hangupAfterPlaybackWaitsForTheFarewellToFinish() {
+        FakeCallLeg leg = new FakeCallLeg();
+        CallSession call = callSession(leg, new AtomicInteger(), new byte[640]);   // 2 帧告别语
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        call.hangupAfterPlayback();
+
+        call.tick();                     // 第 1 帧
+        assertThat(call.isClosed()).isFalse();
+        call.tick();                     // 第 2 帧, 播完
+        assertThat(call.isClosed()).isFalse();
+        call.tick();                     // 缓冲已空 → 这时才挂
+        assertThat(call.isClosed()).isTrue();
+        assertThat(leg.hangupReason).isEqualTo("agent-ended");
+        assertThat(leg.written).hasSize(2);
+    }
+
+    /**
+     * 回归: 工具是在回合<b>进行中</b>置的位(告别语还没合成), 此刻缓冲本来就是空的。
+     * 只看"缓冲空了"就挂, 客户一个字都听不到 —— 必须等本轮产完。
+     */
+    @Test
+    void hangupAfterPlaybackDoesNotFireWhileTheTurnIsStillProducing() {
+        FakeCallLeg leg = new FakeCallLeg();
+        AtomicInteger turns = new AtomicInteger();
+        CallSession call = callSession(leg, turns, null);
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        speakThenPause(leg);                      // 起一轮: 此时回合还在产音频
+        call.hangupAfterPlayback();               // 工具在回合中途置位
+        for (int i = 0; i < 3; i++) {
+            call.tick();
+        }
+        assertThat(call.isClosed()).as("回合还没产完, 不能挂").isFalse();
+
+        // 等这一轮把音频产完并播完
+        awaitUntil(() -> call.pendingPlaybackMs() > 0, Duration.ofSeconds(3));
+        for (int i = 0; i < 400 && !call.isClosed(); i++) {
+            call.tick();
+        }
+        assertThat(call.isClosed()).isTrue();
+        assertThat(leg.hangupReason).isEqualTo("agent-ended");
+        assertThat(leg.written).isNotEmpty();     // 告别语确实播出去了
+    }
+
     /** 客户开口 → 成一轮 → 回复经降采样进缓冲, 且只按实时节奏出去 */
     @Test
     void customerSpeechDrivesTurnAndReplyIsPaced() {

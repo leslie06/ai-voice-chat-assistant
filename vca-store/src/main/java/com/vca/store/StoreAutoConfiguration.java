@@ -25,6 +25,7 @@ import com.vca.store.mapper.ChatMessageMapper;
 import com.vca.store.embed.CachingEmbedder;
 import com.vca.store.embed.DashScopeEmbedder;
 import com.vca.store.embed.Embedder;
+import com.vca.orchestrator.lead.LeadStore;
 import com.vca.store.knowledge.KnowledgeRoutes;
 import com.vca.store.knowledge.KnowledgeService;
 import com.vca.store.knowledge.MyBatisKnowledgeStore;
@@ -33,6 +34,8 @@ import com.vca.store.mapper.ConversationRecordingMapper;
 import com.vca.store.mapper.EvaluationMapper;
 import com.vca.store.mapper.KnowledgeChunkMapper;
 import com.vca.store.mapper.KnowledgeDocMapper;
+import com.vca.store.mapper.PhoneLeadMapper;
+import com.vca.store.lead.MyBatisLeadStore;
 import com.vca.store.mapper.UserMemoryMapper;
 import com.vca.store.mapper.UserMusicPlayMapper;
 import com.vca.store.mapper.UserMusicUploadMapper;
@@ -386,6 +389,20 @@ public class StoreAutoConfiguration {
         }, "embedder-prewarm");
         t.setDaemon(true);
         t.start();
+    }
+
+    // ---- 电话线索: 通话里客户留下的预约/联系信息, 归属到商家账号 ----
+
+    @Bean
+    @ConditionalOnMissingBean
+    PhoneLeadMapper phoneLeadMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, PhoneLeadMapper.class);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(LeadStore.class)
+    LeadStore leadStore(PhoneLeadMapper mapper) {
+        return new MyBatisLeadStore(mapper);
     }
 
     // ---- 长期记忆(跨会话个性化): remember 工具写入, 每轮对话回灌上下文(语义召回) ----

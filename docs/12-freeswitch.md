@@ -262,6 +262,8 @@ vca-telephony/src/main/java/com/vca/telephony/
 | `llm-model` | `VCA_TELEPHONY_LLM_MODEL` | 空 | 电话对话模型；用通义时建议 `qwen-flash` |
 | `tools` | `VCA_TELEPHONY_TOOLS` | 空 | 电话回合下发的工具白名单，默认一个都不发 |
 | `knowledge-owner` | `VCA_TELEPHONY_KNOWLEDGE_OWNER` | 空 | 按谁的知识库作答（商家账号 id），见 §7.6 |
+| `agent-tools` | `VCA_TELEPHONY_AGENT_TOOLS` | 三个全开 | 电话专用工具，见 §7.7 |
+| `transfer-dial-string` | `VCA_TELEPHONY_TRANSFER_DIAL_STRING` | 空 | 转人工桥接到哪里；留空则不下发该工具 |
 
 完整项以 `TelephonyProperties` 和 `vca-bootstrap/src/main/resources/application.yml` 为准。
 
@@ -471,6 +473,55 @@ curl -X POST http://<服务地址>/api/knowledge \
 
 ---
 
+## 7.7 客服工具：留资、转人工、主动挂机
+
+知识库解决"答得上来"，这三个工具解决"这通电话有产出"。它们**按通话建实例**，不是进程级单例——
+通话 id、来电号码、转给谁都是这一路的事实，让模型去传只会填错。
+
+| 工具 | 什么时候触发 | 做了什么 |
+|---|---|---|
+| `save_lead` | 客户要预约、要回电，或留了姓名/电话/项目/时间 | 写进 `phone_lead` 表（归属到商家账号），结果回灌给模型，由它用自己的话确认 |
+| `transfer_to_human` | 客户要找真人，或问到投诉、退费、病情判断 | 让 FreeSWITCH `bridge` 到坐席，之后本进程不再参与对话 |
+| `end_call` | 客户说"没别的了""再见" | **说完告别语再挂**，不是立刻挂 |
+
+```yaml
+vca:
+  telephony:
+    agent-tools: save_lead,transfer_to_human,end_call   # 默认全开
+    transfer-dial-string: ${VCA_TELEPHONY_TRANSFER_DIAL_STRING:}  # 坐席拨号串, 留空=不下发转人工工具
+```
+
+**主动挂机为什么要等两个条件。** 告别语是在工具返回之后才生成、合成的，工具执行的那一刻下行缓冲本来就是空的。
+只看"缓冲空了"就挂，客户一个字都听不到（实测复现过）。所以条件是**本轮已产完（`turnSubscription == null`）且缓冲已排空**。
+
+**转人工用 `bridge` 而不是 `uuid_transfer`。** bridge 直接在本通道上执行，用的就是 socket 应用那条已建好的连接，
+不需要另开一条 ESL——呼入场景可能根本没开外呼那条。桥接后通道离开停泊状态，unicast 随之停止，正是我们要的：
+剩下的对话归坐席，而挂机事件仍从信令连接回来，会话照常收尾落库。
+
+**没配坐席号码时不下发这个工具**，AI 会说"我让同事回电给您"，而不是假装转接、让客户对着静音等。
+
+**实测（本机）：**
+
+```
+客户: 我想约个时间做种植牙，我姓王，这周六上午方便。
+AI  : 王女士，您的种植牙面诊预约已登记，稍后会有专人联系您确认。   ← phone_lead 落库
+客户: 好的，没有别的问题了，再见。
+AI  : 好的，感谢您的来电，再见。                                 ← 播完后 4 秒挂断(agent-ended)
+```
+
+```sql
+SELECT * FROM phone_lead ORDER BY id DESC LIMIT 1;
+-- owner_id=11, peer_number=1000, name=王女士, intent=种植牙面诊, preferred_time=这周六上午
+```
+
+**代价：调工具的那一轮慢一倍。** 工具要多走一次"模型决定调用 → 执行 → 结果回灌 → 模型再组织回答"，
+实测从 2 秒左右变成 3.7 秒。这是 function-calling 的固有成本，所以电话侧只放这三个工具。
+
+**人设里要点名这几件事**（`prompts.phone-agent`）：客户说再见时调 `end_call`；全程只说中文
+（qwen-flash 偶尔会蹦出 "goodbye"，电话里念出来很突兀）。不写清楚的话模型有时不调工具，只回一句话。
+
+---
+
 ## 8. 排查
 
 | 现象 | 看哪里 / 原因 |
@@ -507,7 +558,8 @@ docker exec vca-freeswitch fs_cli -p "$P" -x "sofia global siptrace on"         
 | 按被叫号码路由到不同商家的话术、知识库 | 号码已拿到，路由未实现（知识库现在是单个归属） |
 | 电话里的知识库检索 | 已完成（§7.6）。多商家按被叫号码路由还没做 |
 | 按键进对话（例如按键输入手机号） | 事件已到 `CallSession`，只打日志 |
-| 转人工 | 未实现（思路：`uuid_transfer` 或 `sendmsg execute bridge`） |
+| 留资 / 转人工 / 主动挂机 | 已完成（§7.7） |
+| 通话后摘要推送给商家 | 未实现 |
 | 并发路数上限 | 未实现，批量外呼前必须补 |
 | 电话 VAD 阈值 | 默认值是经验起步值，真实线路需用录音回归。软电话麦克风偏小时用 `VCA_TELEPHONY_VAD_SPEECH=0.01 VCA_TELEPHONY_VAD_ONSETMS=100` |
 | 首通电话偏慢 | 进程刚启动时到大模型/合成的连接是冷的，第一通约 3 秒，之后 1.7~2.1 秒 |

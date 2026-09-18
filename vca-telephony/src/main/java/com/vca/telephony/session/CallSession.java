@@ -65,6 +65,8 @@ public final class CallSession {
 
     private volatile boolean answered;
     private volatile boolean closed;
+    /** AI 说完这句就挂机(由 end_call 工具置位) —— 必须等缓冲播完, 否则客户听不到告别语 */
+    private volatile boolean hangupAfterPlayback;
 
     /** 回合代号: 每开启一轮 +1, 打断时也 +1。只有"当前代号"的下行音频会进缓冲。 */
     private volatile long epoch;
@@ -288,6 +290,13 @@ public final class CallSession {
                 return;
             }
             frame = pacing.nextFrame();
+            // 必须同时满足"本轮已产完"与"缓冲已排空"。只看缓冲是不够的: 工具是在回合<b>进行中</b>
+            // 置的位, 那一刻告别语还没合成出来、缓冲本来就是空的, 只看缓冲会立刻挂断, 客户一个字都听不到。
+            if (frame == null && hangupAfterPlayback && turnSubscription == null) {
+                log.info("[{}] 告别语已播完, 按 AI 的判断挂机", leg.callId());
+                close("agent-ended");
+                return;
+            }
             if (frame == null && resumeEpoch >= 0 && resumeEpoch == epoch) {
                 resumeEpoch = -1;
                 vad.resumeListening();   // 已播完, 现在回到聆听才不会关掉打断窗口
@@ -299,6 +308,14 @@ public final class CallSession {
         if (frame != null) {
             leg.writeAudio(frame);   // 网络 IO 放锁外
         }
+    }
+
+    /**
+     * 说完当前这段就挂机。给 {@code end_call} 这类"AI 判断该结束了"的工具用:
+     * 直接挂会把告别语掐掉, 所以只置位, 由 {@link #tick()} 在<b>本轮产完且缓冲排空</b>后执行。
+     */
+    public void hangupAfterPlayback() {
+        hangupAfterPlayback = true;
     }
 
     /** 机器人此刻是否还在出声 —— 缓冲里还有没有货就是精确答案, 不用估算。 */

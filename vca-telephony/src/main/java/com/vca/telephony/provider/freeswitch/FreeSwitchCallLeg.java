@@ -165,6 +165,36 @@ public final class FreeSwitchCallLeg implements CallLeg {
     }
 
     /**
+     * 转人工: 让 FreeSWITCH 把这一路桥接到坐席。
+     *
+     * <p>用 {@code sendmsg execute bridge} 而不是 {@code uuid_transfer}: bridge 直接在本通道上执行,
+     * 用的就是我们这条已经建好的连接, 不需要另开 ESL(呼入场景可能根本没开外呼那条连接)。
+     *
+     * <p>桥接之后通道离开停泊状态, unicast 随之停止, 本进程不再收发音频 —— 这正是我们要的:
+     * 剩下的对话归坐席。挂机事件仍会从这条信令连接上来, 会话照常收尾、照常落库。
+     */
+    @Override
+    public boolean transfer(String dialString) {
+        if (finished.get() || dialString == null || dialString.isBlank()) {
+            return false;
+        }
+        try {
+            synchronized (writeLock) {
+                out.write(EslMessage.command("sendmsg",
+                        "call-command", "execute",
+                        "execute-app-name", "bridge",
+                        "execute-app-arg", dialString));
+                out.flush();
+            }
+            log.info("[{}] 转人工: bridge {}", callId, dialString);
+            return true;
+        } catch (IOException | RuntimeException e) {
+            log.warn("[{}] 转人工失败: {}", callId, e.toString());
+            return false;
+        }
+    }
+
+    /**
      * 主动挂机: 让 FreeSWITCH 挂断通道, 然后半关连接等它自己断开。
      * <b>不能发完就 close</b>: 我们这边接收缓冲里往往还有没读的事件, 此时 close 会发 RST,
      * 对端可能在读到挂机指令之前就先收到 RST, 通道就挂在那里直到停泊超时。

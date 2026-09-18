@@ -35,6 +35,7 @@ import org.springframework.web.reactive.function.server.ServerResponse;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 /**
@@ -215,8 +216,20 @@ public class TelephonyAutoConfiguration {
         boolean outbound = pendingCalls.attach(leg);
         log.info("[{}] 建立通话会话: 方向={}, 对端={}, 被叫={}",
                 leg.callId(), outbound ? "外呼" : "呼入", leg.peerNumber(), leg.calledNumber());
-        CallSession call = new CallSession(leg, conversations.create(leg.callId()),
+        // 先占位再回填: 会话要在 CallSession 之前建好(它是构造参数), 而 end_call 工具又要能挂这通电话。
+        // 一个 holder 打破这个循环, 工具真正被调用时 CallSession 早已就位。
+        AtomicReference<CallSession> self = new AtomicReference<>();
+        CallConversationFactory.CallContext ctx = new CallConversationFactory.CallContext(
+                leg.callId(), leg.peerNumber(), leg.calledNumber(), leg,
+                () -> {
+                    CallSession s = self.get();
+                    if (s != null) {
+                        s.hangupAfterPlayback();
+                    }
+                });
+        CallSession call = new CallSession(leg, conversations.create(ctx),
                 props.toVadConfig(), vadDetectorFactory.get(), props.toCallConfig(), greeting);
+        self.set(call);
         call.start();
     }
 

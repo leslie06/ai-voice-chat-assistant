@@ -39,8 +39,20 @@ public class TelephonyProperties {
      * 而浏览器那套工具(点歌、天气、联网搜索、记忆)在电话客服里基本用不上 —— 电话对延迟远比浏览器敏感。
      * 等做了留资/转人工这类电话专用工具, 在这里按名字放行即可, 例如
      * {@code vca.telephony.tools=search_knowledge}。
+     *
+     * <p><b>电话专用工具(留资/转人工/挂机)不在这里配</b>: 它们是按通话建的, 由
+     * {@code vca.telephony.agent-tools} 控制。
      */
     private List<String> tools = new ArrayList<>();
+
+    /**
+     * 电话专用工具开关(按通话建实例): {@code save_lead} 留资、{@code transfer_to_human} 转人工、
+     * {@code end_call} 主动挂机。
+     *
+     * <p><b>默认三个全开</b> —— 它们正是"电话客服"与"能打电话的聊天机器人"的区别所在。
+     * 每多一个工具, 工具声明都会随 prompt 进模型、抬高一点首字延迟, 所以只放这三个, 用不上的可以关。
+     */
+    private List<String> agentTools = new ArrayList<>(List.of("save_lead", "transfer_to_human", "end_call"));
 
     /**
      * 电话回合的人设。<b>留空则沿用浏览器那套</b>({@code vca.web.system-prompt}), 但不建议:
@@ -67,6 +79,15 @@ public class TelephonyProperties {
      * 现在先支持一个 —— 单店试点够用, 也避免过早为没落地的产品形态建表。
      */
     private String knowledgeOwner = "";
+
+    /**
+     * 转人工时桥接到哪里。填<b>媒体服务器的拨号串</b>, 例如接中继时
+     * {@code sofia/gateway/trunk/13800138000}(商家的手机), 本地联调时 {@code user/1000}。
+     *
+     * <p><b>留空 = 不下发转人工工具</b> —— 宁可 AI 说"我让同事回电给您", 也不能让客户在一通转不出去的
+     * 电话里干等。
+     */
+    private String transferDialString = "";
 
     /** [Asterisk] AudioSocket 监听端口。Asterisk 的 dialplan 会连到这里。 */
     private int port = 9092;
@@ -564,6 +585,22 @@ public class TelephonyProperties {
 
     public List<String> getTools() {
         return tools;
+    }
+
+    public List<String> getAgentTools() {
+        return agentTools;
+    }
+
+    public void setAgentTools(List<String> agentTools) {
+        this.agentTools = agentTools == null ? new ArrayList<>() : agentTools;
+    }
+
+    public String getTransferDialString() {
+        return transferDialString;
+    }
+
+    public void setTransferDialString(String transferDialString) {
+        this.transferDialString = transferDialString == null ? "" : transferDialString;
     }
 
     public String getKnowledgeOwner() {
