@@ -362,10 +362,30 @@ public class StoreAutoConfiguration {
         log.info("Embedding 已启用: model={}, dim={}", props.getEmbeddingModel(), props.getEmbeddingDim());
         // 套一层缓存/在途去重: 同一回合里长期记忆召回与 RAG 检索 embed 的是同一句用户输入,
         // 不收口就是同时打两次一模一样的请求(多一份配额、更易吃 429)。见 CachingEmbedder。
-        return new CachingEmbedder(
+        Embedder embedder = new CachingEmbedder(
                 new DashScopeEmbedder(props.getEmbeddingBaseUrl(), props.getEmbeddingKey(),
                         props.getEmbeddingModel(), props.getEmbeddingDim(), props.getEmbeddingProxy()),
                 EMBEDDING_CACHE_ENTRIES);
+        prewarm(embedder);
+        return embedder;
+    }
+
+    /**
+     * 启动时先打一次 embedding, 把到厂商的 HTTPS 连接建起来。
+     *
+     * <p>实测首次调用 1.6 秒、之后 0.5 秒 —— 差的就是连接握手。不预热的话这一秒半会落在<b>第一个打进来的客户</b>
+     * 身上(RAG 在大模型之前, 完整计入他的等待)。后台线程跑, 失败只记一行 debug, 绝不影响启动。
+     */
+    private static void prewarm(Embedder embedder) {
+        Thread t = new Thread(() -> {
+            try {
+                embedder.embed("预热");
+            } catch (Exception e) {
+                log.debug("Embedding 预热失败(忽略): {}", e.toString());
+            }
+        }, "embedder-prewarm");
+        t.setDaemon(true);
+        t.start();
     }
 
     // ---- 长期记忆(跨会话个性化): remember 工具写入, 每轮对话回灌上下文(语义召回) ----

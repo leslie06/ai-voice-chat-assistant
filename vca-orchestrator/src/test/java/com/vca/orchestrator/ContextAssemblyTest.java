@@ -146,6 +146,71 @@ class ContextAssemblyTest {
         assertThat(systems.get(3)).contains("今日头条");
     }
 
+    /**
+     * 电话场景: 对端没有登录身份, 但要查<b>商家</b>的知识库。
+     * 所以知识库归属可以与登录用户分开指定, 且指定之后不需要 userId 也能检索。
+     */
+    @Test
+    void knowledgeCanBeScopedToAnOwnerWithoutALoggedInUser() throws Exception {
+        AtomicReference<List<Message>> seen = new AtomicReference<>();
+        // 没有登录用户的会话(电话就是这样)
+        SessionContext ctx = SessionContext.pipeline(
+                "call-1", null,
+                AsrConfig.defaults(VendorType.ALIYUN),
+                LlmConfig.defaults(VendorType.DEEPSEEK, "deepseek-chat"),
+                TtsConfig.defaults(VendorType.ALIYUN, "longxiaochun"));
+        ConversationSession session = new ConversationSession(
+                ctx, null, capturingLlm(seen), silentTts(), null, new SentenceSplitter());
+
+        List<String> askedFor = new CopyOnWriteArrayList<>();
+        session.setKnowledge((ownerId, query) -> {
+            askedFor.add(ownerId);
+            return List.of("种植牙 8800 元起，周一至周六 9:00-18:00");
+        }, "42");
+
+        CountDownLatch done = new CountDownLatch(1);
+        session.handleTextTurn("种植牙多少钱").subscribe(c -> {
+        }, e -> done.countDown(), done::countDown);
+        assertThat(done.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // 按商家账号检索, 而不是按(不存在的)登录用户
+        assertThat(askedFor).containsExactly("42");
+        List<String> systems = seen.get().stream()
+                .filter(m -> m.role() == Message.Role.SYSTEM)
+                .map(Message::content)
+                .toList();
+        assertThat(systems).anyMatch(m -> m.contains("种植牙 8800 元起"));
+    }
+
+    /** 没指定归属时仍按登录用户检索 —— 浏览器那条链路的行为不能变 */
+    @Test
+    void knowledgeFallsBackToLoggedInUser() throws Exception {
+        AtomicReference<List<Message>> seen = new AtomicReference<>();
+        ConversationSession session = session(capturingLlm(seen));
+        List<String> askedFor = new CopyOnWriteArrayList<>();
+        session.setMemory(new MemoryStore() {
+            @Override
+            public List<String> recall(String userId, String query) {
+                return List.of();
+            }
+
+            @Override
+            public void remember(String userId, String content) {
+            }
+        }, "7");
+        session.setKnowledge((ownerId, query) -> {
+            askedFor.add(ownerId);
+            return List.of("公司年假 15 天");
+        });
+
+        CountDownLatch done = new CountDownLatch(1);
+        session.handleTextTurn("年假几天").subscribe(c -> {
+        }, e -> done.countDown(), done::countDown);
+        assertThat(done.await(5, TimeUnit.SECONDS)).isTrue();
+
+        assertThat(askedFor).containsExactly("7");
+    }
+
     @Test
     void disabledRetrievalsCostNoThreadHop() throws Exception {
         AtomicReference<List<Message>> seen = new AtomicReference<>();

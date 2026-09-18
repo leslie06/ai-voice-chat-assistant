@@ -67,10 +67,12 @@ public class ConversationSessionFactory {
      * @param llmModel      本路会话的对话模型; 留空 = 用 {@code vca.web.llm-model}
      * @param webSearchAuto 是否允许自动联网注入; null = 用 {@code vca.web.web-search-auto}。
      *                      电话侧关掉它 —— 实测一次注入要 2.3 秒, 是体感延迟里最大的一块
+     * @param knowledgeOwner 按谁的知识库检索(账号 id)。浏览器留空(按登录用户); 电话填商家账号 ——
+     *                       对端是外部客户、没有登录身份, 要查的是商家上传的项目/价格/营业时间
      */
     public record Overrides(SkillRegistry skills, String ttsVoice, String systemPrompt, String llmModel,
-                           Boolean webSearchAuto) {
-        private static final Overrides NONE = new Overrides(null, null, null, null, null);
+                           Boolean webSearchAuto, String knowledgeOwner) {
+        private static final Overrides NONE = new Overrides(null, null, null, null, null, null);
 
         public static Overrides none() {
             return NONE;
@@ -109,6 +111,10 @@ public class ConversationSessionFactory {
         if (userId != null && !userId.isBlank()) {
             session.setMemory(memory, userId);
             session.setKnowledge(knowledge);   // RAG 自动注入按同一登录用户隔离
+        }
+        // 接入层指定了知识库归属(电话=商家账号): 查商家的资料, 但不启用个人记忆 —— 对端不是本系统用户
+        if (ov.knowledgeOwner() != null && !ov.knowledgeOwner().isBlank()) {
+            session.setKnowledge(knowledge, ov.knowledgeOwner());
         }
         return session;
     }

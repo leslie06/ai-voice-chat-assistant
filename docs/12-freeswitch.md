@@ -261,6 +261,7 @@ vca-telephony/src/main/java/com/vca/telephony/
 | `system-prompt` | `VCA_TELEPHONY_SYSTEM_PROMPT` | `prompts.phone-agent` | 电话人设（短，见 §7.5） |
 | `llm-model` | `VCA_TELEPHONY_LLM_MODEL` | 空 | 电话对话模型；用通义时建议 `qwen-flash` |
 | `tools` | `VCA_TELEPHONY_TOOLS` | 空 | 电话回合下发的工具白名单，默认一个都不发 |
+| `knowledge-owner` | `VCA_TELEPHONY_KNOWLEDGE_OWNER` | 空 | 按谁的知识库作答（商家账号 id），见 §7.6 |
 
 完整项以 `TelephonyProperties` 和 `vca-bootstrap/src/main/resources/application.yml` 为准。
 
@@ -424,6 +425,52 @@ CosyVoice 不支持这个协议，自动退回逐句建连。
 
 ---
 
+## 7.6 知识库：让它答得出诊所的价格和营业时间
+
+电话客服 80% 的问题是"多少钱""几点上班""在哪"，靠人设是答不了的，必须查商家自己的资料。
+
+**为什么要单配一个归属。** 知识库按账号隔离（`knowledge_chunk.user_id`），浏览器那边每个人查自己上传的资料；
+而电话对端是外部客户，没有登录身份。所以电话侧由配置指定**按谁的知识库检索**：
+
+```yaml
+vca:
+  telephony:
+    knowledge-owner: ${VCA_TELEPHONY_KNOWLEDGE_OWNER:}   # 商家账号 id(app_user.id), 留空=电话里没有知识库
+```
+
+实现上把"知识库归属"和"登录用户"解耦了（`ConversationSession.setKnowledge(store, ownerId)`）：
+电话因此**有知识库但没有个人记忆**——记忆仍按登录用户走，电话对端不是本系统用户，不该给他建记忆。
+
+**商家怎么传资料。** 商家用自己的账号登录网页，把资料传进现成的接口，txt / md / pdf 都行：
+
+```bash
+curl -X POST http://<服务地址>/api/knowledge \
+  -H "Authorization: Bearer <该账号的 token>" \
+  -F "file=@诊所资料.txt"
+# {"ok":true,"chunks":1}
+```
+
+资料写成"一问一答"或分条列清楚即可，检索是按语义召回 top-5 片段（相似度低于 0.30 的不注入）。
+
+**实测（本机，一份诊所资料）：**
+
+| 问题 | 回答 | 识别完成 → 出声 |
+|---|---|---|
+| 请问你们周日几点上班？ | 周日 9 点到 12 点上班。 | 2.15s |
+| 洗牙多少钱？ | 普通洁牙 180 元，喷砂洁牙 380 元。 | 1.30s |
+
+两处要注意：
+
+- **检索给延迟加了约 0.5 秒**（向量化一次 query + 余弦召回），它在大模型之前，完整计入体感延迟。
+  首次调用因为 HTTPS 握手要 1.6 秒，所以启动时会后台打一次 embedding 预热（`StoreAutoConfiguration.prewarm`），
+  否则这一秒半会落在第一个打进来的客户身上。
+- **人设里要求"具体信息说全"**。不加这条时，问"周日上班吗"它会答"正常上班"——对就诊的人毫无用处；
+  加上之后答"周日 9 点到 12 点"。见 `prompts.phone-agent`。
+
+多商家（按被叫号码路由到不同商家的知识库）还没做，现在是单个归属，单店试点够用。
+
+---
+
 ## 8. 排查
 
 | 现象 | 看哪里 / 原因 |
@@ -457,8 +504,8 @@ docker exec vca-freeswitch fs_cli -p "$P" -x "sofia global siptrace on"         
 | 项 | 状态 |
 |----|------|
 | 真实 SIP 中继呼入/外呼 | 未联调 |
-| 按被叫号码路由到不同商家的话术、知识库 | 号码已拿到，路由未实现 |
-| 电话里的知识库检索 | `TelephonyWiring` 传的 userId 为空，知识库与个人记忆绑在一起，电话里暂时没有 |
+| 按被叫号码路由到不同商家的话术、知识库 | 号码已拿到，路由未实现（知识库现在是单个归属） |
+| 电话里的知识库检索 | 已完成（§7.6）。多商家按被叫号码路由还没做 |
 | 按键进对话（例如按键输入手机号） | 事件已到 `CallSession`，只打日志 |
 | 转人工 | 未实现（思路：`uuid_transfer` 或 `sendmsg execute bridge`） |
 | 并发路数上限 | 未实现，批量外呼前必须补 |

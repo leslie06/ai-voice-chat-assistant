@@ -52,7 +52,9 @@ public class TelephonyWiring {
      *   <li>音色取 {@code vca.telephony.tts-voice}(留空则沿用浏览器的), 与开场白预合成用的是同一个值;</li>
      *   <li>人设取 {@code vca.telephony.system-prompt} —— 浏览器那套六百多字且专讲工具用法, 电话上是纯开销;</li>
      *   <li>对话模型取 {@code vca.telephony.llm-model} —— 电话要的是首字快, 不是想得深;</li>
-     *   <li><b>关掉自动联网注入</b> —— 实测一次注入 2.3 秒, 是体感延迟里最大的一块。</li>
+     *   <li><b>关掉自动联网注入</b> —— 实测一次注入 2.3 秒, 是体感延迟里最大的一块;</li>
+     *   <li>知识库按 {@code vca.telephony.knowledge-owner}(商家账号)检索, 但<b>不启用个人记忆</b> ——
+     *       电话对端是外部客户, 不是本系统的登录用户。</li>
      * </ul>
      */
     @Bean
@@ -62,8 +64,18 @@ public class TelephonyWiring {
         ConversationSessionFactory.Overrides overrides = new ConversationSessionFactory.Overrides(
                 telephonySkills(props.getTools(), skills), props.getTtsVoice(), props.getSystemPrompt(),
                 props.getLlmModel(),
-                false);   // 电话不做自动联网注入: 实测一次 2.3 秒, 是体感延迟里最大的一块
+                false,    // 电话不做自动联网注入: 实测一次 2.3 秒, 是体感延迟里最大的一块
+                props.getKnowledgeOwner());
+        logKnowledge(props.getKnowledgeOwner());
         return callId -> factory.create(callId, null, TurnListener.NOOP, overrides);
+    }
+
+    private static void logKnowledge(String owner) {
+        if (owner == null || owner.isBlank()) {
+            log.info("电话未接知识库(vca.telephony.knowledge-owner 为空) —— 商家资料类问题只能靠人设兜底");
+        } else {
+            log.info("电话知识库归属: 账号 {}", owner);
+        }
     }
 
     /** 按名字过滤出电话侧允许用的工具。名字写错不静默 —— 打一条 warn, 否则会变成"配了但没生效"。 */

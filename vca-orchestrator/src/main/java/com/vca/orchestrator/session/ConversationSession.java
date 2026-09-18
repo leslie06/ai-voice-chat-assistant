@@ -141,6 +141,8 @@ public class ConversationSession {
     private volatile boolean agentEnabled = false;
     /** 当前登录用户 id(账号系统启用且已登录时非空); 用于长期记忆/知识库按用户隔离 */
     private volatile String userId;
+    /** 知识库归属(电话=商家账号); 为空则按登录用户检索 */
+    private volatile String knowledgeOwner;
     /**
      * 待附加图片(data URL): 前端发图后暂存于此, 由<b>下一个</b>走 LLM 的回合(打字/三段式语音)取走,
      * 作为该轮用户消息的图片。取走即清空; 一图一轮。
@@ -277,9 +279,26 @@ public class ConversationSession {
         this.userId = userId;
     }
 
-    /** 设置知识库检索端口(RAG); 未设则不检索。userId 由 {@link #setMemory} 一并设置(同一登录用户)。 */
+    /** 设置知识库检索端口(RAG), 按登录用户检索; 未设则不检索。userId 由 {@link #setMemory} 一并设置。 */
     public void setKnowledge(KnowledgeStore knowledge) {
+        setKnowledge(knowledge, null);
+    }
+
+    /**
+     * 设置知识库检索端口(RAG)并<b>指定按谁的知识库检索</b>。
+     *
+     * <p>{@code ownerId} 为空时按登录用户({@link #setMemory} 设的 userId)检索 —— 浏览器就是这样,
+     * 每个人查自己上传的资料。电话不一样: 对端是外部客户、没有登录身份, 要查的是<b>商家</b>的资料
+     * (项目、价格、营业时间), 所以由接入层把商家账号传进来。这也是"电话有知识库但没有个人记忆"的由来。
+     */
+    public void setKnowledge(KnowledgeStore knowledge, String ownerId) {
         this.knowledge = knowledge == null ? KnowledgeStore.NOOP : knowledge;
+        this.knowledgeOwner = ownerId == null || ownerId.isBlank() ? null : ownerId;
+    }
+
+    /** 本会话按谁的知识库检索: 显式指定的归属优先, 否则是登录用户。 */
+    private String knowledgeOwner() {
+        return knowledgeOwner != null ? knowledgeOwner : userId;
     }
 
     /** 设置联网搜索端口及自动注入参数; 未设则不联网。联网信息非个人数据, 不分用户。 */
@@ -346,7 +365,7 @@ public class ConversationSession {
      */
     private Mono<List<Message>> assembleContext(String userText) {
         boolean memBlocking = memory != MemoryStore.NOOP && userId != null;
-        boolean kbBlocking = knowledge != KnowledgeStore.NOOP && userId != null
+        boolean kbBlocking = knowledge != KnowledgeStore.NOOP && knowledgeOwner() != null
                 && userText != null && !userText.isBlank();
         boolean webBlocking = webSearchAuto && webSearch != WebSearchProvider.NOOP
                 && WebSearchHeuristic.isTimeSensitive(userText);
@@ -425,17 +444,18 @@ public class ConversationSession {
     }
 
     /**
-     * 据当前问题自动检索知识库, 命中则拼成一条 system 上下文注入本回合(没命中/未登录返回 null)。
+     * 据当前问题自动检索知识库, 命中则拼成一条 system 上下文注入本回合(没命中/没有归属返回 null)。
      * 这是<b>自动注入</b>式 RAG: 不依赖模型自己决定调 search_knowledge 工具, 凡问题能召回到相关资料就直接喂给它,
      * 召回为空(阈值过滤)时不注入、不影响闲聊。条数/阈值由 {@link KnowledgeStore#search} 实现决定。
      */
     private String knowledgeContext(String query) {
-        if (knowledge == KnowledgeStore.NOOP || userId == null || query == null || query.isBlank()) {
+        String owner = knowledgeOwner();
+        if (knowledge == KnowledgeStore.NOOP || owner == null || query == null || query.isBlank()) {
             return null;
         }
         List<String> hits;
         try {
-            hits = knowledge.search(userId, query);
+            hits = knowledge.search(owner, query);
         } catch (Exception e) {
             log.debug("知识库检索失败(忽略): {}", e.toString());
             return null;
@@ -444,7 +464,7 @@ public class ConversationSession {
             return null;
         }
         StringBuilder sb = new StringBuilder(
-                "从用户知识库检索到以下相关资料, 回答时<b>优先据此作答</b>(与你的预设不一致时以资料为准):");
+                "从知识库检索到以下相关资料, 回答时优先据此作答(与你的预设不一致时以资料为准):");
         for (String h : hits) {
             if (h != null && !h.isBlank()) {
                 sb.append("\n- ").append(h.strip());

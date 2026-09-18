@@ -57,6 +57,17 @@ public class TelephonyProperties {
      */
     private String llmModel = "";
 
+    /**
+     * 电话按谁的知识库作答(账号 id, 即 {@code app_user.id})。<b>留空 = 电话里没有知识库</b>。
+     *
+     * <p>为什么要单配一个: 知识库按账号隔离, 而电话对端是外部客户、没有登录身份。这里填的是<b>商家</b>的账号,
+     * 商家用网页登录后把项目、价格、营业时间传进 {@code POST /api/knowledge}, 电话里就能据此作答。
+     *
+     * <p>多商家时这里会换成"按被叫号码({@link com.vca.telephony.spi.CallLeg#calledNumber})查商家"的映射,
+     * 现在先支持一个 —— 单店试点够用, 也避免过早为没落地的产品形态建表。
+     */
+    private String knowledgeOwner = "";
+
     /** [Asterisk] AudioSocket 监听端口。Asterisk 的 dialplan 会连到这里。 */
     private int port = 9092;
 
@@ -553,6 +564,14 @@ public class TelephonyProperties {
 
     public List<String> getTools() {
         return tools;
+    }
+
+    public String getKnowledgeOwner() {
+        return knowledgeOwner;
+    }
+
+    public void setKnowledgeOwner(String knowledgeOwner) {
+        this.knowledgeOwner = knowledgeOwner == null ? "" : knowledgeOwner;
     }
 
     public String getLlmModel() {
