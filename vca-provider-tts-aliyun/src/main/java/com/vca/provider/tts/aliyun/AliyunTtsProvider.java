@@ -240,8 +240,6 @@ public class AliyunTtsProvider implements TtsProvider {
          */
         private final ReplayProcessor<String> textStream = ReplayProcessor.create();
         private final Flux<AudioChunk> audio;
-        /** replay().connect() 的句柄: 关连接只能靠它 —— 见 {@link #cancelQuietly()} */
-        private final reactor.core.Disposable connection;
         private final AtomicBoolean used = new AtomicBoolean();
         private final long openedAtNanos = System.nanoTime();
         private final String model;
@@ -269,7 +267,7 @@ public class AliyunTtsProvider implements TtsProvider {
                     .concatMap(r -> toChunk(r, warmSeq))
                     .onErrorMap(AliyunTtsProvider::toProviderException)
                     .replay();
-            this.connection = hot.connect();   // 立刻订阅 = 立刻握手建连
+            hot.connect();   // 立刻订阅 = 立刻握手建连
             this.audio = hot;
         }
 
@@ -312,22 +310,27 @@ public class AliyunTtsProvider implements TtsProvider {
         }
 
         /**
-         * 关掉这条连接。<b>两步都要做</b>: {@code streamingCancel()} 只在任务已经真正跑起来时有效,
-         * 一条建好却还没喂过文本的连接它是管不着的 —— 那种连接会一直挂到服务端的空闲超时(约 23s),
-         * 在日志里留下一条时间上离事发回合很远的 task-failed。退订 {@code replay().connect()} 拿到的
-         * 句柄才是真正把 WebSocket 拆掉的那一步。
+         * 收掉这条连接。
+         *
+         * <p><b>关键是第一步</b>: 结束上行文本流 = 让 SDK 发 finish-task, 这是唯一能让服务端立刻
+         * 了结任务的动作。实测 {@code streamingCancel()} 和退订 Reactor 侧都做不到 —— 一条建好却
+         * 还没喂过文本的连接, 两者都拦不住它挂到服务端的空闲超时(约 23s), 然后在日志里留下一条
+         * task-failed; 那个时间点离事发回合已经很远, 排查时极具误导性。
+         *
+         * <p>{@code streamingCancel()} 仍要调: 播到一半被打断时, 任务是真跑起来了的, 得让服务端
+         * 别再往下合成。
          */
         private void cancelQuietly() {
+            try {
+                textStream.onComplete();
+            } catch (Exception e) {
+                log.debug("结束 TTS 预热连接的文本流: {}", e.toString());
+            }
             try {
                 synthesizer.streamingCancel();
             } catch (Exception e) {
                 // 任务已正常结束时取消会抛, 属正常情况
                 log.debug("取消 TTS 预热连接: {}", e.toString());
-            }
-            try {
-                connection.dispose();
-            } catch (Exception e) {
-                log.debug("关闭 TTS 预热连接: {}", e.toString());
             }
         }
     }
