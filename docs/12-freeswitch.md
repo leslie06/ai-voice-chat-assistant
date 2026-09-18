@@ -258,16 +258,16 @@ vca-telephony/src/main/java/com/vca/telephony/
 | `vad.onset-ms` | `VCA_TELEPHONY_VAD_ONSETMS` | `150` | 持续多久算开口 |
 | `vad.silence-ms` | `VCA_TELEPHONY_VAD_SILENCE_MS` | `500` | 句尾静音判停 |
 | `vad.barge-threshold` / `barge-ms` | `VCA_TELEPHONY_VAD_BARGE` / `VCA_TELEPHONY_VAD_BARGE_MS` | `0.025` / `250` | 打断判定 |
-| `system-prompt` | `VCA_TELEPHONY_SYSTEM_PROMPT` | `prompts.phone-agent` | 电话人设（短，见 §7.5） |
+| `system-prompt` | `VCA_TELEPHONY_SYSTEM_PROMPT` | `prompts.phone-agent` | 电话人设（短，见 §8） |
 | `llm-model` | `VCA_TELEPHONY_LLM_MODEL` | 空 | 电话对话模型；用通义时建议 `qwen-flash` |
 | `tools` | `VCA_TELEPHONY_TOOLS` | 空 | 电话回合下发的工具白名单，默认一个都不发 |
-| `knowledge-owner` | `VCA_TELEPHONY_KNOWLEDGE_OWNER` | 空 | 按谁的知识库作答（商家账号 id），见 §7.6 |
-| `agent-tools` | `VCA_TELEPHONY_AGENT_TOOLS` | 三个全开 | 电话专用工具，见 §7.7 |
+| `knowledge-owner` | `VCA_TELEPHONY_KNOWLEDGE_OWNER` | 空 | 按谁的知识库作答（商家账号 id），见 §9 |
+| `agent-tools` | `VCA_TELEPHONY_AGENT_TOOLS` | 三个全开 | 电话专用工具，见 §10 |
 | `transfer-dial-string` | `VCA_TELEPHONY_TRANSFER_DIAL_STRING` | 空 | 转人工桥接到哪里；留空则不下发该工具 |
-| `summary.enabled` | `VCA_TELEPHONY_SUMMARY_ENABLED` | `true` | 通话后小结，见 §7.8 |
+| `summary.enabled` | `VCA_TELEPHONY_SUMMARY_ENABLED` | `true` | 通话后小结，见 §11 |
 | `summary.min-duration-sec` | `VCA_TELEPHONY_SUMMARY_MIN_SEC` | `10` | 短于此的通话不摘要 |
 | `summary.webhook-url` | `VCA_TELEPHONY_SUMMARY_WEBHOOK` | 空 | 小结推送地址（企业微信/钉钉群机器人 URL 直接填） |
-| `merchants[n].*` | `VCA_TELEPHONY_MERCHANTS_n_*` | 空 | 多商家，按被叫号码路由，见 §7.9 |
+| `merchants[n].*` | `VCA_TELEPHONY_MERCHANTS_n_*` | 空 | 多商家，按被叫号码路由，见 §12 |
 
 完整项以 `TelephonyProperties` 和 `vca-bootstrap/src/main/resources/application.yml` 为准。
 
@@ -373,10 +373,74 @@ perl -e 'sleep 30; print "h\nq\n"' | pjsua --null-audio --no-vad --local-port 50
 
 ## 7. 部署到服务器与接真实线路
 
-> 以下是方案，**尚未联调**。第一通真实电话之前，先拨 `6000` 回声测试，再看本项目的 `media-wait-ms` 超时日志。
+> 配置与脚本都已就位并在本机验证过（空中继/假中继两种状态都能正常起、软电话链路不受影响），
+> **但没有真实线路可联调**。第一通真实电话之前，先按 §7.4 的顺序验。
 
-**同机部署（推荐）**：FreeSWITCH 与本项目在同一台机器上、不用容器（或容器用 host 网络）时，
-把 `dialplan.xml` 里的三处地址都改成 `127.0.0.1`：
+### 7.1 先决定走哪条路
+
+| 路子 | 适合 | 要准备什么 | 成本 |
+|---|---|---|---|
+| **FXO 语音网关** | 单店试点、个人身份也能做 | 一个 FXO 网关（几百元），接商家现有的座机线 | 设备费，无资质门槛 |
+| **SIP 中继** | 多店、要统一号码 | 企业资质（个体户不行，见 [10](./10-telephony-outbound.md)），向云通信厂商申请 | 号码月租 + 分钟费 |
+
+两条路对 FreeSWITCH 来说是同一件事：**一个 SIP 对端**。区别只是地址在局域网还是公网、认证方式是账号还是 IP 白名单。
+所以配置项是同一套。
+
+### 7.2 配置
+
+在 `deploy/freeswitch/.env` 里加（这个文件不进仓库）：
+
+```bash
+# 中继/网关地址。FXO 网关填它的局域网 IP，SIP 中继填厂商给的地址
+TRUNK_HOST=192.168.1.88
+TRUNK_NAME=trunk                # 拨号串里用它: sofia/gateway/trunk/<号码>
+# 账号密码式(FXO 网关、给了账号的中继)。IP 白名单式就把这三项留空
+TRUNK_USER=8001
+TRUNK_PASSWORD=******
+TRUNK_REALM=                    # 留空 = 用 TRUNK_HOST
+# 放行哪些来源把电话送进来。必配, 不配则全部拒接
+TRUNK_ACL=192.168.1.88/32
+# 服务器的公网 IP(中继在公网时必填, 否则"能接通但没声音")
+EXTERNAL_IP=47.95.248.104
+# 5080 要能被中继访问到
+SIP_BIND=0.0.0.0
+```
+
+外呼改走中继（`.env.phone`）：
+
+```bash
+VCA_FS_ESL_ENABLED=true
+VCA_FS_ESL_ENDPOINT=sofia/gateway/trunk/{number}
+```
+
+改完 **重启容器**（不是 `reloadxml`）：`cd deploy/freeswitch && docker compose up -d --force-recreate`。
+
+### 7.3 这些配置做了什么
+
+- **中继走独立的 SIP 通道**（`external`，端口 5080），与软电话那条（`internal`，5060）彻底分开。
+  中继按 IP 认、不做摘要认证；软电话必须认证。放一个通道里就得在"给中继开口子"和"不给扫号者开口子"之间二选一。
+- **来电落在 `ai-inbound` context**，那里只有一条规则：不管被叫是哪个号码都交给 AI。
+  号码本身随通道数据交给本项目，由它按 `merchants` 认领是哪家商家（§12）。
+- **白名单是第一道防线**。5060/5080 一旦在公网上，几分钟内就会有人来扫号盗打。
+  `TRUNK_ACL` 之外的来源一律拒接，云服务器安全组上再收一道（只对中继 IP 放行 5080 和 RTP 端口段）。
+
+### 7.4 接上之后按这个顺序验
+
+```bash
+cd deploy/freeswitch && ./trunk-status.sh        # 通道/中继/白名单/最近的拒接, 一屏看完
+```
+
+1. **中继状态。** 账号密码式应为 `REGED`；IP 白名单式是 `NOREG`，那是正常的。
+2. **打进来。** 用手机拨那个号码，听到开场白即通。没通就 `./trunk-status.sh --trace` 打开 SIP 报文跟踪，
+   看 `docker logs -f vca-freeswitch`：收不到 INVITE 是线路/安全组的事；收到但被拒多半是白名单。
+3. **听得见声音。** 能接通但双方无声，九成是 `EXTERNAL_IP` 没配成公网 IP。
+4. **窄带识别率。** 真实线路的电平和噪声与软电话不同，先用几通真实通话看日志里的"开口诊断"，
+   再决定要不要调 `VCA_TELEPHONY_VAD_SPEECH`（软电话那组 0.01 是偏低的，真实线路多半用得上默认 0.02）。
+5. **打出去。** `POST /telephony/calls` 拨自己的手机（§3）。
+
+### 7.5 同机部署（FreeSWITCH 与本项目在一台服务器上）
+
+不用容器、或容器用 host 网络时，把 `dialplan.xml` 里三处地址都改成 `127.0.0.1`：
 
 ```xml
 <action application="set" data="vca_media_local_ip=127.0.0.1"/>
@@ -384,29 +448,11 @@ perl -e 'sleep 30; print "h\nq\n"' | pjsua --null-audio --no-vad --local-port 50
 <action application="socket" data="127.0.0.1:8084 async full"/>
 ```
 
-`vca_media_local_ip` 改回 127.0.0.1 很重要：`0.0.0.0` 会让 unicast 口暴露在网卡上，被人往通话里灌音频。
-
-**接 SIP 中继**：在 sofia profile 里加网关，参数以中继厂商给的为准：
-
-```xml
-<gateways>
-  <gateway name="trunk">
-    <param name="proxy" value="<中继地址:端口>"/>
-    <param name="register" value="false"/>   <!-- IP 白名单对接一般不注册 -->
-  </gateway>
-</gateways>
-```
-
-需要同时做的事：
-
-- **呼入。** 中继打进来的呼叫不带分机认证，要给中继 IP 单独放行（profile 的 `apply-inbound-acl`），并把被叫号码路由到 `vca-connect`。
-- **外呼。** `VCA_FS_ESL_ENDPOINT=sofia/gateway/trunk/{number}`。
-- **公网暴露面。** 5060 只对中继 IP 放行（安全组），8021、8084 永远不对外。
-- **多商家。** 按 `CallLeg.calledNumber()` 区分客户打给了哪一家（FreeSWITCH 已提供，路由逻辑还没写）。
+`vca_media_local_ip` 改回 `127.0.0.1` 很重要：`0.0.0.0` 会让 unicast 口暴露在网卡上，被人往通话里灌音频。
 
 ---
 
-## 7.5 延迟：从 7.5 秒降到 2 秒
+## 8. 延迟：从 7.5 秒降到 2 秒
 
 电话对延迟远比浏览器敏感——对面听不到回应，几秒钟就会"喂？喂？"。按"用户说完最后一个字"到"听见第一声回复"计时，
 用 pjsua 自动拨号实测（同一段提问音频，每项跑 3~4 通取平均）：
@@ -442,7 +488,7 @@ CosyVoice 不支持这个协议，自动退回逐句建连。
 
 ---
 
-## 7.6 知识库：让它答得出诊所的价格和营业时间
+## 9. 知识库：让它答得出诊所的价格和营业时间
 
 电话客服 80% 的问题是"多少钱""几点上班""在哪"，靠人设是答不了的，必须查商家自己的资料。
 
@@ -488,7 +534,7 @@ curl -X POST http://<服务地址>/api/knowledge \
 
 ---
 
-## 7.7 客服工具：留资、转人工、主动挂机
+## 10. 客服工具：留资、转人工、主动挂机
 
 知识库解决"答得上来"，这三个工具解决"这通电话有产出"。它们**按通话建实例**，不是进程级单例——
 通话 id、来电号码、转给谁都是这一路的事实，让模型去传只会填错。
@@ -537,7 +583,7 @@ SELECT * FROM phone_lead ORDER BY id DESC LIMIT 1;
 
 ---
 
-## 7.8 通话后小结：让漏接的电话变成一条消息
+## 11. 通话后小结：让漏接的电话变成一条消息
 
 商家不会去听录音。挂机后把这通电话压成"两三句摘要 + 一个意向等级"推到群里，才是他们真正会看的东西。
 
@@ -584,7 +630,7 @@ vca:
 
 ---
 
-## 7.9 多商家：一套服务给多家店用
+## 12. 多商家：一套服务给多家店用
 
 按**客户拨的号码**区分商家。呼入时这个号码就是"打给了哪一家"，FreeSWITCH 在 socket 握手时就给了我们
 （`Caller-Destination-Number`），不需要额外对账——这是当初从 AudioSocket 换过来的收益之一。
@@ -636,7 +682,7 @@ VCA_TELEPHONY_MERCHANTS_0_KNOWLEDGE_OWNER=11
 
 ---
 
-## 8. 排查
+## 13. 排查
 
 | 现象 | 看哪里 / 原因 |
 |------|---------------|
@@ -647,7 +693,7 @@ VCA_TELEPHONY_MERCHANTS_0_KNOWLEDGE_OWNER=11
 | 外呼报 `MANDATORY_IE_MISSING` | 目录缺 `dial-string` |
 | Linphone 注册成功（绿点）但拨号卡住、报 Call could not be created | **账号 Domain 末尾多了空格**。注册请求带着空格碰巧认证通过，拨号时 Linphone 去掉了空格，找不到保存的密码，不再重发带认证的请求。删掉账号重新手输 `127.0.0.1` |
 | Linphone 拨号报 Call could not be created，顶部挂着"Appel en cours" | 上一通卡住的呼叫还在，Linphone 不让新建。点进去挂断，或 Cmd+Q 重开 |
-| 回复慢（说完到出声超过 3 秒） | 见 §7.5 的分段表，按日志里"判停+识别 / LLM 首 token / TTS 首音频"三个耗时定位是哪一段 |
+| 回复慢（说完到出声超过 3 秒） | 见 §8 的分段表，按日志里"判停+识别 / LLM 首 token / TTS 首音频"三个耗时定位是哪一段 |
 | 说了话 AI 没反应，日志"开口诊断"峰值不到 0.02 | 麦克风音量太小，或一个字太短没撑够 `onset-ms`。实测 Linphone 采到的"喂"峰值只有 0.054、超过门槛只有 100ms。调大 macOS 输入音量；本地测试可临时 `VCA_TELEPHONY_VAD_SPEECH=0.01 VCA_TELEPHONY_VAD_ONSETMS=100` |
 | AI 说两个字就自己停 | 外放回声被当成插话，戴耳机 |
 | FreeSWITCH 重启后外呼失败 | 正常，`EslClient` 会在 30 秒内自动重连，日志"已重连" |
@@ -664,16 +710,16 @@ docker exec vca-freeswitch fs_cli -p "$P" -x "sofia global siptrace on"         
 
 ---
 
-## 9. 限制与待办
+## 14. 限制与待办
 
 | 项 | 状态 |
 |----|------|
-| 真实 SIP 中继呼入/外呼 | 未联调 |
-| 多商家自助开通 | 已实现按号码路由（§7.9），但配置驱动、加一家要重启；自助开通需要改成查库 |
-| 电话里的知识库检索 | 已完成（§7.6）。多商家按被叫号码路由还没做 |
+| 真实线路 | 配置与体检脚本已就位（§7），但没有线路可联调 |
+| 多商家自助开通 | 已实现按号码路由（§12），但配置驱动、加一家要重启；自助开通需要改成查库 |
+| 电话里的知识库检索 | 已完成（§9），按商家隔离 |
 | 按键进对话（例如按键输入手机号） | 事件已到 `CallSession`，只打日志 |
-| 留资 / 转人工 / 主动挂机 | 已完成（§7.7） |
-| 通话后小结 + 推送 | 已完成（§7.8）。邮件/短信通道未做，目前只有 webhook |
+| 留资 / 转人工 / 主动挂机 | 已完成（§10） |
+| 通话后小结 + 推送 | 已完成（§11）。邮件/短信通道未做，目前只有 webhook |
 | 意向分级的准确率 | 只在本机用几通模拟通话看过，真实通话需要积累样本再调分级标准 |
 | 并发路数上限 | 未实现，批量外呼前必须补 |
 | 电话 VAD 阈值 | 默认值是经验起步值，真实线路需用录音回归。软电话麦克风偏小时用 `VCA_TELEPHONY_VAD_SPEECH=0.01 VCA_TELEPHONY_VAD_ONSETMS=100` |
@@ -681,7 +727,7 @@ docker exec vca-freeswitch fs_cli -p "$P" -x "sofia global siptrace on"         
 
 ---
 
-## 10. 关键文件索引
+## 15. 关键文件索引
 
 | 用途 | 文件 |
 |------|------|
@@ -693,6 +739,7 @@ docker exec vca-freeswitch fs_cli -p "$P" -x "sofia global siptrace on"         
 | 装配与配置 | `vca-telephony/.../TelephonyAutoConfiguration.java`、`TelephonyProperties.java` |
 | FreeSWITCH 配置 | `deploy/freeswitch/conf/`，接入本项目的地方在 `dialplan.xml` |
 | 一键启动脚本 | `start-phone.sh`（参数样例 `.env.phone.example`） |
+| 中继体检 | `deploy/freeswitch/trunk-status.sh` |
 | 本地环境说明 | `deploy/freeswitch/README.md` |
 | 单测（测试替身扮演 FreeSWITCH） | `vca-telephony/src/test/.../provider/freeswitch/` |
 | 选型与整体方案 | [10 · 电话接入](./10-telephony-outbound.md) |

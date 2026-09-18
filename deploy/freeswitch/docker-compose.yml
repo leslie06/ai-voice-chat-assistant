@@ -17,12 +17,24 @@ services:
       # VCA 跑在宿主机上, 容器里用 host.docker.internal 访问
       VCA_HOST: ${VCA_HOST:-host.docker.internal}
       VCA_PORT: ${VCA_PORT:-8084}
+      # SIP 中继 / 语音网关(接真实电话线路时才需要, 见 README)。TRUNK_HOST 为空 = 没有中继。
+      TRUNK_HOST: ${TRUNK_HOST:-}
+      TRUNK_NAME: ${TRUNK_NAME:-trunk}
+      TRUNK_USER: ${TRUNK_USER:-}
+      TRUNK_PASSWORD: ${TRUNK_PASSWORD:-}
+      TRUNK_REALM: ${TRUNK_REALM:-}
+      TRUNK_FROM_USER: ${TRUNK_FROM_USER:-}
+      # 放行哪些来源把电话送进来(逗号分隔 CIDR)。不配则谁都进不来。
+      TRUNK_ACL: ${TRUNK_ACL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
       # 默认只绑回环: SIP 端口一旦暴露到网络上就会被扫号盗打
       - "${SIP_BIND:-127.0.0.1}:5060:5060/udp"
       - "${SIP_BIND:-127.0.0.1}:5060:5060/tcp"
+      # 5080 是中继专用通道。默认同样只绑回环; 接真实线路时设 SIP_BIND=0.0.0.0,
+      # 并在云服务器安全组里只对中继的 IP 放行这个端口(白名单在 FreeSWITCH 里还有一道)。
+      - "${SIP_BIND:-127.0.0.1}:5080:5080/udp"
       - "${SIP_BIND:-127.0.0.1}:16384-16403:16384-16403/udp"
       # 事件套接字只给本机的 VCA 用(外呼), 永远不对外。
       # 宿主机侧默认 18021 而不是 8021: macOS 上 8021 常被 launchd 占着(ftp-proxy)

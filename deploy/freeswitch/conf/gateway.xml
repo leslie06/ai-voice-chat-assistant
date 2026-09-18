@@ -1,0 +1,12 @@
+<!--
+  SIP 中继 / 语音网关。由 entrypoint.sh 按 deploy/freeswitch/.env 里的 TRUNK_* 渲染;
+  没配 TRUNK_HOST 时整个文件是空的(就是没有中继)。
+
+  两种对接方式, 由 TRUNK_USER 有没有值决定:
+    ① IP 白名单(register=false): 云中继、机房拉的线常用。对方认我们的公网 IP, 不用账号密码。
+       这时必须把对方的 IP 段填进 TRUNK_ACL, 否则电话进不来。
+    ② 注册(register=true): 给了账号密码的中继, 以及绝大多数 FXO 语音网关/IP 话机。
+-->
+<include>
+@GATEWAY_BODY@
+</include>

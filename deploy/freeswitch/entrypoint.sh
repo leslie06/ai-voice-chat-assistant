@@ -9,6 +9,64 @@ set -eu
 : "${VCA_HOST:=host.docker.internal}"
 : "${VCA_PORT:=8084}"
 
+# ---- SIP 中继 / 语音网关(可选) ----
+# TRUNK_HOST 为空 = 没有中继, 只有软电话能打进来(本地联调就是这样)。
+: "${TRUNK_HOST:=}"
+: "${TRUNK_NAME:=trunk}"
+: "${TRUNK_USER:=}"
+: "${TRUNK_PASSWORD:=}"
+: "${TRUNK_REALM:=}"
+: "${TRUNK_FROM_USER:=}"
+: "${TRUNK_ACL:=}"
+
+gateway_body=""
+if [ -n "$TRUNK_HOST" ]; then
+  if [ -n "$TRUNK_USER" ]; then
+    # 注册式: 有账号密码(FXO 网关、给了账号的中继)
+    gateway_body=$(cat <<GW
+  <gateway name="${TRUNK_NAME}">
+    <param name="proxy" value="${TRUNK_HOST}"/>
+    <param name="realm" value="${TRUNK_REALM:-$TRUNK_HOST}"/>
+    <param name="username" value="${TRUNK_USER}"/>
+    <param name="password" value="${TRUNK_PASSWORD}"/>
+    <param name="from-user" value="${TRUNK_FROM_USER:-$TRUNK_USER}"/>
+    <param name="register" value="true"/>
+    <param name="expire-seconds" value="120"/>
+    <param name="retry-seconds" value="30"/>
+    <param name="caller-id-in-from" value="true"/>
+    <param name="ping" value="60"/>
+  </gateway>
+GW
+)
+  else
+    # IP 白名单式: 对方认我们的公网 IP, 不注册。必须同时配好 TRUNK_ACL, 否则电话进不来。
+    gateway_body=$(cat <<GW
+  <gateway name="${TRUNK_NAME}">
+    <param name="proxy" value="${TRUNK_HOST}"/>
+    <param name="register" value="false"/>
+    <param name="caller-id-in-from" value="true"/>
+    <param name="ping" value="60"/>
+  </gateway>
+GW
+)
+  fi
+fi
+
+# 中继来源白名单: 逗号分隔的 CIDR → 一行一个 allow 节点。
+# 注意用 for 而不是 "管道 + while": 管道右侧在子 shell 里跑, 循环里攒的变量出不来,
+# 表现是只有最后/第一个网段生效, 其余静默丢失(已踩过)。
+acl_nodes=""
+if [ -n "$TRUNK_ACL" ]; then
+  old_ifs=$IFS
+  IFS=','
+  for cidr in $TRUNK_ACL; do
+    [ -n "$cidr" ] || continue
+    acl_nodes="${acl_nodes}          <node type=\"allow\" cidr=\"${cidr}\"/>
+"
+  done
+  IFS=$old_ifs
+fi
+
 mkdir -p /etc/freeswitch /var/lib/freeswitch/db /var/log/freeswitch /recordings
 for f in /conf/*.xml; do
   sed -e "s|@EXTERNAL_IP@|${EXTERNAL_IP}|g" \
@@ -18,6 +76,20 @@ for f in /conf/*.xml; do
       -e "s|@VCA_PORT@|${VCA_PORT}|g" \
       "$f" > "/etc/freeswitch/$(basename "$f")"
 done
+
+# 这两处内容是多行的, sed 不好处理, 用 python 直接替换
+python3 - "$gateway_body" "$acl_nodes" <<'PY'
+import sys, pathlib
+gateway, acl = sys.argv[1], sys.argv[2]
+p = pathlib.Path('/etc/freeswitch/gateway.xml')
+p.write_text(p.read_text(encoding='utf-8').replace('@GATEWAY_BODY@', gateway), encoding='utf-8')
+p = pathlib.Path('/etc/freeswitch/freeswitch.xml')
+p.write_text(p.read_text(encoding='utf-8').replace('@TRUNK_ACL_NODES@', acl), encoding='utf-8')
+PY
+
+if [ -n "$TRUNK_HOST" ]; then
+  echo "freeswitch: 中继 ${TRUNK_NAME} → ${TRUNK_HOST} ($([ -n "$TRUNK_USER" ] && echo 注册式 || echo IP白名单式)), 放行来源: ${TRUNK_ACL:-无(电话进不来!)}"
+fi
 
 echo "freeswitch: EXTERNAL_IP=${EXTERNAL_IP} socket→${VCA_HOST}:${VCA_PORT}"
 # -nf 不 fork(容器主进程); -nonat 不做 UPnP/NAT-PMP 探测; -c 控制台模式, 日志才会打到 stdout(docker logs 可见)。

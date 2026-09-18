@@ -76,6 +76,15 @@
           源地址是网桥网关(172.x / 192.168.x), 会被回一句 "text/rude-rejection" 直接断开。
           8021 在 docker-compose 里只发布到宿主机回环, 所以这里放行私网段不会把它暴露出去。
         -->
+        <!--
+          中继/语音网关的来源白名单。只有这里放行的 IP 才能把电话送进来 —— 5060 一旦在公网上,
+          几分钟内就会有人来扫号盗打, 这份名单是第一道也是最有效的一道。
+          由 entrypoint.sh 按 TRUNK_ACL 渲染(逗号分隔的 CIDR); 没配则整份 deny, 谁都进不来。
+        -->
+        <list name="trunk" default="deny">
+@TRUNK_ACL_NODES@
+        </list>
+
         <list name="esl-local" default="deny">
           <node type="allow" cidr="127.0.0.0/8"/>
           <node type="allow" cidr="172.16.0.0/12"/>
@@ -123,6 +132,47 @@
             <param name="challenge-realm" value="auto_from"/>
             <param name="manage-presence" value="false"/>
             <param name="inbound-reg-force-matching-username" value="true"/>
+          </settings>
+        </profile>
+
+        <!--
+          external: 专给<b>中继/语音网关</b>用的通道, 与软电话那条(internal)彻底分开。
+          分开的理由: 中继是按 IP 认的, 不做摘要认证(auth-calls=false); 软电话必须认证。
+          放在一个 profile 里就得在"给中继开口子"和"不给扫号者开口子"之间二选一。
+
+          没配中继时它照常起, 只是 ACL 是空的 deny —— 端口开着但谁都打不进来, 对本地联调无影响。
+        -->
+        <profile name="external">
+          <gateways>
+            <X-PRE-PROCESS cmd="include" data="gateway.xml"/>
+          </gateways>
+          <domains>
+            <domain name="all" alias="false" parse="false"/>
+          </domains>
+          <settings>
+            <!-- 中继打进来的电话进这个 context; 它只有一条规则: 任何号码都交给 AI(见 dialplan.xml) -->
+            <param name="context" value="ai-inbound"/>
+            <param name="dialplan" value="XML"/>
+            <param name="sip-port" value="5080"/>
+            <param name="sip-ip" value="$${local_ip_v4}"/>
+            <param name="rtp-ip" value="$${local_ip_v4}"/>
+            <!-- 服务器在内网/容器里、中继在公网时必须配成公网 IP, 否则"能接通但没声音" -->
+            <param name="ext-sip-ip" value="@EXTERNAL_IP@"/>
+            <param name="ext-rtp-ip" value="@EXTERNAL_IP@"/>
+            <param name="local-network-acl" value="nobody"/>
+            <param name="NDLB-force-rport" value="true"/>
+
+            <!-- 中继按 IP 认, 不做摘要认证; 白名单之外一律拒 -->
+            <param name="auth-calls" value="false"/>
+            <param name="apply-inbound-acl" value="trunk"/>
+
+            <!-- 真实电话线路就是 G.711 窄带 -->
+            <param name="inbound-codec-prefs" value="PCMA,PCMU"/>
+            <param name="outbound-codec-prefs" value="PCMA,PCMU"/>
+            <param name="inbound-late-negotiation" value="false"/>
+            <param name="dtmf-type" value="rfc2833"/>
+            <param name="rfc2833-pt" value="101"/>
+            <param name="manage-presence" value="false"/>
           </settings>
         </profile>
       </profiles>

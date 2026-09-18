@@ -5,7 +5,8 @@
 # 用到的都是 FreeSWITCH 自带能力(mod_event_socket 的 socket 应用 + 内核 unicast), 不需要任何第三方模块。
 FROM alpine:3.22
 
-RUN apk add --no-cache freeswitch
+# python3: entrypoint 用它做多行模板替换(sed 处理多行太别扭)
+RUN apk add --no-cache freeswitch python3
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

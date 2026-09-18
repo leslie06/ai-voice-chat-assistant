@@ -77,6 +77,18 @@ curl -X POST http://127.0.0.1:8080/telephony/calls \
 
 接真实中继时，在 `conf/freeswitch.xml` 里加 sofia gateway，`VCA_FS_ESL_ENDPOINT` 改成 `sofia/gateway/<网关名>/{number}`。
 
+## 接真实电话线路
+
+在本目录的 `.env` 里加 `TRUNK_HOST` 等参数(见 [docs/12 §7](../../docs/12-freeswitch.md))，
+重启容器后用体检脚本看状态:
+
+```bash
+./trunk-status.sh              # 通道/中继/白名单/最近的拒接
+./trunk-status.sh --trace      # 打开 SIP 报文跟踪(排完用 --no-trace 关掉)
+```
+
+没配中继时一切照旧: 5080 端口开着但白名单是空的, 谁都打不进来, 只有软电话能用。
+
 ## 排查
 
 ```bash

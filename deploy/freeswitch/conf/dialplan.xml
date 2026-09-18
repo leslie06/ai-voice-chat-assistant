@@ -9,6 +9,20 @@
   unicast 是 FreeSWITCH 内核自带的能力, 不需要 mod_audio_stream 之类的第三方模块。
 -->
 <section name="dialplan" description="Dialplan">
+  <!--
+    ai-inbound: 中继/语音网关打进来的电话落在这里(external profile 的 context)。
+    只有一条规则: 不管被叫是哪个号码, 都交给 AI —— 号码本身会随通道数据交给 VCA,
+    由它按 vca.telephony.merchants 认领是哪家商家。
+  -->
+  <context name="ai-inbound">
+    <extension name="trunk-inbound">
+      <condition field="destination_number" expression="^.*$">
+        <action application="answer"/>
+        <action application="execute_extension" data="vca-connect XML ai-agent"/>
+      </condition>
+    </extension>
+  </context>
+
   <context name="ai-agent">
 
     <!--
