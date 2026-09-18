@@ -10,18 +10,31 @@ FreeSWITCH 在这里只当**协议转换器**：软电话的 SIP/RTP 进来，�
 
 ## 启动
 
-```bash
-# 1. FreeSWITCH。首次构建约 1 分钟(Alpine 的 freeswitch 包, 自带 arm64)。
-cd deploy/freeswitch
-printf 'SIP_PASSWORD=%s\nESL_PASSWORD=%s\n' "$(openssl rand -hex 8)" "$(openssl rand -hex 12)" > .env   # 只需一次; .env 已被 gitignore
-docker compose up -d --build
+**一行就够**（仓库根目录）:
 
-# 2. VCA, 打开电话接入(在仓库根目录)。provider 默认就是 freeswitch
-VCA_TELEPHONY_ENABLED=true \
-VCA_TELEPHONY_GREETING="您好，这里是智能语音助手，请问有什么可以帮您？" \
-./run.sh
+```bash
+./start-phone.sh          # 改过代码时: ./start-phone.sh --build
+```
+
+它检查 Docker、没起就把 FreeSWITCH 起起来、检查 8080/8084 有没有被占、加载参数、再启动 VCA。
+参数默认值在脚本里; 要长期改开场白/知识库归属/坐席号码, `cp .env.phone.example .env.phone`(不进仓库)。
+
+首次需要先生成 FreeSWITCH 的密码文件(只需一次, `.env` 已被 gitignore):
+
+```bash
+cd deploy/freeswitch
+printf 'SIP_PASSWORD=%s\nESL_PASSWORD=%s\n' "$(openssl rand -hex 8)" "$(openssl rand -hex 12)" > .env
+```
+
+<details><summary>不用脚本的手工启动</summary>
+
+```bash
+cd deploy/freeswitch && docker compose up -d --build     # 首次构建约 1 分钟
+cd ../..
+VCA_TELEPHONY_ENABLED=true VCA_TELEPHONY_GREETING="您好，请问有什么可以帮您？" ./run.sh
 # 看到 "电话接入已启用(FreeSWITCH): socket 127.0.0.1:8084" 即就绪
 ```
+</details>
 
 ## 软电话（Linphone）
 

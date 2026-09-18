@@ -34,4 +34,6 @@ build/
 
 ### Secrets / 本地环境变量 (含真实 API key, 切勿提交) ###
 .env
+# 电话客服模式的本地参数(商家账号、坐席号码、开场白), 见 start-phone.sh
+.env.phone
 .env.local

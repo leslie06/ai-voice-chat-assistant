@@ -295,17 +295,28 @@ vca-telephony/src/main/java/com/vca/telephony/
 
 ### 6.1 启动
 
-每行是一条命令，逐行执行：
-
 ```bash
-cd /Users/kangyu/AI/ai-voice-chat-assistant/deploy/freeswitch
+cd deploy/freeswitch
 [ -f .env ] || printf 'SIP_PASSWORD=%s\nESL_PASSWORD=%s\n' "$(openssl rand -hex 8)" "$(openssl rand -hex 12)" > .env
-docker compose up -d --build
-cd /Users/kangyu/AI/ai-voice-chat-assistant
-VCA_TELEPHONY_ENABLED=true VCA_TELEPHONY_GREETING="您好，这里是智能语音助手，请问有什么可以帮您？" ./run.sh
+cd ..
+./start-phone.sh            # 改过代码时: ./start-phone.sh --build
 ```
 
-第 2 行只在第一次生成密码（`.env` 已被 gitignore），第 3 行首次构建约 1 分钟，第 5 行会先打包再启动。
+第 2 行只在第一次生成 FreeSWITCH 的密码（`.env` 已被 gitignore）。`start-phone.sh` 负责剩下的事：
+检查 Docker、没起就把 FreeSWITCH 起起来、检查 8080/8084 是否被占、加载参数、启动本项目。
+
+参数默认值写在脚本里（开场白、`qwen-flash`、软电话用的 VAD 阈值、堆上限 1G）。要长期改某一项：
+
+```bash
+cp .env.phone.example .env.phone    # 不进仓库
+# 最常改的三项: 开场白、知识库归属(商家账号 id)、转人工拨号串
+```
+
+优先级是 脚本默认值 → `.env.phone` → 命令行环境变量，所以临时试某个参数直接写在命令前面：
+
+```bash
+VCA_TELEPHONY_LLM_MODEL=qwen3.7-plus ./start-phone.sh
+```
 
 日志出现 `电话接入已启用(FreeSWITCH): socket 127.0.0.1:8084` 即就绪。容器设置了 `restart: unless-stopped`，Docker 重启后会自动起来；不用时 `cd deploy/freeswitch && docker compose down`。
 
@@ -577,6 +588,7 @@ docker exec vca-freeswitch fs_cli -p "$P" -x "sofia global siptrace on"         
 | 通话编排、补静音 | `vca-telephony/.../session/CallSession.java` |
 | 装配与配置 | `vca-telephony/.../TelephonyAutoConfiguration.java`、`TelephonyProperties.java` |
 | FreeSWITCH 配置 | `deploy/freeswitch/conf/`，接入本项目的地方在 `dialplan.xml` |
+| 一键启动脚本 | `start-phone.sh`（参数样例 `.env.phone.example`） |
 | 本地环境说明 | `deploy/freeswitch/README.md` |
 | 单测（测试替身扮演 FreeSWITCH） | `vca-telephony/src/test/.../provider/freeswitch/` |
 | 选型与整体方案 | [10 · 电话接入](./10-telephony-outbound.md) |
