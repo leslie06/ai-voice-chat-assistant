@@ -77,7 +77,7 @@ curl -X POST http://127.0.0.1:8080/telephony/calls \
 
 接真实中继时，在 `conf/freeswitch.xml` 里加 sofia gateway，`VCA_FS_ESL_ENDPOINT` 改成 `sofia/gateway/<网关名>/{number}`。
 
-## 接真实电话线路
+## 接真实电话线路 / 语音网关
 
 在本目录的 `.env` 里加 `TRUNK_HOST` 等参数(见 [docs/12 §7](../../docs/12-freeswitch.md))，
 重启容器后用体检脚本看状态:
@@ -87,7 +87,10 @@ curl -X POST http://127.0.0.1:8080/telephony/calls \
 ./trunk-status.sh --trace      # 打开 SIP 报文跟踪(排完用 --no-trace 关掉)
 ```
 
-没配中继时一切照旧: 5080 端口开着但白名单是空的, 谁都打不进来, 只有软电话能用。
+用 HT813 这类语音网关接诊所固话线时, 配的是 `ATA_LINE_USER` / `ATA_PHONE_USER`(两个口各一个分机,
+走 5060 那条要认证的通道), 不是 `TRUNK_*`。两种都在 [docs/12 §7](../../docs/12-freeswitch.md) 里。
+
+没配时一切照旧: 5080 端口开着但白名单是空的, 谁都打不进来, 只有软电话能用。
 
 ## 排查
 

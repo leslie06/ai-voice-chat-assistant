@@ -26,6 +26,11 @@ services:
       TRUNK_FROM_USER: ${TRUNK_FROM_USER:-}
       # 放行哪些来源把电话送进来(逗号分隔 CIDR)。不配则谁都进不来。
       TRUNK_ACL: ${TRUNK_ACL:-}
+      # 语音网关(如 HT813)的两个口各一个分机: LINE 口接电话线(来电进 AI), PHONE 口接话机(转人工)。
+      ATA_LINE_USER: ${ATA_LINE_USER:-}
+      ATA_LINE_PASSWORD: ${ATA_LINE_PASSWORD:-}
+      ATA_PHONE_USER: ${ATA_PHONE_USER:-}
+      ATA_PHONE_PASSWORD: ${ATA_PHONE_PASSWORD:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

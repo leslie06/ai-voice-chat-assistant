@@ -67,6 +67,24 @@ if [ -n "$TRUNK_ACL" ]; then
   IFS=$old_ifs
 fi
 
+# ---- 语音网关(ATA)的两个口。不配则没有这两个分机, 与之前完全一致 ----
+: "${ATA_LINE_USER:=}"        # LINE 口(FXO, 接电话线): 来电从这里进 AI
+: "${ATA_LINE_PASSWORD:=}"
+: "${ATA_PHONE_USER:=}"       # PHONE 口(FXS, 接有绳话机): 转人工时它响
+: "${ATA_PHONE_PASSWORD:=}"
+
+ata_users=""
+ata_user_xml() {
+  # $1=分机号 $2=密码 $3=注释
+  printf '    <!-- %s -->\n    <user id="%s">\n      <params>\n        <param name="password" value="%s"/>\n      </params>\n      <variables>\n        <variable name="user_context" value="ai-agent"/>\n        <variable name="effective_caller_id_number" value="%s"/>\n        <variable name="sip-force-contact" value="NDLB-connectile-dysfunction"/>\n      </variables>\n    </user>\n' "$3" "$1" "$2" "$1"
+}
+if [ -n "$ATA_LINE_USER" ]; then
+  ata_users="${ata_users}$(ata_user_xml "$ATA_LINE_USER" "$ATA_LINE_PASSWORD" "语音网关 LINE 口(FXO): 电话线来电从这里进")"
+fi
+if [ -n "$ATA_PHONE_USER" ]; then
+  ata_users="${ata_users}$(ata_user_xml "$ATA_PHONE_USER" "$ATA_PHONE_PASSWORD" "语音网关 PHONE 口(FXS): 转人工时这台话机响")"
+fi
+
 mkdir -p /etc/freeswitch /var/lib/freeswitch/db /var/log/freeswitch /recordings
 for f in /conf/*.xml; do
   sed -e "s|@EXTERNAL_IP@|${EXTERNAL_IP}|g" \
@@ -78,15 +96,19 @@ for f in /conf/*.xml; do
 done
 
 # 这两处内容是多行的, sed 不好处理, 用 python 直接替换
-python3 - "$gateway_body" "$acl_nodes" <<'PY'
+python3 - "$gateway_body" "$acl_nodes" "$ata_users" <<'PY'
 import sys, pathlib
-gateway, acl = sys.argv[1], sys.argv[2]
-p = pathlib.Path('/etc/freeswitch/gateway.xml')
-p.write_text(p.read_text(encoding='utf-8').replace('@GATEWAY_BODY@', gateway), encoding='utf-8')
-p = pathlib.Path('/etc/freeswitch/freeswitch.xml')
-p.write_text(p.read_text(encoding='utf-8').replace('@TRUNK_ACL_NODES@', acl), encoding='utf-8')
+gateway, acl, ata = sys.argv[1], sys.argv[2], sys.argv[3]
+for path, mark, value in (('/etc/freeswitch/gateway.xml', '@GATEWAY_BODY@', gateway),
+                          ('/etc/freeswitch/freeswitch.xml', '@TRUNK_ACL_NODES@', acl),
+                          ('/etc/freeswitch/directory.xml', '@ATA_USERS@', ata)):
+    p = pathlib.Path(path)
+    p.write_text(p.read_text(encoding='utf-8').replace(mark, value), encoding='utf-8')
 PY
 
+if [ -n "$ATA_LINE_USER" ]; then
+  echo "freeswitch: 语音网关 LINE 口=${ATA_LINE_USER}(来电进 AI), PHONE 口=${ATA_PHONE_USER:-未配}(转人工)"
+fi
 if [ -n "$TRUNK_HOST" ]; then
   echo "freeswitch: 中继 ${TRUNK_NAME} → ${TRUNK_HOST} ($([ -n "$TRUNK_USER" ] && echo 注册式 || echo IP白名单式)), 放行来源: ${TRUNK_ACL:-无(电话进不来!)}"
 fi

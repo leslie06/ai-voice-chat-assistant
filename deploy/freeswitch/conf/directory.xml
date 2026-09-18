@@ -8,6 +8,7 @@
       -->
       <param name="dial-string" value="{^^:sip_invite_domain=${dialed_domain}:presence_id=${dialed_user}@${dialed_domain}}${sofia_contact(*/${dialed_user}@${dialed_domain})}"/>
     </params>
+    <!-- 软电话(本地联调) -->
     <user id="1000">
       <params>
         <param name="password" value="@SIP_PASSWORD@"/>
@@ -19,5 +20,15 @@
         <variable name="sip-force-contact" value="NDLB-connectile-dysfunction"/>
       </variables>
     </user>
+
+    <!--
+      语音网关(如 Grandstream HT813)的两个口, 由 entrypoint.sh 按 ATA_* 渲染; 没配就没有这两个分机。
+
+        LINE 口(FXO) —— 接电话线。有人打进来时它自动接起, 把这通电话以 SIP 发给 FreeSWITCH。
+        PHONE 口(FXS) —— 接有绳电话机。转人工时 FreeSWITCH 把通话桥接过来, 话机就响。
+
+      两个口各注册一个分机: 网关在诊所路由器后面, 家用宽带是动态 IP, 按 IP 放行行不通, 只能靠注册。
+    -->
+@ATA_USERS@
   </domain>
 </section>

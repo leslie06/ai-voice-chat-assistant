@@ -438,7 +438,68 @@ cd deploy/freeswitch && ./trunk-status.sh        # 通道/中继/白名单/最�
    再决定要不要调 `VCA_TELEPHONY_VAD_SPEECH`（软电话那组 0.01 是偏低的，真实线路多半用得上默认 0.02）。
 5. **打出去。** `POST /telephony/calls` 拨自己的手机（§3）。
 
-### 7.5 同机部署（FreeSWITCH 与本项目在一台服务器上）
+### 7.5 用语音网关接诊所的固话线（HT813 这类 ATA）
+
+这是**个人身份也能做、且长期合规**的一条路：网关放在诊所，一头接现有座机线，一头走宽带连云上的 FreeSWITCH。
+
+```
+诊所固话线 ──▶ HT813 的 LINE 口(FXO)     振铃时自动接起, 转成 SIP/RTP
+                     │ 家用宽带 / 公网
+                     ▼
+              云服务器 FreeSWITCH ──socket + unicast──▶ 本项目(AI 听/想/说)
+                     │  转人工时桥接回去
+                     ▼
+              HT813 的 PHONE 口(FXS) ──▶ 有绳电话机响, 前台接起来聊
+```
+
+**为什么两个口各注册一个分机**：网关在诊所路由器后面，家用宽带是动态 IP，按 IP 放行行不通，只能靠注册认证。
+所以它走 `internal`（5060，要认证）那条通道，不是中继用的 `external`。
+
+**FreeSWITCH 侧**，在 `deploy/freeswitch/.env` 里加：
+
+```bash
+ATA_LINE_USER=8001              # LINE 口(接电话线)用的分机
+ATA_LINE_PASSWORD=<够长的随机串>
+ATA_PHONE_USER=8002             # PHONE 口(接话机)用的分机
+ATA_PHONE_PASSWORD=<够长的随机串>
+SIP_BIND=0.0.0.0                # 网关要从公网连进来
+EXTERNAL_IP=<服务器公网IP>
+```
+
+转人工就转到 PHONE 口那个分机（`.env.phone`）：
+
+```bash
+VCA_TELEPHONY_TRANSFER_DIAL_STRING=user/8002@vca.local
+```
+
+**HT813 侧**（Web 界面），按端口分别配：
+
+| 页面 | 项 | 值 |
+|---|---|---|
+| FXS PORT（PHONE 口） | SIP Server / 账号 | 服务器公网 IP / `8002` + 密码 |
+| FXO PORT（LINE 口） | SIP Server / 账号 | 服务器公网 IP / `8001` + 密码 |
+| FXO PORT | Number of Rings Before Pickup | `2`（响两声自动接，别设 0） |
+| FXO PORT | **Unconditional Call Forward to VOIP** | 填**商家的接入号**，例如 `01088886666` |
+| FXO PORT | Enable Current Disconnect / Busy Tone Disconnect | 打开 |
+| 两个口 | 语音编码 | 只留 PCMA（或 PCMU），关掉其它 |
+| 两个口 | Caller ID Scheme | 按线路选（大陆多为 FSK Bellcore） |
+
+第四项是关键：FXO 是模拟线，**没有被叫号码这个概念**，所以要在网关上写死一个号码送给 FreeSWITCH。
+把它填成这家诊所的号码，多商家路由（§12）就自然对上了——AI 据此知道是哪家店打进来的。
+
+第五项决定挂机检测：对端挂断后模拟线要靠极性反转或忙音才能察觉，不开的话通话会挂到单通上限
+（默认 5 分钟）才断。它是最容易漏配、也最容易表现为"电话占线不放"的一项。
+
+Caller ID 拿得到的话，线索表里就是客户的真实手机号；拿不到就只能靠 AI 在通话里问。
+
+**测试顺序**：网关两个口都注册上（`./trunk-status.sh` 能看到）→ 用别的手机拨诊所号码，听到开场白 →
+说话能识别 → 说"转人工"，有绳电话机响 → 挂断后看日志里的挂机原因是不是及时的。
+
+> **插卡盒（SIM 卡转固话线）那一段要注意**：拿它代替真实固话线做联调没问题，但用 SIM 卡把手机来电
+> 转成 SIP 送上公网，功能上等同于 GoIP，属于《反电信网络诈骗法》第十四条点名的设备，运营商风控也容易停卡。
+> 换成诊所真实的固话线，上面的配置一行都不用改。
+
+### 7.6 同机部署（FreeSWITCH 与本项目在一台服务器上）
 
 不用容器、或容器用 host 网络时，把 `dialplan.xml` 里三处地址都改成 `127.0.0.1`：
 
