@@ -136,6 +136,75 @@ public class TelephonyProperties {
     private String ttsVoice = "";
     private int ttsSampleRate = 24_000;
 
+    /** 通话后小结(摘要 + 意向分级 + 推送)。 */
+    private Summary summary = new Summary();
+
+    /**
+     * 挂机后的事后处理: 用大模型把通话压成两三句摘要 + 意向等级, 落库并推给商家。
+     *
+     * <p>这是商家真正会看的东西 —— 没人会去听录音, 但群里弹出来的一条"意向 A, 想约周六种植牙面诊"会看。
+     */
+    public static class Summary {
+        /** 开关。关掉则挂机后什么都不做(不调模型、不落库、不推送) */
+        private boolean enabled = true;
+        /**
+         * 短于这个时长(秒)的通话不摘要。秒挂/拨错/彩铃占了呼入的一大半, 每通都调一次模型纯属烧钱,
+         * 而"接通 3 秒就挂"本身已经说明了一切。
+         */
+        private int minDurationSec = 10;
+        /**
+         * 摘要用的厂商与模型。<b>都留空</b>时交给治理层按候选顺序选 —— 摘要不占通话时间, 不必像对话那样挑最快的。
+         * 要钉死就一起填(只填模型、厂商留空的话, 模型名可能被发给别家)。
+         */
+        private String vendor = "";
+        private String model = "";
+        /**
+         * 推送地址。企业微信/钉钉的群机器人 URL 直接填这里即可(报文按它们的文本消息格式发,
+         * 多余字段它们会忽略); 自建后台用同一个请求里的 {@code call} 结构化字段。留空 = 只落库不推送。
+         */
+        private String webhookUrl = "";
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean v) {
+            this.enabled = v;
+        }
+
+        public int getMinDurationSec() {
+            return minDurationSec;
+        }
+
+        public void setMinDurationSec(int v) {
+            this.minDurationSec = v;
+        }
+
+        public String getVendor() {
+            return vendor;
+        }
+
+        public void setVendor(String v) {
+            this.vendor = v == null ? "" : v;
+        }
+
+        public String getModel() {
+            return model;
+        }
+
+        public void setModel(String v) {
+            this.model = v == null ? "" : v;
+        }
+
+        public String getWebhookUrl() {
+            return webhookUrl;
+        }
+
+        public void setWebhookUrl(String v) {
+            this.webhookUrl = v == null ? "" : v;
+        }
+    }
+
     /** 电话专用 VAD 阈值 —— 不要复用浏览器那组(那是按 48k 麦克风调的)。 */
     private Vad vad = new Vad();
 
@@ -733,6 +802,25 @@ public class TelephonyProperties {
 
     public void setTtsSampleRate(int ttsSampleRate) {
         this.ttsSampleRate = ttsSampleRate;
+    }
+
+    public Summary getSummary() {
+        return summary;
+    }
+
+    public void setSummary(Summary summary) {
+        this.summary = summary == null ? new Summary() : summary;
+    }
+
+    /** 摘要用的 LLM 参数。厂商留空 = 交给治理层按候选顺序选。 */
+    public com.vca.domain.model.LlmConfig toSummaryLlmConfig() {
+        com.vca.domain.enums.VendorType v = null;
+        if (!summary.getVendor().isBlank()) {
+            v = com.vca.domain.enums.VendorType.valueOf(summary.getVendor().trim().toUpperCase(java.util.Locale.ROOT));
+        }
+        // 摘要只输出三行, 512 token 足够; 温度压低, 要的是稳定复述而不是创作
+        return new com.vca.domain.model.LlmConfig(v, summary.getModel(),
+                com.vca.telephony.summary.CallSummarizer.PROMPT, 0.2, 512);
     }
 
     public Vad getVad() {

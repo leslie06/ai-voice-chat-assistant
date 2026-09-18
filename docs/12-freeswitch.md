@@ -264,6 +264,9 @@ vca-telephony/src/main/java/com/vca/telephony/
 | `knowledge-owner` | `VCA_TELEPHONY_KNOWLEDGE_OWNER` | 空 | 按谁的知识库作答（商家账号 id），见 §7.6 |
 | `agent-tools` | `VCA_TELEPHONY_AGENT_TOOLS` | 三个全开 | 电话专用工具，见 §7.7 |
 | `transfer-dial-string` | `VCA_TELEPHONY_TRANSFER_DIAL_STRING` | 空 | 转人工桥接到哪里；留空则不下发该工具 |
+| `summary.enabled` | `VCA_TELEPHONY_SUMMARY_ENABLED` | `true` | 通话后小结，见 §7.8 |
+| `summary.min-duration-sec` | `VCA_TELEPHONY_SUMMARY_MIN_SEC` | `10` | 短于此的通话不摘要 |
+| `summary.webhook-url` | `VCA_TELEPHONY_SUMMARY_WEBHOOK` | 空 | 小结推送地址（企业微信/钉钉群机器人 URL 直接填） |
 
 完整项以 `TelephonyProperties` 和 `vca-bootstrap/src/main/resources/application.yml` 为准。
 
@@ -533,6 +536,53 @@ SELECT * FROM phone_lead ORDER BY id DESC LIMIT 1;
 
 ---
 
+## 7.8 通话后小结：让漏接的电话变成一条消息
+
+商家不会去听录音。挂机后把这通电话压成"两三句摘要 + 一个意向等级"推到群里，才是他们真正会看的东西。
+
+```
+挂机 → CallSession 把对话快照交出去(此时内存里就有, 关了会话就只剩数据库的行)
+     → CallAftermath(boundedElastic, 通话之外) → 大模型出小结 → 落库 phone_call_summary → 推 webhook
+```
+
+```yaml
+vca:
+  telephony:
+    summary:
+      enabled: true
+      min-duration-sec: 10          # 秒挂/拨错/彩铃占呼入一大半, 短通话不调模型
+      vendor: ${VCA_LLM_VENDOR:}    # 默认跟对话同一个厂商与模型
+      model: ${VCA_TELEPHONY_LLM_MODEL:}
+      webhook-url: ${VCA_TELEPHONY_SUMMARY_WEBHOOK:}   # 留空=只落库不推送
+```
+
+**推送用 webhook 而不是短信/微信。** 个人微信要公众号资质、短信要短信资质，而企业微信和钉钉的群机器人只要一个 URL、
+当天就能用——小诊所把机器人拉进店长群即可。报文顶层是这两家认的文本消息格式（多余字段它们忽略），
+同一个请求里另挂一个 `call` 对象给自建后台用结构化字段。
+
+商家群里收到的样子：
+
+```
+【来电小结】意向 A
+来电: 13800138000  时长: 32 秒
+客户王女士预约周六上午进行种植牙面诊，客服已记录并承诺后续专人确认。
+待跟进: 请尽快安排专人联系客户确认具体时间与面诊流程。
+```
+
+**意向分级**：A 已约时间或要求回电 / B 有兴趣没定下来 / C 只是问问 / D 无效（骚扰、拨错、没说话）。
+
+**两个踩过的坑**（都有回归测试钉住）：
+
+- **不要让模型输出 JSON**，只要三行 `摘要:/意向:/跟进:`。但**模型未必照做**：实测 deepseek 直接输出 markdown 分点，
+  qwen-flash 把意向那行写成"明确表达种植牙面诊需求"这样一句中文。所以解析必须能兜住——取不到字母就按中文关键词推断，
+  再取不到才退回 C；整行都不成格式就把模型原话当摘要，别丢信息。
+- **厂商要钉死**。不指定时治理层按候选表顺序选，选到的未必听得懂这里的格式要求（实测就是这么出的 markdown）。
+  默认跟对话用同一个厂商与模型。
+
+**落库与推送各自兜异常**：两件事互不依赖，而群里那条消息比留档重要，数据库挂了不能连带把通知也吞掉。
+
+---
+
 ## 8. 排查
 
 | 现象 | 看哪里 / 原因 |
@@ -570,7 +620,8 @@ docker exec vca-freeswitch fs_cli -p "$P" -x "sofia global siptrace on"         
 | 电话里的知识库检索 | 已完成（§7.6）。多商家按被叫号码路由还没做 |
 | 按键进对话（例如按键输入手机号） | 事件已到 `CallSession`，只打日志 |
 | 留资 / 转人工 / 主动挂机 | 已完成（§7.7） |
-| 通话后摘要推送给商家 | 未实现 |
+| 通话后小结 + 推送 | 已完成（§7.8）。邮件/短信通道未做，目前只有 webhook |
+| 意向分级的准确率 | 只在本机用几通模拟通话看过，真实通话需要积累样本再调分级标准 |
 | 并发路数上限 | 未实现，批量外呼前必须补 |
 | 电话 VAD 阈值 | 默认值是经验起步值，真实线路需用录音回归。软电话麦克风偏小时用 `VCA_TELEPHONY_VAD_SPEECH=0.01 VCA_TELEPHONY_VAD_ONSETMS=100` |
 | 首通电话偏慢 | 进程刚启动时到大模型/合成的连接是冷的，第一通约 3 秒，之后 1.7~2.1 秒 |

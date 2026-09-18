@@ -10,6 +10,7 @@ import com.vca.store.mapper.ConversationRecordingMapper;
 import com.vca.store.mapper.EvaluationMapper;
 import com.vca.store.mapper.KnowledgeChunkMapper;
 import com.vca.store.mapper.KnowledgeDocMapper;
+import com.vca.store.mapper.PhoneCallSummaryMapper;
 import com.vca.store.mapper.PhoneLeadMapper;
 import com.vca.store.mapper.UserMemoryMapper;
 import com.vca.store.mapper.UserMusicPlayMapper;
@@ -56,6 +57,7 @@ final class MyBatisSupport {
             factory.getConfiguration().addMapper(UserMusicPlayMapper.class);
             factory.getConfiguration().addMapper(UserMusicUploadMapper.class);
             factory.getConfiguration().addMapper(PhoneLeadMapper.class);
+            factory.getConfiguration().addMapper(PhoneCallSummaryMapper.class);
             factory.getConfiguration().addMapper(UserVoiceCloneMapper.class);
             return factory;
         } catch (Exception e) {

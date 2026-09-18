@@ -16,7 +16,12 @@ import com.vca.telephony.provider.freeswitch.FreeSwitchSocketServer;
 import com.vca.telephony.provider.freeswitch.FreeSwitchTelephonyProvider;
 import com.vca.telephony.session.CallConversationFactory;
 import com.vca.telephony.session.CallSession;
+import com.vca.orchestrator.call.CallSummaryStore;
 import com.vca.telephony.session.PendingCalls;
+import com.vca.telephony.summary.CallAftermath;
+import com.vca.telephony.summary.CallNotifier;
+import com.vca.telephony.summary.CallSummarizer;
+import com.vca.telephony.summary.WebhookCallNotifier;
 import com.vca.telephony.spi.CallLeg;
 import com.vca.telephony.spi.TelephonyProvider;
 import com.vca.telephony.web.OutboundCallRoute;
@@ -93,6 +98,28 @@ public class TelephonyAutoConfiguration {
         return m::newDetector;
     }
 
+    /**
+     * 通话事后处理(摘要 + 落库 + 推送)。关掉开关时给一个什么都不做的实现, 上层无需判空。
+     *
+     * <p>{@code CallSummaryStore} 由 {@code vca-store} 提供, 没开落库时取不到 —— 那就只推送、不留档。
+     */
+    @Bean
+    CallAftermath callAftermath(ProviderGateway gateway, TelephonyProperties props,
+                               ObjectProvider<CallSummaryStore> stores) {
+        TelephonyProperties.Summary cfg = props.getSummary();
+        if (!cfg.isEnabled()) {
+            log.info("通话后小结: 已关闭(vca.telephony.summary.enabled=false)");
+            return new CallAftermath(null, null, null, null, Integer.MAX_VALUE);
+        }
+        CallNotifier notifier = cfg.getWebhookUrl().isBlank()
+                ? CallNotifier.NOOP : new WebhookCallNotifier(cfg.getWebhookUrl());
+        log.info("通话后小结: 已启用(短于 {}s 的通话跳过), 推送={}", cfg.getMinDurationSec(),
+                cfg.getWebhookUrl().isBlank() ? "未配(只落库)" : "webhook");
+        return new CallAftermath(new CallSummarizer(gateway.llm(), props.toSummaryLlmConfig()),
+                stores.getIfAvailable(() -> CallSummaryStore.NOOP), notifier,
+                props.getKnowledgeOwner(), cfg.getMinDurationSec());
+    }
+
     /** 外呼接线台: 把发起的呼叫和连进来的媒体按 id 对上。呼入不经过它。 */
     @Bean
     PendingCalls pendingCalls() {
@@ -133,10 +160,12 @@ public class TelephonyAutoConfiguration {
                                                       CallConversationFactory conversations,
                                                       PromptCache prompts,
                                                       PendingCalls pendingCalls,
-                                                      Supplier<VoiceActivityDetector> vadDetectorFactory) throws IOException {
+                                                      Supplier<VoiceActivityDetector> vadDetectorFactory,
+                                                      CallAftermath aftermath) throws IOException {
             byte[] greeting = prompts.get(props.getGreeting());
             FreeSwitchSocketServer server = new FreeSwitchSocketServer(props.toFreeSwitchConfig(),
-                    leg -> startCall(leg, props, conversations, pendingCalls, vadDetectorFactory, greeting));
+                    leg -> startCall(leg, props, conversations, pendingCalls, vadDetectorFactory, greeting,
+                            aftermath));
             server.start();
             log.info("电话接入已启用(FreeSWITCH): socket {}:{}, 线路 {}Hz, 单通上限 {}s, 开场白 {}",
                     props.getFreeswitch().getListenAddress(), props.getFreeswitch().getPort(),
@@ -179,10 +208,12 @@ public class TelephonyAutoConfiguration {
                                             CallConversationFactory conversations,
                                             PromptCache prompts,
                                             PendingCalls pendingCalls,
-                                            Supplier<VoiceActivityDetector> vadDetectorFactory) throws IOException {
+                                            Supplier<VoiceActivityDetector> vadDetectorFactory,
+                                            CallAftermath aftermath) throws IOException {
             byte[] greeting = prompts.get(props.getGreeting());
             AudioSocketServer server = new AudioSocketServer(props.toAudioSocketConfig(),
-                    leg -> startCall(leg, props, conversations, pendingCalls, vadDetectorFactory, greeting));
+                    leg -> startCall(leg, props, conversations, pendingCalls, vadDetectorFactory, greeting,
+                            aftermath));
             server.start();
             log.info("电话接入已启用(Asterisk): AudioSocket :{}, 线路 {}Hz, 单通上限 {}s, 开场白 {}",
                     props.getPort(), props.getSampleRate(), props.getMaxCallSeconds(), describeGreeting(greeting, props));
@@ -211,7 +242,8 @@ public class TelephonyAutoConfiguration {
 
     private static void startCall(CallLeg leg, TelephonyProperties props,
                                   CallConversationFactory conversations, PendingCalls pendingCalls,
-                                  Supplier<VoiceActivityDetector> vadDetectorFactory, byte[] greeting) {
+                                  Supplier<VoiceActivityDetector> vadDetectorFactory, byte[] greeting,
+                                  CallAftermath aftermath) {
         // 先配对: 命中说明这是我们拨出去的电话(顺带回填被叫号码), 没命中就是呼入 —— 都照常建会话
         boolean outbound = pendingCalls.attach(leg);
         log.info("[{}] 建立通话会话: 方向={}, 对端={}, 被叫={}",
@@ -230,6 +262,7 @@ public class TelephonyAutoConfiguration {
         CallSession call = new CallSession(leg, conversations.create(ctx),
                 props.toVadConfig(), vadDetectorFactory.get(), props.toCallConfig(), greeting);
         self.set(call);
+        call.onEnded(aftermath::onCallEnded);
         call.start();
     }
 

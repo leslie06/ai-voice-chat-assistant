@@ -213,6 +213,18 @@ vca:
     # 电话专用工具(按通话建): 留资、转人工、主动挂机。默认全开 —— 这三个正是"电话客服"与
     # "能打电话的聊天机器人"的区别。每多一个工具都会抬高一点首字延迟, 用不上的可以去掉。
     agent-tools: ${VCA_TELEPHONY_AGENT_TOOLS:save_lead,transfer_to_human,end_call}
+    # 通话后小结: 挂机后用大模型压成两三句摘要 + 意向等级(A 马上要办/B 待跟进/C 只是问问/D 无效),
+    # 落库(phone_call_summary)并推给商家。商家真正会看的就是这条, 没人去听录音。
+    summary:
+      enabled: ${VCA_TELEPHONY_SUMMARY_ENABLED:true}
+      # 短于这个时长的通话不摘要: 秒挂/拨错/彩铃占呼入一大半, 每通都调模型纯属烧钱。
+      min-duration-sec: ${VCA_TELEPHONY_SUMMARY_MIN_SEC:10}
+      # 摘要用哪个模型。默认跟对话用同一个(厂商取 vca.web.llm-vendor, 模型取上面的 llm-model):
+      # 实测不钉死时治理层会选到候选表里的第一个厂商, 它未必听得懂这里要求的三行格式。
+      vendor: ${VCA_TELEPHONY_SUMMARY_VENDOR:${VCA_LLM_VENDOR:}}
+      model: ${VCA_TELEPHONY_SUMMARY_MODEL:${VCA_TELEPHONY_LLM_MODEL:}}
+      # 推送地址。企业微信/钉钉群机器人的 URL 直接填(按它们的文本消息格式发); 留空 = 只落库不推送。
+      webhook-url: ${VCA_TELEPHONY_SUMMARY_WEBHOOK:}
     # 转人工桥接到哪里(媒体服务器的拨号串)。接中继: sofia/gateway/trunk/<商家手机>; 本地联调: user/1000。
     # 留空 = 不下发转人工工具(宁可说"让同事回电", 也不能让客户在转不出去的电话里干等)。
     transfer-dial-string: ${VCA_TELEPHONY_TRANSFER_DIAL_STRING:}

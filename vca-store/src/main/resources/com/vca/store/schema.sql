@@ -196,3 +196,22 @@ CREATE TABLE IF NOT EXISTS phone_lead (
     KEY idx_lead_owner (owner_id, id),
     KEY idx_lead_call (call_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '电话线索';
+
+-- 通话小结: 挂机后由大模型生成的摘要 + 意向分级, 推给商家并留档。
+-- call_id 与 conversation_turn.session_id、录音文件名、phone_lead.call_id 一致。
+CREATE TABLE IF NOT EXISTS phone_call_summary (
+    id            BIGINT      NOT NULL AUTO_INCREMENT,
+    call_id       VARCHAR(64) NOT NULL,
+    owner_id      BIGINT      NOT NULL COMMENT '商家账号 id',
+    peer_number   VARCHAR(32) COMMENT '来电号码',
+    called_number VARCHAR(32) COMMENT '客户拨打的号码',
+    duration_sec  INT         NOT NULL,
+    turns         INT         NOT NULL COMMENT '对话轮数',
+    summary       VARCHAR(1024) COMMENT '两三句话的摘要',
+    intent        VARCHAR(8)  COMMENT '意向等级 A/B/C/D',
+    follow_up     VARCHAR(512) COMMENT '建议的跟进动作',
+    created_at    DATETIME    NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_summary_call (call_id),
+    KEY idx_summary_owner (owner_id, id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '通话小结';

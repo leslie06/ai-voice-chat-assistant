@@ -8,6 +8,7 @@ import com.vca.orchestrator.vad.PcmAudio;
 import com.vca.orchestrator.vad.VadConfig;
 import com.vca.orchestrator.vad.VoiceActivityDetector;
 import com.vca.telephony.spi.CallEvent;
+import com.vca.telephony.summary.EndedCall;
 import com.vca.telephony.spi.CallLeg;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +19,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * 一路电话通话的编排。<b>它与 {@code VoiceWebSocketHandler.Connection} 是平级的两个接入层</b>:
@@ -67,6 +69,8 @@ public final class CallSession {
     private volatile boolean closed;
     /** AI 说完这句就挂机(由 end_call 工具置位) —— 必须等缓冲播完, 否则客户听不到告别语 */
     private volatile boolean hangupAfterPlayback;
+    /** 通话结束时的回调(事后摘要); 默认不做事 */
+    private volatile Consumer<EndedCall> onEnded = ended -> { };
 
     /** 回合代号: 每开启一轮 +1, 打断时也 +1。只有"当前代号"的下行音频会进缓冲。 */
     private volatile long epoch;
@@ -122,6 +126,16 @@ public final class CallSession {
                 bargeIn();
             }
         };
+    }
+
+    /**
+     * 注册"通话结束"回调: 收尾时把对话快照交出去做事后摘要。
+     *
+     * <p>为什么在收尾那一刻给快照, 而不是让回调自己去查库: 这时内存里就有完整对话, 而
+     * {@code conversation.close()} 之后就只剩数据库里的行了, 还得等落库线程写完。
+     */
+    public void onEnded(Consumer<EndedCall> handler) {
+        this.onEnded = handler == null ? ended -> { } : handler;
     }
 
     /** 订阅媒体与信令, 并起节流器。生产入口。 */
@@ -330,8 +344,16 @@ public final class CallSession {
             return;
         }
         closed = true;
-        log.info("[{}] 通话结束: {} (时长 {}s)", leg.callId(), reason,
-                (System.currentTimeMillis() - startedAtMs) / 1000);
+        int durationSec = (int) ((System.currentTimeMillis() - startedAtMs) / 1000);
+        log.info("[{}] 通话结束: {} (时长 {}s)", leg.callId(), reason, durationSec);
+        // 先把对话快照交给事后处理, 再关会话 —— 关掉之后 historyView 就没了
+        try {
+            onEnded.accept(new EndedCall(leg.callId(), leg.peerNumber(), leg.calledNumber(),
+                    durationSec, reason, conversation.historyView()));
+        } catch (RuntimeException e) {
+            // 事后处理不能影响收尾: 录音落库、资源释放都还在后面
+            log.warn("[{}] 触发通话事后处理失败: {}", leg.callId(), e.toString());
+        }
         dispose(ticker);
         dispose(inboundSub);
         dispose(eventSub);
