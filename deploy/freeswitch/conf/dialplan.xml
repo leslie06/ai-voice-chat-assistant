@@ -57,7 +57,7 @@
                                   FreeSWITCH 与 VCA 同机部署(非容器)时应改回 127.0.0.1, 免得别人往通话里灌音频
             vca_media_remote_host FreeSWITCH 眼里 VCA 的地址
         -->
-        <action application="set" data="vca_media_local_ip=0.0.0.0"/>
+        <action application="set" data="vca_media_local_ip=@VCA_MEDIA_BIND@"/>
         <action application="set" data="vca_media_remote_host=@VCA_HOST@"/>
         <!-- VCA 挂了或没回挂机指令时的兜底: 停泊超过 15 分钟自动挂断, 不留僵尸通道 -->
         <action application="set" data="park_timeout=900"/>

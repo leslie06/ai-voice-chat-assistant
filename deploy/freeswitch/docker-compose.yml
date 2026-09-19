@@ -17,6 +17,9 @@ services:
       # VCA 跑在宿主机上, 容器里用 host.docker.internal 访问
       VCA_HOST: ${VCA_HOST:-host.docker.internal}
       VCA_PORT: ${VCA_PORT:-8084}
+      # 网桥网络下必须 0.0.0.0, 宿主机映射的 18021 才连得进来
+      ESL_BIND: ${ESL_BIND:-0.0.0.0}
+      VCA_MEDIA_BIND: ${VCA_MEDIA_BIND:-0.0.0.0}
       # SIP 中继 / 语音网关(接真实电话线路时才需要, 见 README)。TRUNK_HOST 为空 = 没有中继。
       TRUNK_HOST: ${TRUNK_HOST:-}
       TRUNK_NAME: ${TRUNK_NAME:-trunk}

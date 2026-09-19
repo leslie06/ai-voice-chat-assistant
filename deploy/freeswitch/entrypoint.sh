@@ -8,6 +8,14 @@ set -eu
 : "${ESL_PASSWORD:?必须设置 ESL_PASSWORD}"
 : "${VCA_HOST:=host.docker.internal}"
 : "${VCA_PORT:=8084}"
+# 事件套接字绑哪个地址。容器用网桥网络时必须 0.0.0.0(否则宿主机映射的端口连不进来);
+# 用宿主机网络(服务器部署)时必须 127.0.0.1 —— 否则 8021 直接暴露在公网上,
+# 那个口等于 FreeSWITCH 的完全控制权, 只靠 ACL 兜底太薄。
+: "${ESL_BIND:=0.0.0.0}"
+# unicast 口(FreeSWITCH 往 VCA 发裸音频的那个 UDP 口)绑哪个地址。
+# 容器用网桥网络时必须 0.0.0.0(容器的回环不是宿主机的回环);
+# 用宿主机网络时设 127.0.0.1 —— 不然这个口开在公网网卡上, 谁都能往正在进行的通话里灌音频。
+: "${VCA_MEDIA_BIND:=0.0.0.0}"
 
 # ---- SIP 中继 / 语音网关(可选) ----
 # TRUNK_HOST 为空 = 没有中继, 只有软电话能打进来(本地联调就是这样)。
@@ -92,6 +100,8 @@ for f in /conf/*.xml; do
       -e "s|@ESL_PASSWORD@|${ESL_PASSWORD}|g" \
       -e "s|@VCA_HOST@|${VCA_HOST}|g" \
       -e "s|@VCA_PORT@|${VCA_PORT}|g" \
+      -e "s|@ESL_BIND@|${ESL_BIND}|g" \
+      -e "s|@VCA_MEDIA_BIND@|${VCA_MEDIA_BIND}|g" \
       "$f" > "/etc/freeswitch/$(basename "$f")"
 done
 

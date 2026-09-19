@@ -3,7 +3,10 @@
 # 用 Alpine 仓库里的包: 自带 arm64 构建(Apple 芯片可直接跑), 装包一分钟;
 # 官方 SignalWire 源要注册令牌, 源码编译要半小时以上。
 # 用到的都是 FreeSWITCH 自带能力(mod_event_socket 的 socket 应用 + 内核 unicast), 不需要任何第三方模块。
-FROM alpine:3.22
+# 基础镜像可换源: 国内服务器连不上 Docker Hub(registry-1.docker.io 超时), 换成能通的镜像站,
+# 例如 ALPINE_IMAGE=docker.m.daocloud.io/library/alpine:3.22。Alpine 的软件源本身是通的, 不用改。
+ARG ALPINE_IMAGE=alpine:3.22
+FROM ${ALPINE_IMAGE}
 
 # python3: entrypoint 用它做多行模板替换(sed 处理多行太别扭)
 RUN apk add --no-cache freeswitch python3

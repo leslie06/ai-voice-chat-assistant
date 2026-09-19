@@ -16,7 +16,8 @@
 > FreeSWITCH 包自带的。选型对比见 [10 · 电话接入](./10-telephony-outbound.md) §1。
 
 实现进度：本机软电话**呼入、按键、打断、外呼、FreeSWITCH 重启后自动重连**均已实测通过；
-**真实 SIP 中继还没有联调**（§7）。
+服务器上的 FreeSWITCH **已部署并运行**（§7.2）。还差三件手动的事才能接真实电话：
+开安全组、在 `/etc/vca.env` 写商家配置、配 HT813（§7.3–§7.5）。
 
 ---
 
@@ -373,8 +374,8 @@ perl -e 'sleep 30; print "h\nq\n"' | pjsua --null-audio --no-vad --local-port 50
 
 ## 7. 部署到服务器与接真实线路
 
-> 配置与脚本都已就位并在本机验证过（空中继/假中继两种状态都能正常起、软电话链路不受影响），
-> **但没有真实线路可联调**。第一通真实电话之前，先按 §7.4 的顺序验。
+**线上现状（2026-09-19）**：FreeSWITCH 已经部署在阿里云那台服务器上并正常运行，
+本项目也是 FreeSWITCH 模式。还差三件事才能接真实电话，都要在控制台或设备上手动做，见 §7.5、§7.3、§7.4。
 
 ### 7.1 先决定走哪条路
 
@@ -384,61 +385,109 @@ perl -e 'sleep 30; print "h\nq\n"' | pjsua --null-audio --no-vad --local-port 50
 | **SIP 中继** | 多店、要统一号码 | 企业资质（个体户不行，见 [10](./10-telephony-outbound.md)），向云通信厂商申请 | 号码月租 + 分钟费 |
 
 两条路对 FreeSWITCH 来说是同一件事：**一个 SIP 对端**。区别只是地址在局域网还是公网、认证方式是账号还是 IP 白名单。
-所以配置项是同一套。
+所以配置项是同一套。当前走的是第一条。
 
-### 7.2 配置
+### 7.2 在服务器上部署 FreeSWITCH
 
-在 `deploy/freeswitch/.env` 里加（这个文件不进仓库）：
-
-```bash
-# 中继/网关地址。FXO 网关填它的局域网 IP，SIP 中继填厂商给的地址
-TRUNK_HOST=192.168.1.88
-TRUNK_NAME=trunk                # 拨号串里用它: sofia/gateway/trunk/<号码>
-# 账号密码式(FXO 网关、给了账号的中继)。IP 白名单式就把这三项留空
-TRUNK_USER=8001
-TRUNK_PASSWORD=******
-TRUNK_REALM=                    # 留空 = 用 TRUNK_HOST
-# 放行哪些来源把电话送进来。必配, 不配则全部拒接
-TRUNK_ACL=192.168.1.88/32
-# 服务器的公网 IP(中继在公网时必填, 否则"能接通但没声音")
-EXTERNAL_IP=47.95.248.104
-# 5080 要能被中继访问到
-SIP_BIND=0.0.0.0
-```
-
-外呼改走中继（`.env.phone`）：
+**先腾出 5060。** 早先那轮实验留下的 Asterisk 占着这个端口，两者不能共存：
 
 ```bash
-VCA_FS_ESL_ENABLED=true
-VCA_FS_ESL_ENDPOINT=sofia/gateway/trunk/{number}
+systemctl stop asterisk && systemctl disable asterisk
+ss -lnup | grep ":5060 " || echo "端口已释放"
 ```
 
-改完 **重启容器**（不是 `reloadxml`）：`cd deploy/freeswitch && docker compose up -d --force-recreate`。
-
-### 7.3 这些配置做了什么
-
-- **中继走独立的 SIP 通道**（`external`，端口 5080），与软电话那条（`internal`，5060）彻底分开。
-  中继按 IP 认、不做摘要认证；软电话必须认证。放一个通道里就得在"给中继开口子"和"不给扫号者开口子"之间二选一。
-- **来电落在 `ai-inbound` context**，那里只有一条规则：不管被叫是哪个号码都交给 AI。
-  号码本身随通道数据交给本项目，由它按 `merchants` 认领是哪家商家（§12）。
-- **白名单是第一道防线**。5060/5080 一旦在公网上，几分钟内就会有人来扫号盗打。
-  `TRUNK_ACL` 之外的来源一律拒接，云服务器安全组上再收一道（只对中继 IP 放行 5080 和 RTP 端口段）。
-
-### 7.4 接上之后按这个顺序验
+**传文件并启动**（在开发机上执行）：
 
 ```bash
-cd deploy/freeswitch && ./trunk-status.sh        # 通道/中继/白名单/最近的拒接, 一屏看完
+rsync -az --exclude .env --exclude recordings \
+  deploy/freeswitch/ root@<服务器>:/opt/vca/freeswitch/
 ```
 
-1. **中继状态。** 账号密码式应为 `REGED`；IP 白名单式是 `NOREG`，那是正常的。
-2. **打进来。** 用手机拨那个号码，听到开场白即通。没通就 `./trunk-status.sh --trace` 打开 SIP 报文跟踪，
-   看 `docker logs -f vca-freeswitch`：收不到 INVITE 是线路/安全组的事；收到但被拒多半是白名单。
-3. **听得见声音。** 能接通但双方无声，九成是 `EXTERNAL_IP` 没配成公网 IP。
-4. **窄带识别率。** 真实线路的电平和噪声与软电话不同，先用几通真实通话看日志里的"开口诊断"，
-   再决定要不要调 `VCA_TELEPHONY_VAD_SPEECH`（软电话那组 0.01 是偏低的，真实线路多半用得上默认 0.02）。
-5. **打出去。** `POST /telephony/calls` 拨自己的手机（§3）。
+服务器上写 `/opt/vca/freeswitch/.env`（**与开发机那份是两套独立密钥**，`chmod 600`）：
 
-### 7.5 用语音网关接诊所的固话线（HT813 这类 ATA）
+```bash
+SIP_PASSWORD=$(openssl rand -hex 12)
+ESL_PASSWORD=$(openssl rand -hex 12)
+ATA_LINE_USER=8001
+ATA_LINE_PASSWORD=$(openssl rand -hex 12)
+ATA_PHONE_USER=8002
+ATA_PHONE_PASSWORD=$(openssl rand -hex 12)
+EXTERNAL_IP=<服务器公网 IP>
+# 国内服务器连不上 Docker Hub, 基础镜像换个能通的站
+ALPINE_IMAGE=docker.m.daocloud.io/library/alpine:3.22
+```
+
+然后：
+
+```bash
+cd /opt/vca/freeswitch
+docker compose -f docker-compose.server.yml up -d --build
+```
+
+**服务器用的是另一份编排文件**，与本地那份只差一处：`network_mode: host`。别在 Mac 上用它，
+Docker Desktop 的宿主机网络是模拟的，SIP/RTP 走不通。
+
+用宿主机网络解决了三个真问题，代价是端口不再由 Docker 收口：
+
+| | 本地（网桥） | 服务器（宿主机网络） |
+|---|---|---|
+| RTP 端口 | 二十个 UDP 口逐个映射，媒体多一层 NAT | 直接开在网卡上，不再出现"能接通但没声音" |
+| `VCA_HOST` | `host.docker.internal`（只在 Docker Desktop 上好使） | `127.0.0.1` |
+| `ESL_BIND` | `0.0.0.0`，宿主机只映射 `127.0.0.1:18021` | `127.0.0.1`，事件套接字等于完全控制权，绝不能露在公网 |
+| `VCA_MEDIA_BIND` | `0.0.0.0`，容器的回环不是宿主机的回环 | `127.0.0.1`，否则谁都能往正在进行的通话里灌音频 |
+
+后两项有默认值，`docker-compose.server.yml` 里已经写好，不用自己配。
+
+**改过 `conf/` 或 `entrypoint.sh` 之后必须带 `--build`。** 模板是在容器启动时由 `entrypoint.sh` 渲染的，
+而 `entrypoint.sh` 是打进镜像的。只 `--force-recreate` 会拿旧的 entrypoint 去渲染新模板，
+结果是占位符原样留在配置里（表现为 `vca_media_local_ip=` 后面空着）。
+
+**验收**：
+
+```bash
+P=$(grep ^ESL_PASSWORD /opt/vca/freeswitch/.env | cut -d= -f2)
+docker exec vca-freeswitch fs_cli -p "$P" -x "sofia status"     # 两个 profile 都要 RUNNING
+ss -lntp | grep ":8021"                                          # 必须是 127.0.0.1:8021
+docker exec vca-freeswitch grep -oE 'vca_media_local_ip=[^"]*' /etc/freeswitch/dialplan.xml
+```
+
+`sofia status` 里两条 profile 的地址应该是**公网 IP**（`sip:mod_sofia@<公网IP>:5060`）。
+网卡上绑的是内网地址，这是对的：阿里云的公网 IP 是 NAT 出去的，所以 `EXTERNAL_IP` 必须显式写公网 IP，
+否则 SDP 里会写一个内网地址，对端把 RTP 发过去就石沉大海。
+
+### 7.3 本项目侧的配置（`/etc/vca.env`）
+
+线上这份和开发机的 `.env.phone` 是两套，**部署 jar 不会带过去**。把下面这段并进 `/etc/vca.env`，
+然后 `systemctl restart vca`：
+
+```bash
+VCA_TELEPHONY_ENABLED=true
+VCA_TELEPHONY_PROVIDER=freeswitch
+VCA_TELEPHONY_GREETING=您好，这里是智能语音助手，请问有什么可以帮您的吗？
+# 电话要首字快, 别用会先生成一段思考的模型
+VCA_TELEPHONY_LLM_MODEL=qwen-flash
+QWEN_ENABLE_SEARCH=false
+# 转人工桥接到 HT813 的 PHONE 口, 前台那台有绳话机会响
+VCA_TELEPHONY_TRANSFER_DIAL_STRING=user/8002@vca.local
+
+# 多商家: 按 HT813 送过来的被叫号码认领
+VCA_TELEPHONY_MERCHANTS_0_NUMBER=5000
+VCA_TELEPHONY_MERCHANTS_0_NAME=美好口腔
+VCA_TELEPHONY_MERCHANTS_0_GREETING=您好，这里是美好口腔，请问有什么可以帮您的吗？
+VCA_TELEPHONY_MERCHANTS_1_NUMBER=5001
+VCA_TELEPHONY_MERCHANTS_1_NAME=启明少儿英语
+VCA_TELEPHONY_MERCHANTS_1_GREETING=您好，这里是启明少儿英语，请问有什么可以帮您的吗？
+```
+
+**知识库归属要自己填**。`VCA_TELEPHONY_MERCHANTS_n_KNOWLEDGE_OWNER` 填的是账号 id，
+而线上库和开发机的库是两套，开发机上的 11 和 12 在线上很可能是别的人、或者根本没有那批资料。
+先在线上确认哪个账号传了哪家的资料，再填对应的 id。不填就是电话里没有知识库，
+商家资料类问题（价格、营业时间）答不上来。
+
+**VAD 阈值别照抄开发机那组。** `start-phone.sh` 里的 `VCA_TELEPHONY_VAD_SPEECH=0.01` 是按软电话
+偏小的麦克风电平调的，真实电话线的电平和底噪完全不同，线上先用代码默认值，再按 §7.6 第 4 条调。
+
+### 7.4 用语音网关接诊所的固话线（HT813 这类 ATA）
 
 这是**个人身份也能做、且长期合规**的一条路：网关放在诊所，一头接现有座机线，一头走宽带连云上的 FreeSWITCH。
 
@@ -455,61 +504,120 @@ cd deploy/freeswitch && ./trunk-status.sh        # 通道/中继/白名单/最�
 **为什么两个口各注册一个分机**：网关在诊所路由器后面，家用宽带是动态 IP，按 IP 放行行不通，只能靠注册认证。
 所以它走 `internal`（5060，要认证）那条通道，不是中继用的 `external`。
 
-**FreeSWITCH 侧**，在 `deploy/freeswitch/.env` 里加：
+两个分机的账号密码在**服务器**的 `/opt/vca/freeswitch/.env` 里：
 
 ```bash
-ATA_LINE_USER=8001              # LINE 口(接电话线)用的分机
-ATA_LINE_PASSWORD=<够长的随机串>
-ATA_PHONE_USER=8002             # PHONE 口(接话机)用的分机
-ATA_PHONE_PASSWORD=<够长的随机串>
-SIP_BIND=0.0.0.0                # 网关要从公网连进来
-EXTERNAL_IP=<服务器公网IP>
-```
-
-转人工就转到 PHONE 口那个分机（`.env.phone`）：
-
-```bash
-VCA_TELEPHONY_TRANSFER_DIAL_STRING=user/8002@vca.local
+grep ^ATA_ /opt/vca/freeswitch/.env
 ```
 
 **HT813 侧**（Web 界面），按端口分别配：
 
 | 页面 | 项 | 值 |
 |---|---|---|
-| FXS PORT（PHONE 口） | SIP Server / 账号 | 服务器公网 IP / `8002` + 密码 |
-| FXO PORT（LINE 口） | SIP Server / 账号 | 服务器公网 IP / `8001` + 密码 |
+| FXS PORT（PHONE 口） | SIP Server | `<服务器公网 IP>:5060` |
+| FXS PORT | SIP User ID / Authenticate ID | `8002` |
+| FXS PORT | Password | `.env` 里的 `ATA_PHONE_PASSWORD` |
+| FXO PORT（LINE 口） | SIP Server | `<服务器公网 IP>:5060` |
+| FXO PORT | SIP User ID / Authenticate ID | `8001` |
+| FXO PORT | Password | `.env` 里的 `ATA_LINE_PASSWORD` |
 | FXO PORT | Number of Rings Before Pickup | `2`（响两声自动接，别设 0） |
-| FXO PORT | **Unconditional Call Forward to VOIP** | 填**商家的接入号**，例如 `01088886666` |
+| FXO PORT | **Unconditional Call Forward to VOIP** | `5000`（美好口腔）或 `5001`（启明少儿英语） |
 | FXO PORT | Enable Current Disconnect / Busy Tone Disconnect | 打开 |
 | 两个口 | 语音编码 | 只留 PCMA（或 PCMU），关掉其它 |
 | 两个口 | Caller ID Scheme | 按线路选（大陆多为 FSK Bellcore） |
+| 两个口 | NAT Traversal | 关掉（FreeSWITCH 这边已按 NAT 后处理，两边都开反而错） |
 
-第四项是关键：FXO 是模拟线，**没有被叫号码这个概念**，所以要在网关上写死一个号码送给 FreeSWITCH。
-把它填成这家诊所的号码，多商家路由（§12）就自然对上了——AI 据此知道是哪家店打进来的。
+**SIP Server 填服务器公网 IP，不是局域网地址。** 网关在诊所、FreeSWITCH 在云上，中间隔着公网。
 
-第五项决定挂机检测：对端挂断后模拟线要靠极性反转或忙音才能察觉，不开的话通话会挂到单通上限
-（默认 5 分钟）才断。它是最容易漏配、也最容易表现为"电话占线不放"的一项。
+`Unconditional Call Forward to VOIP` 是关键：FXO 是模拟线，**没有被叫号码这个概念**，
+所以要在网关上写死一个号码送给 FreeSWITCH。它就是 §7.3 里 `MERCHANTS_n_NUMBER` 那个号，
+多商家路由（§12）靠它认领是哪家店。一台网关一家店；多店就多台网关，各填各的号。
+
+`Current Disconnect / Busy Tone Disconnect` 决定挂机检测：对端挂断后模拟线要靠极性反转或忙音才能察觉，
+不开的话通话会挂到单通上限（默认 5 分钟）才断。它是最容易漏配、也最容易表现为"电话占线不放"的一项。
 
 Caller ID 拿得到的话，线索表里就是客户的真实手机号；拿不到就只能靠 AI 在通话里问。
-
-**测试顺序**：网关两个口都注册上（`./trunk-status.sh` 能看到）→ 用别的手机拨诊所号码，听到开场白 →
-说话能识别 → 说"转人工"，有绳电话机响 → 挂断后看日志里的挂机原因是不是及时的。
 
 > **插卡盒（SIM 卡转固话线）那一段要注意**：拿它代替真实固话线做联调没问题，但用 SIM 卡把手机来电
 > 转成 SIP 送上公网，功能上等同于 GoIP，属于《反电信网络诈骗法》第十四条点名的设备，运营商风控也容易停卡。
 > 换成诊所真实的固话线，上面的配置一行都不用改。
 
-### 7.6 同机部署（FreeSWITCH 与本项目在一台服务器上）
+### 7.5 安全组：把口子开到刚好够用
 
-不用容器、或容器用 host 网络时，把 `dialplan.xml` 里三处地址都改成 `127.0.0.1`：
+宿主机网络下端口直接开在网卡上，能不能连进来由**云厂商的安全组**决定。实测当前 5060/udp 从公网**打不通**，
+HT813 连不上，这一步必须在阿里云控制台做：
 
-```xml
-<action application="set" data="vca_media_local_ip=127.0.0.1"/>
-<action application="set" data="vca_media_remote_host=127.0.0.1"/>
-<action application="socket" data="127.0.0.1:8084 async full"/>
+| 端口 | 协议 | 授权对象 | 给谁用 |
+|---|---|---|---|
+| 5060 | UDP | 诊所宽带的公网 IP；动态 IP 只能 `0.0.0.0/0` | HT813 注册与呼叫 |
+| 16384-16402 | UDP | 同上 | RTP 语音 |
+| 5080 | UDP | 只在走运营商 SIP 中继时开，且只对中继 IP | SIP 中继 |
+
+**8021 一个字节都不要开。** 事件套接字等于 FreeSWITCH 的完全控制权，它已经绑在回环上了，
+安全组上再开就是自相矛盾。
+
+开成 `0.0.0.0/0` 的风险和对策：几分钟内就会有人来扫号。这套配置下扫号者拿不到什么——
+`internal` 通道 `auth-calls=true`、`accept-blind-reg=false`，必须摘要认证；
+拨号计划里只有 `500[01]` 和 `6000` 两个可拨目标，**没有任何通向 PSTN 的网关**，
+所以即使密码被猜中也盗打不了长途。真正要守住的是那两个 ATA 密码够长够随机（24 位十六进制）。
+
+验证开没开：
+
+```bash
+# 在任意一台外网机器上
+python3 - <<'PY'
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(6)
+s.sendto(b"OPTIONS sip:x SIP/2.0\r\nVia: SIP/2.0/UDP 0.0.0.0:5099;branch=z9hG4bK-p\r\n"
+         b"From: <sip:p@x>;tag=p\r\nTo: <sip:x>\r\nCall-ID: p\r\nCSeq: 1 OPTIONS\r\n"
+         b"Max-Forwards: 70\r\nContent-Length: 0\r\n\r\n", ("<服务器公网IP>", 5060))
+try: print("通:", s.recvfrom(2048)[0].splitlines()[0])
+except socket.timeout: print("不通, 安全组没放行")
+PY
 ```
 
-`vca_media_local_ip` 改回 `127.0.0.1` 很重要：`0.0.0.0` 会让 unicast 口暴露在网卡上，被人往通话里灌音频。
+### 7.6 接上之后按这个顺序验
+
+```bash
+cd /opt/vca/freeswitch && ./trunk-status.sh      # 通道/中继/白名单/最近的拒接, 一屏看完
+```
+
+1. **两个口都注册上。** `docker exec vca-freeswitch fs_cli -p "$P" -x "sofia status profile internal reg"`
+   里应该能看到 `8001` 和 `8002`。看不到就是安全组、SIP Server 地址或密码的问题，三者按这个顺序排。
+2. **打进来。** 用别的手机拨诊所号码，听到开场白即通。没通就 `./trunk-status.sh --trace` 打开 SIP 报文跟踪，
+   看 `docker logs -f vca-freeswitch`：收不到 INVITE 是线路/安全组的事；收到但被拒多半是认证。
+3. **听得见声音。** 能接通但双方无声，九成是 `EXTERNAL_IP` 没配成公网 IP。
+4. **窄带识别率。** 真实线路的电平和噪声与软电话不同，先用几通真实通话看日志里的"开口诊断"，
+   再决定要不要调 `VCA_TELEPHONY_VAD_SPEECH`（软电话那组 0.01 是偏低的，真实线路多半用得上默认 0.02）。
+5. **转人工。** 说"转人工"，有绳电话机应该响。不响先看 `VCA_TELEPHONY_TRANSFER_DIAL_STRING` 是不是 `user/8002@vca.local`。
+6. **挂机及时。** 挂断后看日志里的挂机原因和时间，拖到 5 分钟上限才断就是网关的挂机检测没开。
+7. **打出去。** `POST /telephony/calls` 拨自己的手机（§3）。
+
+### 7.7 走运营商 SIP 中继（另一条路）
+
+有企业资质、要统一号码时走这条。在 `.env` 里加：
+
+```bash
+TRUNK_HOST=<厂商给的地址>
+TRUNK_NAME=trunk                # 拨号串里用它: sofia/gateway/trunk/<号码>
+TRUNK_USER=<账号>               # IP 白名单式就把这三项留空
+TRUNK_PASSWORD=******
+TRUNK_REALM=                    # 留空 = 用 TRUNK_HOST
+TRUNK_ACL=<中继的 IP>/32        # 必配, 不配则全部拒接
+```
+
+外呼改走中继（`.env.phone` 或 `/etc/vca.env`）：
+
+```bash
+VCA_FS_ESL_ENABLED=true
+VCA_FS_ESL_ENDPOINT=sofia/gateway/trunk/{number}
+```
+
+**中继走独立的 SIP 通道**（`external`，端口 5080），与软电话和 ATA 那条（`internal`，5060）彻底分开。
+中继按 IP 认、不做摘要认证；软电话和 ATA 必须认证。放一个通道里就得在"给中继开口子"和"不给扫号者开口子"之间二选一。
+
+**来电落在 `ai-inbound` context**，那里只有一条规则：不管被叫是哪个号码都交给 AI。
+号码本身随通道数据交给本项目，由它按 `merchants` 认领是哪家商家（§12）。
 
 ---
 
@@ -806,7 +914,7 @@ docker exec vca-freeswitch fs_cli -p "$P" -x "sofia global siptrace on"         
 
 | 项 | 状态 |
 |----|------|
-| 真实线路 | 配置与体检脚本已就位（§7），但没有线路可联调 |
+| 真实线路 | 服务器上的 FreeSWITCH 已部署运行（§7.2）；还差安全组、商家配置、HT813 三步，且没有线路可联调 |
 | 多商家自助开通 | 已实现按号码路由（§12），但配置驱动、加一家要重启；自助开通需要改成查库 |
 | 电话里的知识库检索 | 已完成（§9），按商家隔离 |
 | 按键进对话（例如按键输入手机号） | 事件已到 `CallSession`，只打日志 |

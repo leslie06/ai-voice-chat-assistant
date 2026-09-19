@@ -55,7 +55,7 @@
     <configuration name="event_socket.conf" description="Socket Client">
       <settings>
         <param name="nat-map" value="false"/>
-        <param name="listen-ip" value="0.0.0.0"/>
+        <param name="listen-ip" value="@ESL_BIND@"/>
         <param name="listen-port" value="8021"/>
         <param name="password" value="@ESL_PASSWORD@"/>
         <param name="apply-inbound-acl" value="esl-local"/>

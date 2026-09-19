@@ -1,0 +1,53 @@
+# 服务器部署用(Linux)。本地 Mac 上别用这份 —— Docker Desktop 的宿主机网络是模拟的, SIP/RTP 走不通。
+#
+#   docker compose -f docker-compose.server.yml up -d --build
+#
+# 与本地那份的区别只有一处: 用宿主机网络。由此带来三个好处, 都是电话链路上的真问题:
+#   1. RTP 的二十个 UDP 口不用逐个映射, 媒体少一层 NAT, 也不会再出现"能接通但没声音";
+#   2. VCA 就在 127.0.0.1:8084, 不需要 host.docker.internal 这种只在 Docker Desktop 上好使的东西;
+#   3. 事件套接字绑回环 —— 那个口等于 FreeSWITCH 的完全控制权, 绝不能露在公网上。
+#
+# 代价是端口不再由 Docker 收口, SIP(5060/5080) 与 RTP(16384-16402) 直接开在服务器网卡上。
+# 谁能连进来由云厂商的安全组决定, 见 docs/12-freeswitch.md §7。
+services:
+  freeswitch:
+    build:
+      context: .
+      args:
+        # 国内服务器连不上 Docker Hub, 在 .env 里指一个能通的镜像站
+        ALPINE_IMAGE: ${ALPINE_IMAGE:-alpine:3.22}
+    image: vca-freeswitch:local
+    container_name: vca-freeswitch
+    restart: unless-stopped
+    # FreeSWITCH 控制台模式要一个开着的 stdin, 日志才走 stdout
+    stdin_open: true
+    tty: true
+    network_mode: host
+    environment:
+      # 写进 SDP 的地址。阿里云 ECS 的公网 IP 是 NAT 出去的, 网卡上只有内网地址,
+      # 所以这里必须显式写公网 IP, 否则对端会把 RTP 发到一个内网地址上。
+      EXTERNAL_IP: ${EXTERNAL_IP:?先设置 EXTERNAL_IP(服务器公网 IP)}
+      SIP_PASSWORD: ${SIP_PASSWORD:?先设置 SIP_PASSWORD}
+      ESL_PASSWORD: ${ESL_PASSWORD:?先设置 ESL_PASSWORD}
+      # 同机部署: VCA 与 FreeSWITCH 共享网络命名空间, 回环即可
+      VCA_HOST: ${VCA_HOST:-127.0.0.1}
+      VCA_PORT: ${VCA_PORT:-8084}
+      ESL_BIND: ${ESL_BIND:-127.0.0.1}
+      # unicast 口也绑回环: 同机部署时两边都在本机, 开在公网网卡上只会招人往通话里灌音频
+      VCA_MEDIA_BIND: ${VCA_MEDIA_BIND:-127.0.0.1}
+      # SIP 中继(如果走运营商的 SIP 线路; 用 HT813 接固话线时不用配)
+      TRUNK_HOST: ${TRUNK_HOST:-}
+      TRUNK_NAME: ${TRUNK_NAME:-trunk}
+      TRUNK_USER: ${TRUNK_USER:-}
+      TRUNK_PASSWORD: ${TRUNK_PASSWORD:-}
+      TRUNK_REALM: ${TRUNK_REALM:-}
+      TRUNK_FROM_USER: ${TRUNK_FROM_USER:-}
+      TRUNK_ACL: ${TRUNK_ACL:-}
+      # 语音网关(HT813)的两个口各一个分机: LINE 口接电话线(来电进 AI), PHONE 口接话机(转人工)
+      ATA_LINE_USER: ${ATA_LINE_USER:-}
+      ATA_LINE_PASSWORD: ${ATA_LINE_PASSWORD:-}
+      ATA_PHONE_USER: ${ATA_PHONE_USER:-}
+      ATA_PHONE_PASSWORD: ${ATA_PHONE_PASSWORD:-}
+    volumes:
+      - ./conf:/conf:ro
+      - ./recordings:/recordings

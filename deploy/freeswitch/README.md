@@ -77,6 +77,21 @@ curl -X POST http://127.0.0.1:8080/telephony/calls \
 
 接真实中继时，在 `conf/freeswitch.xml` 里加 sofia gateway，`VCA_FS_ESL_ENDPOINT` 改成 `sofia/gateway/<网关名>/{number}`。
 
+## 部署到服务器
+
+服务器用的是另一份编排文件 `docker-compose.server.yml`，与本地那份只差 `network_mode: host`：
+
+```bash
+rsync -az --exclude .env --exclude recordings deploy/freeswitch/ root@<服务器>:/opt/vca/freeswitch/
+# 服务器上: 写好 .env(密钥、EXTERNAL_IP=公网 IP、国内机器还要 ALPINE_IMAGE 换镜像源)
+cd /opt/vca/freeswitch && docker compose -f docker-compose.server.yml up -d --build
+```
+
+**别在 Mac 上用这份**，Docker Desktop 的宿主机网络是模拟的，SIP/RTP 走不通。
+改过 `conf/` 或 `entrypoint.sh` 之后**必须带 `--build`**：模板由打进镜像的 `entrypoint.sh` 渲染，
+只 `--force-recreate` 会拿旧 entrypoint 渲染新模板，占位符会原样留在配置里。
+完整步骤、安全组、HT813 逐项设置见 [docs/12 §7](../../docs/12-freeswitch.md)。
+
 ## 接真实电话线路 / 语音网关
 
 在本目录的 `.env` 里加 `TRUNK_HOST` 等参数(见 [docs/12 §7](../../docs/12-freeswitch.md))，
@@ -128,5 +143,7 @@ EXTERNAL_IP=<这台电脑的局域网IP> SIP_BIND=0.0.0.0 docker compose up -d
 - **`local-network-acl` 指向空名单。** 软电话经 Docker 转发进来源地址是网桥网关，不这么做 SDP 里会写容器内网 IP。
 - **RTP 只开 16384–16402。** Docker 要逐个映射 UDP 端口；FreeSWITCH 只用偶数端口，约同时 10 路。
 - **事件套接字在宿主机上是 18021。** macOS 上 8021 常被 launchd 占着。
-- **部署到服务器（FreeSWITCH 与 VCA 同机、不用容器）时**，把 `dialplan.xml` 里 `vca_media_local_ip` 改回 `127.0.0.1`、
-  `vca_media_remote_host` 和 socket 地址改成 `127.0.0.1`，免得 unicast 口暴露在网卡上被人灌音频。
+- **三个地址是可配的，不是写死的。** `VCA_HOST`（VCA 在哪）、`ESL_BIND`（事件套接字绑哪）、
+  `VCA_MEDIA_BIND`（unicast 口绑哪）。本地用网桥网络，三者分别是 `host.docker.internal` / `0.0.0.0` / `0.0.0.0`；
+  服务器用宿主机网络，三者都是 `127.0.0.1`，`docker-compose.server.yml` 里已经写好。
+  后两个在服务器上尤其要紧：事件套接字等于 FreeSWITCH 的完全控制权，unicast 口开在网卡上则谁都能往通话里灌音频。
