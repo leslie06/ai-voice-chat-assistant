@@ -143,6 +143,19 @@ public class TelephonyProperties {
      */
     private String asrModel = "paraformer-realtime-8k-v2";
 
+    /**
+     * 电话链路专用的热词表 id。<b>窄带线路上这是提准的主要手段。</b>
+     *
+     * <p>实测同一段 8kHz 电话音频:「洗牙多少钱」不带热词被识别成「抵押多少钱」, 带上热词就对了;
+     * 「种植牙」同理("中岁牙"→"种植牙")。换模型解决不了这个 —— 三个模型都栽在"洗牙"上,
+     * 因为声母 x 的高频能量在电话线上本来就没传过来, 只能靠热词把候选词拉回来。
+     *
+     * <p>热词表要先在厂商那边注册, 且<b>与目标模型绑定</b>(建表时要指定 target_model),
+     * 换模型就得重建。注册见 docs/12 §13 的"窄带线路要用窄带模型"。
+     * 留空则退回 {@code vca.providers.asr.aliyun.vocabulary-id} 的全局值。
+     */
+    private String asrVocabularyId = "";
+
     /** 开场白合成用的 TTS 厂商与采样率。 */
     private VendorType ttsVendor = VendorType.ALIYUN;
 
@@ -895,6 +908,14 @@ public class TelephonyProperties {
 
     public void setAsrModel(String asrModel) {
         this.asrModel = asrModel == null ? "" : asrModel.strip();
+    }
+
+    public String getAsrVocabularyId() {
+        return asrVocabularyId;
+    }
+
+    public void setAsrVocabularyId(String v) {
+        this.asrVocabularyId = v == null ? "" : v.strip();
     }
 
     public String getErrorPrompt() {

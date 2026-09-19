@@ -80,8 +80,11 @@ public class AliyunAsrProvider implements AsrProvider {
             if (!hints.isEmpty()) {
                 builder.parameter("language_hints", hints);
             }
-            if (!props.getVocabularyId().isBlank()) {
-                builder.vocabularyId(props.getVocabularyId());
+            // 会话指定的热词表优先: 热词表与目标模型绑定, 电话(8k 模型)和浏览器(宽带模型)不能共用一张
+            String vocabulary = cfg.vocabularyId() == null || cfg.vocabularyId().isBlank()
+                    ? props.getVocabularyId() : cfg.vocabularyId();
+            if (!vocabulary.isBlank()) {
+                builder.vocabularyId(vocabulary);
             } else if (!cfg.hotWords().isEmpty()) {
                 warnHotWordsUnsupported(cfg.hotWords().size());
             }

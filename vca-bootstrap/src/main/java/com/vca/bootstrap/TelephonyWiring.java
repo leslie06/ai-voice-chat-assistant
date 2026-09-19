@@ -84,7 +84,7 @@ public class TelephonyWiring {
                     false,    // 电话不做自动联网注入: 实测一次 2.3 秒, 是体感延迟里最大的一块
                     merchant.knowledgeOwner(),
                     // 电话是 8k 窄带线路, 识别要用 8k 专用模型并按原生采样率送音频, 见 TelephonyProperties#asrModel
-                    props.getAsrModel(), props.getSampleRate());
+                    props.getAsrModel(), props.getSampleRate(), props.getAsrVocabularyId());
             return factory.create(call.callId(), null, TurnListener.NOOP, overrides);
         };
     }

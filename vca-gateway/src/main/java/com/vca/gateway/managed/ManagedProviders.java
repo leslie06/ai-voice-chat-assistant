@@ -61,10 +61,11 @@ public final class ManagedProviders {
             return executor.execute(Capability.ASR, cfg.vendor(), cand -> {
                 AsrProvider p = registry.asr(cand.vendor()).orElseThrow(
                         () -> ProviderException.fatal(cand.vendor(), Capability.ASR, "未注册的 ASR 厂商", null));
-                // 模型名是厂商相关的: 转移到别家时不能沿用, 留空让对方用自己的默认模型
-                String model = cand.vendor() == cfg.vendor() ? cfg.model() : "";
+                // 模型名与热词表都是厂商相关的: 转移到别家时不沿用, 让对方用自己的默认值
+                boolean same = cand.vendor() == cfg.vendor();
                 AsrConfig vc = new AsrConfig(cand.vendor(), cfg.language(), cfg.sampleRate(),
-                        cfg.hotWords(), cfg.enablePunctuation(), model);
+                        cfg.hotWords(), cfg.enablePunctuation(),
+                        same ? cfg.model() : "", same ? cfg.vocabularyId() : "");
                 return p.transcribe(audio, vc);
             });
         }
