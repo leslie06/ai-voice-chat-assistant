@@ -896,9 +896,49 @@ VCA_TELEPHONY_ASR_MODEL=paraformer-realtime-8k-v2
 **先量再改。** 判断是不是这个问题，看日志里 `阿里云 ASR 开始, model=..., sr=...` 那行：
 线路是 8000Hz 而这里是 16000，就是它。
 
-**还能再进一步**：阿里云支持热词表，把洗牙、种植牙、正畸、根管、窝沟封闭这类词注册成一张表，
-拿到 id 后配 `vca.providers.asr.aliyun.vocabulary-id`。代码里已经留了这个配置项，
-配了热词却没配 id 时会打一条 WARN 提醒。
+**但换模型只解决一半。** 同一段 8kHz 音频离线比过三个模型，全都栽在"洗牙"上：
+
+| 模型 | 「洗牙多少钱」 | 「种植牙多少钱」 |
+|---|---|---|
+| paraformer-realtime-v2 | 挤压多少钱 | 种肥牙多少钱 |
+| paraformer-realtime-8k-v2 | 抵押多少钱 | 中岁牙多少钱 |
+| paraformer-realtime-8k-v1 | 抵押多少钱 | 种植牙多少钱 |
+
+**真正管用的是热词表。** 同一段音频、同一个 8k 模型，只加热词：
+
+| | 「洗牙多少钱」 | 「种植牙多少钱」 |
+|---|---|---|
+| 不带热词 | 抵押多少钱 | 中岁牙多少钱 |
+| 带热词 | **洗牙多少钱** | **种植牙多少钱** |
+
+道理很直白：声母 x 的高频能量在电话线上本来就没传过来，换哪个模型都猜不回来；
+热词把这些词的先验拉高，模型才能从一堆同样"像"的候选里选对。窄带线路上这是提准的主要手段，
+不是锦上添花。
+
+热词表要先在厂商那边注册，**并与目标模型绑定**，换模型就得重建：
+
+```bash
+curl -X POST https://dashscope.aliyuncs.com/api/v1/services/audio/asr/customization \
+  -H "Authorization: bearer $DASHSCOPE_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"speech-biasing","input":{"action":"create_vocabulary",
+       "target_model":"paraformer-realtime-8k-v2","prefix":"vca",
+       "vocabulary":[{"text":"洗牙","weight":4,"lang":"zh"},
+                     {"text":"种植牙","weight":4,"lang":"zh"}]}}'
+```
+
+拿到 `vocabulary_id` 后配进去，改词用 `update_vocabulary`：
+
+```bash
+# /etc/vca.env
+VCA_TELEPHONY_ASR_VOCABULARY_ID=vocab-xxxx
+```
+
+词表里该放什么：每家商家的项目名（洗牙、种植牙、正畸、根管治疗、窝沟封闭）、商家名、
+以及客服流程词（转人工、预约、回电）。多商家可以共用一张表，热词只是加权，不会互相排斥。
+
+**测试音频要用真人声。** 我用 macOS `say` 合成的语音在 16kHz 原始音质下同样识别错
+（洗牙→洗了，种植牙→用嘴牙），拿它衡量不出改动的效果。评估识别准确率必须用真实通话录音，
+`recordings/` 下每通电话都留了双声道 wav，左声道就是来电方说的。
 
 ### 认证后的 INVITE 太大（走公网才会遇到）
 
