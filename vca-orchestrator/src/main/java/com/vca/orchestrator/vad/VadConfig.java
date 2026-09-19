@@ -13,7 +13,7 @@ package com.vca.orchestrator.vad;
  * @param bargeThreshold  打断阈值, 通常略高于 {@code speechThreshold}; 抗回声自打断主要靠抬高它
  * @param bargeMs         机器人说话时人声持续这么久(ms)即判定插话→打断
  * @param prerollMs       预滚: 保留开口前这么久(ms)的音频随首帧补发, 不切第一个字
- * @param targetSampleRate VAD/ASR 统一采样率(Hz), 上行音频会重采样到此(Silero 要求 16000)
+ * @param targetSampleRate 检测器工作的采样率(Hz), 上行音频会重采样到此(Silero 要求 16000)
  * @param useSilero       是否启用 Silero(ONNX)语义级 VAD; false 用能量阈值法
  * @param sileroModelPath Silero 模型路径; 空则用打包进 classpath 的默认 {@code silero_vad.onnx}
  * @param bargeGraceMs    起播保护期: 机器人开口后这么久(ms)内不判打断, 避免被自己头几个字的回声掐断; 0=不保护
@@ -23,6 +23,10 @@ package com.vca.orchestrator.vad;
  *                        {@link EchoGuard} 先分辨"这股声音是用户还是机器人自己的回声", 判定为回声的帧不计入。
  *                        这是让<b>外放也能语音打断</b>的路子(半双工下外放只能用手动按钮)。
  *                        默认关: 合成信号上验证过, 但真实声学环境需真机确认后再开
+ * @param asrSampleRate    <b>交给下游 ASR 的采样率</b>(Hz)。0 = 与 {@code targetSampleRate} 相同(浏览器链路)。
+ *                         电话链路必须设成线路原生的 8000: 检测器要 16k 才能跑 Silero, 但把 8k 上采样到
+ *                         16k 再送进宽带识别模型, 等于让模型在本该有高频摩擦音的地方瞎猜 ——
+ *                         "洗牙"被听成抵押、拿、压就是这么来的。两个采样率必须能分开配。
  */
 public record VadConfig(
         double speechThreshold,
@@ -39,16 +43,22 @@ public record VadConfig(
         boolean echoAware,
         boolean semanticEndpoint,
         int minSilenceMs,
-        int maxSilenceMs) {
+        int maxSilenceMs,
+        int asrSampleRate) {
+
+    /** 下游 ASR 实际要的采样率: 没单独配就跟检测器一致。 */
+    public int effectiveAsrSampleRate() {
+        return asrSampleRate > 0 ? asrSampleRate : targetSampleRate;
+    }
 
     /** 与原前端常量一致的能量阈值法默认值(无起播保护、全双工, 保持库默认行为) */
     public static VadConfig defaults() {
-        return new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 0, false, false, false, 400, 1600);
+        return new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 0, false, false, false, 400, 1600, 0);
     }
 
     /** Silero 默认: 阈值换成人声概率尺度(0.5/0.6), 时序沿用能量法, 采样率锁 16k。 */
     public static VadConfig silero(String modelPath) {
         return new VadConfig(0.5, 150, 800, 0.6, 250, 400, 16000, true, modelPath == null ? "" : modelPath,
-                0, false, false, false, 400, 1600);
+                0, false, false, false, 400, 1600, 0);
     }
 }

@@ -64,8 +64,10 @@ public class AliyunAsrProvider implements AsrProvider {
         return Flux.defer(() -> {
             // punctuation_prediction_enabled 必须显式下发: 语义端点判定(EndpointPolicy)靠中间转写里的
             // 句末标点判"已说完", 标点没了就只剩无标点规则可用, 判停会整体变慢。
+            // 会话指定的模型优先: 电话链路要 8k 窄带模型, 浏览器那条仍用宽带模型, 两者不能共用一个全局值
+            String model = cfg.model() == null || cfg.model().isBlank() ? props.getModel() : cfg.model();
             RecognitionParam.RecognitionParamBuilder<?, ?> builder = RecognitionParam.builder()
-                    .model(props.getModel())
+                    .model(model)
                     .format("pcm")
                     .sampleRate(cfg.sampleRate())
                     .apiKey(props.getApiKey())
@@ -122,7 +124,7 @@ public class AliyunAsrProvider implements AsrProvider {
                             : ProviderException.retryable(VendorType.ALIYUN, Capability.ASR,
                             "DashScope ASR 识别出错: " + e.getMessage(), e))
                     .doOnSubscribe(s -> log.debug("阿里云 ASR 开始, model={}, sr={}, languageHints={}",
-                            props.getModel(), cfg.sampleRate(), hints));
+                            model, cfg.sampleRate(), hints));
         });
     }
 

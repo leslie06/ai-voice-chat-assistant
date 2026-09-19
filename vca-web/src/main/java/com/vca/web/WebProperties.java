@@ -482,7 +482,8 @@ public class WebProperties {
             }
             return new VadConfig(speech, onsetMs, silenceMs, barge, bargeMs, prerollMs, targetSampleRate,
                     useSilero, sileroModelPath, bargeGraceMs, halfDuplex, echoAware,
-                    semanticEndpoint, minSilenceMs, maxSilenceMs);
+                    // asrSampleRate=0: 浏览器上行本就重采样到 16k, 识别和检测共用一个采样率
+                    semanticEndpoint, minSilenceMs, maxSilenceMs, 0);
         }
 
         public double getSpeechThreshold() {

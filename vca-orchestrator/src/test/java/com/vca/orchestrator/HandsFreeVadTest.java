@@ -83,7 +83,7 @@ class HandsFreeVadTest {
     @Test
     void bargeGracePeriodSuppressesEarlyBargeIn() {
         // grace=600ms; 其余沿用默认(barge 阈值 0.020, bargeMs 250), 全双工以便验证打断
-        VadConfig cfg = new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 600, false, false, false, 400, 1600);
+        VadConfig cfg = new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 600, false, false, false, 400, 1600, 0);
         HandsFreeVad v = new HandsFreeVad(cfg, new HandsFreeVad.Listener() {
             @Override public void onSpeechStart() { events.add("start"); }
             @Override public void onAudio(byte[] pcm16le) { events.add("audio"); }
@@ -111,7 +111,7 @@ class HandsFreeVadTest {
     /** 半双工: 机器人说话期间即使有持续人声(回声)也绝不打断, 从根上断掉自打断死循环。 */
     @Test
     void halfDuplexNeverBargesWhileBotSpeaking() {
-        VadConfig cfg = new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 0, true, false, false, 400, 1600);
+        VadConfig cfg = new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000, false, "", 0, true, false, false, 400, 1600, 0);
         HandsFreeVad v = new HandsFreeVad(cfg, new HandsFreeVad.Listener() {
             @Override public void onSpeechStart() { events.add("start"); }
             @Override public void onAudio(byte[] pcm16le) { events.add("audio"); }
@@ -130,10 +130,65 @@ class HandsFreeVadTest {
 
     // ---- 回声感知打断(echoAware): 让外放场景也能语音打断 ----
 
+    /**
+     * 电话链路: 检测器跑 16k(Silero 的要求), 但交给 ASR 的必须是线路原生的 8k。
+     *
+     * <p>线上事故: 8k 上采样到 16k 之后喂给宽带识别模型, "洗牙多少钱"被听成"抵押多少钱""拿多少钱",
+     * 而"多少钱"三个字每次都对 —— 错的正是声母 x 这种高频摩擦音, 它的能量在 4kHz 以上,
+     * 电话线根本没传过来。上采样补不回来, 只会让宽带模型在空白处瞎猜。
+     */
+    @Test
+    void telephonyEmitsLineRateAudioWhileDetectingAt16k() {
+        int lineRate = 8000;
+        int lineFrame = lineRate / 50;          // 20ms @8k = 160 采样
+        List<byte[]> emitted = new ArrayList<>();
+        VadConfig cfg = new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000,
+                false, "", 0, false, false, false, 400, 1600, lineRate);
+        HandsFreeVad v = new HandsFreeVad(cfg, new HandsFreeVad.Listener() {
+            @Override public void onSpeechStart() { }
+            @Override public void onAudio(byte[] pcm16le) { emitted.add(pcm16le); }
+            @Override public void onSpeechEnd() { }
+            @Override public void onBargeIn() { }
+        });
+        v.start(lineRate);
+
+        short[] loud8k = new short[lineFrame];
+        java.util.Arrays.fill(loud8k, (short) 2000);
+        for (int i = 0; i < 12; i++) {
+            v.accept(PcmAudio.encodeLe(loud8k), false);
+        }
+
+        assertTrue(!emitted.isEmpty(), "开口后应有音频交给 ASR");
+        for (byte[] f : emitted) {
+            assertEquals(lineFrame * 2, f.length,
+                    "交给 ASR 的应是 8k 原生帧(160 采样), 不是上采样到 16k 的 320 采样");
+        }
+    }
+
+    /** 不配 asrSampleRate 时维持原样: 检测和识别共用一个采样率(浏览器链路) */
+    @Test
+    void browserKeepsSingleSampleRate() {
+        List<byte[]> emitted = new ArrayList<>();
+        HandsFreeVad v = new HandsFreeVad(VadConfig.defaults(), new HandsFreeVad.Listener() {
+            @Override public void onSpeechStart() { }
+            @Override public void onAudio(byte[] pcm16le) { emitted.add(pcm16le); }
+            @Override public void onSpeechEnd() { }
+            @Override public void onBargeIn() { }
+        });
+        v.start(RATE);
+        for (int i = 0; i < 12; i++) {
+            v.accept(loud(), false);
+        }
+        assertTrue(!emitted.isEmpty());
+        for (byte[] f : emitted) {
+            assertEquals(FRAME * 2, f.length, "浏览器链路仍是 16k 帧");
+        }
+    }
+
     private static VadConfig echoAwareConfig() {
         // halfDuplex=true 但 echoAware=true: 半双工的"一刀切不判打断"应当被回声判别接管
         return new VadConfig(0.015, 150, 800, 0.020, 250, 400, 16000,
-                false, "", 0, true, true, false, 400, 1600);
+                false, "", 0, true, true, false, 400, 1600, 0);
     }
 
     /** 虚拟时钟: 按帧推进, 让回声判别拿到真实的时间轴(见 HandsFreeVad 带 clock 的构造函数)。 */

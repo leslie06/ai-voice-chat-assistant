@@ -13,22 +13,27 @@ import java.util.List;
  * @param sampleRate        采样率(Hz), 默认 16000
  * @param hotWords          业务热词, 直接提升专有名词识别准确率
  * @param enablePunctuation 是否开启智能标点
+ * @param model             模型名。留空 = 用该厂商配置里的默认模型。
+ *                          电话链路要用它指定 8k 窄带模型: 线路只有 8kHz, 拿宽带模型去听等于让它在
+ *                          本该有高频摩擦音的地方瞎猜(洗牙被听成抵押、拿、压就是这么来的)。
  */
 public record AsrConfig(
         VendorType vendor,
         String language,
         int sampleRate,
         List<String> hotWords,
-        boolean enablePunctuation
+        boolean enablePunctuation,
+        String model
 ) {
     public AsrConfig {
         if (sampleRate <= 0) {
             sampleRate = 16000;
         }
         hotWords = hotWords == null ? List.of() : List.copyOf(hotWords);
+        model = model == null ? "" : model.strip();
     }
 
     public static AsrConfig defaults(VendorType vendor) {
-        return new AsrConfig(vendor, "zh-CN", 16000, List.of(), true);
+        return new AsrConfig(vendor, "zh-CN", 16000, List.of(), true, "");
     }
 }

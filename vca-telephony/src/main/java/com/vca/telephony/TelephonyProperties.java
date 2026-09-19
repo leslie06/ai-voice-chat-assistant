@@ -131,6 +131,18 @@ public class TelephonyProperties {
      */
     private String errorPrompt = "不好意思，我这边没太听清，您再说一遍好吗？";
 
+    /**
+     * 电话链路专用的识别模型。默认用阿里云的 8kHz 窄带模型。
+     *
+     * <p>电话线是 8kHz 采样、G.711 编码, 3.4kHz 以上的声音根本不存在。宽带模型
+     * ({@code paraformer-realtime-v2}) 训练时见的是有高频的音频, 拿它听电话就会在缺失的那段上瞎猜 ——
+     * 线上实测"洗牙多少钱"被听成"抵押多少钱""拿多少钱""压多少钱", 而"多少钱"三个字每次都对,
+     * 错的正是声母 x 这种高频摩擦音。8k 模型训练时见的全是这种窄带音频, 对此有专门的分辨能力。
+     *
+     * <p>留空则用 {@code vca.providers.asr.aliyun.model} 的全局值(浏览器链路用的宽带模型)。
+     */
+    private String asrModel = "paraformer-realtime-8k-v2";
+
     /** 开场白合成用的 TTS 厂商与采样率。 */
     private VendorType ttsVendor = VendorType.ALIYUN;
 
@@ -722,11 +734,13 @@ public class TelephonyProperties {
         return new VadConfig(
                 vad.getSpeechThreshold(), vad.getOnsetMs(), vad.getSilenceMs(),
                 vad.getBargeThreshold(), vad.getBargeMs(), vad.getPrerollMs(),
+                // 检测器固定 16k(Silero 的要求), 但交给识别的是线路原生采样率:
+                // 8k 上采样到 16k 再喂宽带模型, 模型会在本该有高频摩擦音的地方瞎猜
                 16_000, vad.isUseSilero(), "", vad.getBargeGraceMs(),
                 // halfDuplex=false: 电话线路本就是全双工, 打断照常判
                 // echoAware=false: 回声判别依赖"服务端知道下行音频"的时序模型, 电话侧下行走
                 //                  定速缓冲(PacingBuffer), 时间轴与 Web 不同, 未验证
-                false, false, false, 400, 1600);
+                false, false, false, 400, 1600, sampleRate);
     }
 
     // ---- getters / setters ----
@@ -873,6 +887,14 @@ public class TelephonyProperties {
 
     public void setGreeting(String greeting) {
         this.greeting = greeting;
+    }
+
+    public String getAsrModel() {
+        return asrModel;
+    }
+
+    public void setAsrModel(String asrModel) {
+        this.asrModel = asrModel == null ? "" : asrModel.strip();
     }
 
     public String getErrorPrompt() {

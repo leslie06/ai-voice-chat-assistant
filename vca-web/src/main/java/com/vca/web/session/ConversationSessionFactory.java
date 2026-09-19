@@ -71,8 +71,10 @@ public class ConversationSessionFactory {
      *                       对端是外部客户、没有登录身份, 要查的是商家上传的项目/价格/营业时间
      */
     public record Overrides(SkillRegistry skills, String ttsVoice, String systemPrompt, String llmModel,
-                           Boolean webSearchAuto, String knowledgeOwner) {
-        private static final Overrides NONE = new Overrides(null, null, null, null, null, null);
+                           Boolean webSearchAuto, String knowledgeOwner,
+                           String asrModel, Integer asrSampleRate) {
+        private static final Overrides NONE =
+                new Overrides(null, null, null, null, null, null, null, null);
 
         public static Overrides none() {
             return NONE;
@@ -93,7 +95,8 @@ public class ConversationSessionFactory {
      */
     public ConversationSession create(String sessionId, String userId, TurnListener listener, Overrides overrides) {
         Overrides ov = overrides == null ? Overrides.none() : overrides;
-        SessionContext ctx = combinedContext(sessionId, ov.ttsVoice(), ov.systemPrompt(), ov.llmModel());
+        SessionContext ctx = combinedContext(sessionId, ov.ttsVoice(), ov.systemPrompt(), ov.llmModel(),
+                ov.asrModel(), ov.asrSampleRate());
 
         ConversationSession session = new ConversationSession(
                 ctx, gateway.asr(), gateway.llm(), gateway.tts(), gateway.s2s(), splitter,
@@ -125,9 +128,15 @@ public class ConversationSessionFactory {
      * 端到端模型只吃音频, 打字时回退到这份 LLM 出文字回复(不发声), s2s 下也能打字提问。
      */
     private SessionContext combinedContext(String sessionId, String ttsVoiceOverride, String promptOverride,
-                                           String llmModelOverride) {
+                                           String llmModelOverride, String asrModelOverride,
+                                           Integer asrSampleRateOverride) {
+        // 采样率与模型必须一起来自接入层: 电话是 8k 窄带 + 8k 模型, 浏览器是 16k 宽带 + 宽带模型,
+        // 只改一半(比如把 8k 音频喂给宽带模型)比两样都不改还糟。
+        int asrRate = asrSampleRateOverride != null && asrSampleRateOverride > 0
+                ? asrSampleRateOverride : 16000;
         AsrConfig asr = new AsrConfig(props.getAsrVendor(), props.getAsrLanguage(),
-                16000, java.util.List.of(), true);
+                asrRate, java.util.List.of(), true,
+                asrModelOverride == null ? "" : asrModelOverride);
         String prompt = promptOverride == null || promptOverride.isBlank()
                 ? props.getSystemPrompt() : promptOverride;
         String llmModel = llmModelOverride == null || llmModelOverride.isBlank()

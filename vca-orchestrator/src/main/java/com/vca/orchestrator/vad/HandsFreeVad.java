@@ -170,7 +170,10 @@ public class HandsFreeVad {
         }
         double level = detector.speechProbability(frame);
         double frameMs = frame.length * 1000.0 / cfg.targetSampleRate();
-        pushPreroll(frame, frameMs);
+        // 检测用 targetSampleRate(Silero 只吃 16k), 送下游 ASR 的可以是另一个采样率。
+        // 电话链路靠这里把原生 8k 原样交出去 —— 上采样到 16k 再喂宽带模型只会让它瞎猜高频。
+        short[] outFrame = emitFrame(pcm16leNative, frame);
+        pushPreroll(outFrame, frameMs);
 
         if (echoGuard != null) {
             echoGuard.onMic(frame, cfg.targetSampleRate(), clock.getAsLong());
@@ -215,7 +218,7 @@ public class HandsFreeVad {
                 }
             }
             case SPEAK -> {
-                listener.onAudio(PcmAudio.encodeLe(frame));
+                listener.onAudio(PcmAudio.encodeLe(outFrame));
                 // 滞回判停: 达到(高)开口阈值才算"明确说话"→ 清零静音计时;
                 // 跌破(低)释放阈值才算"明确静音"→ 累计; 两阈值之间维持现状, 防抖动误断句。
                 if (level >= cfg.speechThreshold()) {
@@ -335,12 +338,29 @@ public class HandsFreeVad {
         }
     }
 
+    /**
+     * 这一帧交给下游(预滚缓冲与 {@code onAudio})时用哪份数据。
+     *
+     * <p>采样率与检测器一致时直接复用检测帧, 不做第二次重采样; 电话链路(8k 进、8k 出)也走这条,
+     * 因为它本来就不需要转换 —— 原始字节原样送出, 一次重采样都没有。
+     */
+    private short[] emitFrame(byte[] pcm16leNative, short[] detectFrame) {
+        int emitRate = cfg.effectiveAsrSampleRate();
+        if (emitRate == cfg.targetSampleRate()) {
+            return detectFrame;
+        }
+        if (emitRate == inputSampleRate) {
+            return PcmAudio.decodeLe(pcm16leNative);
+        }
+        return PcmAudio.resample(PcmAudio.decodeLe(pcm16leNative), inputSampleRate, emitRate);
+    }
+
     private void pushPreroll(short[] frame, double frameMs) {
         preroll.addLast(frame);
         prerollMs += frameMs;
         while (prerollMs > cfg.prerollMs() && preroll.size() > 1) {
             short[] dropped = preroll.removeFirst();
-            prerollMs -= dropped.length * 1000.0 / cfg.targetSampleRate();
+            prerollMs -= dropped.length * 1000.0 / cfg.effectiveAsrSampleRate();
         }
     }
 
