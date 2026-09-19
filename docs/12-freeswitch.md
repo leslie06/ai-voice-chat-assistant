@@ -550,6 +550,7 @@ HT813 连不上，这一步必须在阿里云控制台做：
 | 端口 | 协议 | 授权对象 | 给谁用 |
 |---|---|---|---|
 | 5060 | UDP | 诊所宽带的公网 IP；动态 IP 只能 `0.0.0.0/0` | HT813 注册与呼叫 |
+| 5060 | TCP | 同上 | 大报文的退路，见下面那段 |
 | 16384-16402 | UDP | 同上 | RTP 语音 |
 | 5080 | UDP | 只在走运营商 SIP 中继时开，且只对中继 IP | SIP 中继 |
 
@@ -867,7 +868,40 @@ VCA_TELEPHONY_MERCHANTS_0_KNOWLEDGE_OWNER=11
 | AI 说两个字就自己停 | 外放回声被当成插话，戴耳机 |
 | FreeSWITCH 重启后外呼失败 | 正常，`EslClient` 会在 30 秒内自动重连，日志"已重连" |
 | **答了一两轮之后 AI 再也不出声**，日志"熔断打开, 跳过候选 ASR:ALIYUN" | 见下面的"熔断锁死" |
+| **注册成功但一拨号就 408 超时**，服务器日志只有一条 `receiving invite` 后跟 `Abandoned` | 见下面的"认证后的 INVITE 太大" |
 | 日志刷 `Failed to connect to /127.0.0.1:7890` | 本机代理（Clash 这类）被 JVM 当成了全局代理，见下面的"系统代理" |
+
+### 认证后的 INVITE 太大（走公网才会遇到）
+
+**现象**：软电话注册得好好的，一拨号就 `408 Request Timeout`。服务器日志里只有一条
+`receiving invite`，十秒后 `Abandoned` + `WRONG_CALL_STATE`，VCA 那边什么都没有。
+
+**原因不是配置，是报文长度。** 开着 `auth-calls` 时一次呼叫有两个 INVITE：第一个被 `407` 挑战，
+第二个带上 `Proxy-Authorization` 重发。第二个比第一个大两百来字节，而这恰好是压垮骆驼的最后一根稻草：
+
+| | 字节 |
+|---|---|
+| 第一个 INVITE（11 个编码的 SDP） | 1269 |
+| 认证后的 INVITE | 1459（域名短时）～ 1480（域名是 IP 时） |
+| 加 IP + UDP 头 | ＋28 |
+| 以太网 MTU | 1500 |
+| 家用宽带 PPPoE 的 MTU | 1492 |
+
+超了就得 IP 分片，而分片的 UDP 在 NAT 和防火墙上被丢掉是家常便饭。于是服务器只收到第一个 INVITE，
+为它建了通道，然后等第二个等到超时——`Abandoned` 说的就是"通道建好了但没人来接手"。
+
+本机联调碰不到这个，回环和 Docker 网桥的 MTU 是 65536 和 1500，怎么发都通。**它只在走公网时才出现。**
+
+**两个办法，都要做：**
+
+1. **把编码列表砍短。** 少一个编码就少几十字节。HT813 本来就该只留 PCMA（§7.4 那张表里有），
+   实测只留一个编码后同一通电话立刻打通。软电话联调时用 `pjsua --dis-codec speex --dis-codec ilbc ...`。
+2. **防火墙放行 5060/TCP。** RFC 3261 规定报文接近 MTU 时客户端应自己改用 TCP，
+   FreeSWITCH 这边 TCP 一直在监听（`sofia status profile internal` 的 `BIND-URL` 里有 `transport=udp,tcp`），
+   缺的只是防火墙那条规则。放行之后客户端就有退路，不必指望每个设备的编码列表都够短。
+
+**怎么确认是这个问题**：服务器上开 `./trunk-status.sh --trace`，看 `docker logs -f vca-freeswitch` 里
+`recv NNN bytes` 的数字。只看到一条 INVITE、没有第二条，且第一条接近 1300 字节，就是它。
 
 ### 熔断锁死（已修，2026-09-18）
 
