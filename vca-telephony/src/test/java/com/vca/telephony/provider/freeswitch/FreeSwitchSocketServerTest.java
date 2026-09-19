@@ -268,4 +268,48 @@ class FreeSwitchSocketServerTest {
         }
         throw new AssertionError("等待条件超时");
     }
+
+    /**
+     * 回归: 通话中途媒体断流时, 必须重新下发 unicast 把它接回来。
+     *
+     * <p>线上事故: 通话好好的, AI 忽然不出声、客户说话也不识别, 电话却不挂。FreeSWITCH 日志里是
+     * "Asynchronous PTIME not supported, changing our end from 20 to 40" 紧跟着
+     * "Shutting down unicast connection" —— 软电话中途发 re-INVITE 改了打包时长, FreeSWITCH
+     * 重建编解码器时连带把 unicast 拆了, 而 SIP 信令毫发无损, 于是电话一直挂着、两头都哑。
+     * 本机联调碰不到: 两端都是 20ms, 从不重协商。
+     */
+    @Test
+    void reissuesUnicastWhenMediaStopsMidCall() throws Exception {
+        start(FreeSwitchConfig.onPort(0).withMediaWaitMs(300));
+        fs.answerHandshake(UUID, "13800138000", "01088886666");
+
+        // 先让媒体真的通起来 —— 区分"一开始就没通"(该挂断)与"中途断了"(该重建)
+        fs.sendAudio(new byte[320]);
+        assertThat(captured.audio.poll(2, TimeUnit.SECONDS)).as("首包应被收到").isNotNull();
+
+        // 之后一包不发, 模拟 FreeSWITCH 把 unicast 拆掉
+        FakeFreeSwitchChannel.Command again = fs.expect("sendmsg");
+        assertThat(again.headers().get("call-command")).isEqualTo("unicast");
+        assertThat(again.headers().get("remote-port")).as("重建时仍用本进程同一个媒体口").isNotBlank();
+        fs.reply("+OK");
+
+        assertThat(captured.completions).as("重建期间不该结束这路通话").isEmpty();
+    }
+
+    /** 重建若干次仍然收不到媒体, 就挂断 —— 别让客户对着一部哑了的电话干等 */
+    @Test
+    void hangsUpWhenMediaNeverComesBack() throws Exception {
+        start(FreeSwitchConfig.onPort(0).withMediaWaitMs(200));
+        fs.answerHandshake(UUID, "13800138000", "01088886666");
+        fs.sendAudio(new byte[320]);
+        assertThat(captured.audio.poll(2, TimeUnit.SECONDS)).isNotNull();
+
+        // 连着应答几次重建请求, 但始终不发音频
+        for (int i = 0; i < 3; i++) {
+            fs.expect("sendmsg");
+            fs.reply("+OK");
+        }
+        assertThat(captured.completions.poll(3, TimeUnit.SECONDS))
+                .as("重建无效后应结束这路通话").isNotNull();
+    }
 }

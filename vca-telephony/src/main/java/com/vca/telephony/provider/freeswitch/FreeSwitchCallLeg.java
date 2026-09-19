@@ -64,6 +64,11 @@ public final class FreeSwitchCallLeg implements CallLeg {
 
     /** 挂机后连接最多再留多久(秒)。只为把挂机事件送到, 不需要长 */
     private static final int LINGER_SECONDS = 10;
+    /**
+     * 媒体中途断流后最多重建几次。每次间隔一个 {@code mediaWaitMs}(默认 3s), 所以默认最多扛约 9 秒。
+     * 再多就别耗着了: 客户对着一部哑了的电话等十几秒, 体验比直接挂断还差, 而且通道会一直占到停泊超时。
+     */
+    private static final int MEDIA_REBUILD_TRIES = 3;
     /** 主动挂机后等 FreeSWITCH 自己断开的上限: 超过就强关, 不留半开连接 */
     private static final long CLOSE_GRACE_MS = 3_000;
 
@@ -83,6 +88,11 @@ public final class FreeSwitchCallLeg implements CallLeg {
     private volatile String peerNumber;
     private volatile String calledNumber;
     private volatile DatagramSocket media;
+    /** FreeSWITCH 侧的 unicast 地址, 中途重建时要原样再用一次 */
+    /** 本通电话是否收到过媒体包: 区分"从一开始就没通"(配置错)与"中途断了"(该重建) */
+    private volatile boolean everHadMedia;
+    private volatile String fsLocalIp = "127.0.0.1";
+    private volatile String fsRemoteHost = "127.0.0.1";
     /** 锁定的 FreeSWITCH 媒体地址(首包来源); null = 还没收到媒体 */
     private volatile SocketAddress mediaPeer;
     private volatile boolean strayLogged;
@@ -243,16 +253,10 @@ public final class FreeSwitchCallLeg implements CallLeg {
             request(EslMessage.command("linger " + LINGER_SECONDS), "linger");
 
             // FreeSWITCH 侧的地址由它的拨号计划告诉我们; 没设就按同机部署处理
-            String fsLocalIp = data.getOrDefault(VAR_MEDIA_LOCAL_IP, "127.0.0.1");
-            String fsRemoteHost = data.getOrDefault(VAR_MEDIA_REMOTE_HOST, "127.0.0.1");
+            fsLocalIp = data.getOrDefault(VAR_MEDIA_LOCAL_IP, "127.0.0.1");
+            fsRemoteHost = data.getOrDefault(VAR_MEDIA_REMOTE_HOST, "127.0.0.1");
             media = new DatagramSocket(new InetSocketAddress(cfg.mediaBindAddress(), 0));
-            request(EslMessage.command("sendmsg",
-                    "call-command", "unicast",
-                    "local-ip", fsLocalIp,
-                    "local-port", "0",          // 让系统分配, 回包地址按首包来源锁定
-                    "remote-ip", fsRemoteHost,
-                    "remote-port", String.valueOf(media.getLocalPort()),
-                    "transport", "udp"), "unicast");
+            sendUnicast(true);
             log.info("[{}] FreeSWITCH 接入: 主叫={}, 被叫={}, 媒体 {}:{} ⇄ {}:0",
                     callId, peerNumber, calledNumber, fsRemoteHost, media.getLocalPort(), fsLocalIp);
         } catch (IOException | RuntimeException e) {
@@ -262,6 +266,34 @@ public final class FreeSwitchCallLeg implements CallLeg {
             if (!finished.get()) {
                 socket.setSoTimeout(0);
             }
+        }
+    }
+
+    /**
+     * 下发一次 {@code unicast}, 让 FreeSWITCH 把通话音频往本进程的 UDP 口送。
+     *
+     * <p>握手时发一次, <b>通话中途还可能要再发</b> —— 见 {@link #pumpMedia()} 里的重建逻辑。
+     */
+    private void sendUnicast(boolean awaitReply) throws IOException {
+        DatagramSocket sock = media;
+        if (sock == null) {
+            return;
+        }
+        byte[] cmd = EslMessage.command("sendmsg",
+                "call-command", "unicast",
+                "local-ip", fsLocalIp,
+                "local-port", "0",          // 让系统分配, 回包地址按首包来源锁定
+                "remote-ip", fsRemoteHost,
+                "remote-port", String.valueOf(sock.getLocalPort()),
+                "transport", "udp");
+        if (awaitReply) {
+            request(cmd, "unicast");        // 握手阶段: 信令泵还没起, 由本线程读应答
+            return;
+        }
+        // 通话中途: 信令泵正独占着输入流, 这里只写不读, 应答交给它吞掉(与 hangup 同一套路)
+        synchronized (writeLock) {
+            out.write(cmd);
+            out.flush();
         }
     }
 
@@ -382,13 +414,14 @@ public final class FreeSwitchCallLeg implements CallLeg {
         }
         byte[] buf = new byte[4096];
         DatagramPacket packet = new DatagramPacket(buf, buf.length);
+        int silentRounds = 0;
         try {
             sock.setSoTimeout(Math.max(1, cfg.mediaWaitMs()));
             while (!finished.get()) {
                 try {
                     sock.receive(packet);
                 } catch (SocketTimeoutException e) {
-                    if (mediaPeer == null) {
+                    if (mediaPeer == null && !everHadMedia) {
                         log.error("[{}] {}ms 内没收到 FreeSWITCH 的媒体包, 挂断。排查: ① 拨号计划里 vca_media_remote_host "
                                         + "是不是 FreeSWITCH 能访问到本进程的地址; ② 容器里 vca_media_local_ip 必须是 0.0.0.0; "
                                         + "③ 本进程媒体绑定地址 {} 能否收到来自 FreeSWITCH 的 UDP",
@@ -396,8 +429,12 @@ public final class FreeSwitchCallLeg implements CallLeg {
                         hangup("media-timeout");
                         return;
                     }
+                    if (everHadMedia && !rebuildMedia(++silentRounds)) {
+                        return;
+                    }
                     continue;
                 }
+                silentRounds = 0;
                 onMediaPacket(packet, buf, sock);
             }
         } catch (IOException e) {
@@ -408,11 +445,50 @@ public final class FreeSwitchCallLeg implements CallLeg {
         }
     }
 
+    /**
+     * 通话进行中媒体突然断流时, 重新下发一次 {@code unicast}。
+     *
+     * <p>线上事故: 通话好好的, AI 忽然不出声、客户说话也不识别, 电话却不挂。FreeSWITCH 日志里是
+     * <pre>
+     *   [WARNING] [CBR]: Asynchronous PTIME not supported, changing our end from 20 to 40
+     *   [DEBUG]   Shutting down unicast connection
+     * </pre>
+     * 软电话中途发了个 re-INVITE 把打包时长从 20ms 改成 40ms, FreeSWITCH 重建编解码器时<b>连带把
+     * unicast 拆了</b> —— unicast 是挂在媒体通道上的。拆完没人重建, 媒体这条路就永久断了,
+     * 而 SIP 信令毫发无损, 于是电话一直挂着, 两头都是哑的。
+     *
+     * <p>本机联调永远碰不到: 两端都是 20ms, 从不重协商。走公网之后软电话会按网络状况调打包时长。
+     *
+     * <p>重建时必须把 {@code mediaPeer} 清掉: 新的 unicast 会从 FreeSWITCH 的另一个端口发过来,
+     * 不清就会被"非 FreeSWITCH 来源"那条规则全部丢弃。
+     *
+     * @return false 表示已经放弃并挂断, 调用方应结束媒体泵
+     */
+    private boolean rebuildMedia(int silentRounds) {
+        if (silentRounds > MEDIA_REBUILD_TRIES) {
+            log.error("[{}] 媒体断流且重建 {} 次无效, 挂断", callId, MEDIA_REBUILD_TRIES);
+            hangup("media-lost");
+            return false;
+        }
+        log.warn("[{}] 媒体断流约 {}ms, 重新下发 unicast(第 {} 次)",
+                callId, (long) silentRounds * cfg.mediaWaitMs(), silentRounds);
+        mediaPeer = null;   // 新连接的源端口会变, 不清会被当成外来包丢掉
+        try {
+            sendUnicast(false);
+        } catch (IOException e) {
+            log.warn("[{}] 重建媒体失败: {}", callId, e.toString());
+        }
+        return true;
+    }
+
     private void onMediaPacket(DatagramPacket packet, byte[] buf, DatagramSocket sock) throws IOException {
         SocketAddress src = packet.getSocketAddress();
         if (mediaPeer == null) {
             mediaPeer = src;
-            sock.setSoTimeout(0);   // 通了之后就不需要超时了; 客户沉默时 FreeSWITCH 照样按节奏发静音包
+            everHadMedia = true;
+            // 超时<b>不能</b>取消。原来这里设了 0(永久阻塞), 依据是"客户沉默时 FreeSWITCH 照样按节奏发静音包"
+            // —— 这句只在 unicast 还活着时成立。线上 FreeSWITCH 因为 ptime 重协商把 unicast 拆了之后,
+            // 一个包都不会再来, 这个线程就永久睡死, 通话僵在那里两头都哑。留着超时才能察觉并重建。
             markAnswered();
         } else if (!mediaPeer.equals(src)) {
             if (!strayLogged) {
