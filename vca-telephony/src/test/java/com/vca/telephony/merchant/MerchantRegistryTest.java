@@ -81,4 +81,43 @@ class MerchantRegistryTest {
         assertThat(registry.size()).isEqualTo(1);
         assertThat(registry.resolve("01088886666").knowledgeOwner()).isEqualTo("11");
     }
+
+    /**
+     * 回归: 商家人设必须<b>追加</b>在电话人设之后, 不能把它替换掉。
+     *
+     * <p>线上事故: 给商家配了人设之后 AI 一口气说了近 30 秒, 撑爆下行缓冲, 后半句被丢弃,
+     * 听感是"说一半突然没声音"。根因是电话人设里那些"必须简短、最多两句、完全口语化"的约束
+     * 被商家人设顶掉了。那些是电话这个通道的硬要求, 任何商家都不该能去掉。
+     */
+    @Test
+    void merchantPromptExtendsPhonePromptInsteadOfReplacingIt() {
+        TelephonyProperties props = new TelephonyProperties();
+        props.setSystemPrompt("你是电话客服助手。回答必须简短, 最多两句, 完全口语化。");
+        TelephonyProperties.MerchantProps m = new TelephonyProperties.MerchantProps();
+        m.setNumber("5001");
+        m.setName("启明少儿英语");
+        m.setSystemPrompt("你是启明少儿英语的电话客服, 我们做少儿英语培训。");
+        props.setMerchants(java.util.List.of(m));
+
+        String prompt = props.toMerchantRegistry().resolve("5001").systemPrompt();
+
+        assertThat(prompt).contains("最多两句").contains("少儿英语培训");
+        assertThat(prompt.indexOf("最多两句"))
+                .as("电话人设要排在前面, 商家人设是补充")
+                .isLessThan(prompt.indexOf("少儿英语培训"));
+    }
+
+    /** 商家没配人设时原样用电话人设, 不该多出空行或重复 */
+    @Test
+    void merchantWithoutPromptKeepsPhonePromptAsIs() {
+        TelephonyProperties props = new TelephonyProperties();
+        props.setSystemPrompt("你是电话客服助手。");
+        TelephonyProperties.MerchantProps m = new TelephonyProperties.MerchantProps();
+        m.setNumber("5000");
+        m.setName("美好口腔");
+        props.setMerchants(java.util.List.of(m));
+
+        assertThat(props.toMerchantRegistry().resolve("5000").systemPrompt())
+                .isEqualTo("你是电话客服助手。");
+    }
 }

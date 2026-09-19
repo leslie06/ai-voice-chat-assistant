@@ -970,7 +970,8 @@ public class TelephonyProperties {
                 .map(m -> new com.vca.telephony.merchant.Merchant(
                         m.getNumber(), m.getName(),
                         orDefault(m.getGreeting(), greeting),
-                        orDefault(m.getSystemPrompt(), systemPrompt),
+                        // 商家人设是<b>追加</b>不是替换, 见 mergePrompt
+                        mergePrompt(systemPrompt, m.getSystemPrompt()),
                         orDefault(m.getKnowledgeOwner(), knowledgeOwner),
                         orDefault(m.getTransferDialString(), transferDialString),
                         orDefault(m.getSummaryWebhook(), summary.getWebhookUrl()),
@@ -981,6 +982,27 @@ public class TelephonyProperties {
 
     private static String orDefault(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    /**
+     * 电话人设 + 这家商家的人设, <b>拼接而不是替换</b>。
+     *
+     * <p>线上事故: 给商家配了人设之后, AI 一口气说了将近 30 秒, 把下行缓冲(上限 30s)撑爆,
+     * 后半句被丢弃 —— 听感就是"说一半突然没声音了"。原因是商家人设把电话人设整个顶掉了,
+     * 而"必须简短、先给结论、最多两句、完全口语化、不要 markdown"这些约束全在电话人设里。
+     *
+     * <p>那些约束是<b>电话这个通道</b>的硬性要求, 与是哪家店无关: 电话没有屏幕, 没法滚动,
+     * 也没法跳读, 一段话超过十几秒对面就会挂。所以任何商家都不该有办法把它们去掉,
+     * 商家能加的只是"我是谁、我卖什么、什么不许说"。
+     */
+    private static String mergePrompt(String phonePrompt, String merchantPrompt) {
+        if (merchantPrompt == null || merchantPrompt.isBlank()) {
+            return phonePrompt;
+        }
+        if (phonePrompt == null || phonePrompt.isBlank()) {
+            return merchantPrompt.strip();
+        }
+        return phonePrompt.strip() + "\n\n" + merchantPrompt.strip();
     }
 
     public Summary getSummary() {
