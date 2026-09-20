@@ -8,6 +8,12 @@ services:
     # FreeSWITCH 控制台模式要一个开着的 stdin, 日志才走 stdout
     stdin_open: true
     tty: true
+    # 日志封顶: 开着 SIP 跟踪或 debug 排查时, 几小时就能写出几个 G
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     environment:
       # 软电话眼里 FreeSWITCH 的地址。软电话和 Docker 在同一台机器上 = 127.0.0.1;
       # 要用手机上的软电话, 改成这台电脑的局域网 IP, 并把 SIP_BIND 改成 0.0.0.0。

@@ -23,6 +23,13 @@ services:
     stdin_open: true
     tty: true
     network_mode: host
+    # 日志必须封顶。5060 一开到公网, 扫号机器人每秒都在撞, 每次撞都是一行 WARNING;
+    # 实测一天半攒了 11GB(期间开过 debug 和 SIP 跟踪)。40G 的盘撑不了几天, 盘一满数据库先挂。
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     environment:
       # 写进 SDP 的地址。阿里云 ECS 的公网 IP 是 NAT 出去的, 网卡上只有内网地址,
       # 所以这里必须显式写公网 IP, 否则对端会把 RTP 发到一个内网地址上。
