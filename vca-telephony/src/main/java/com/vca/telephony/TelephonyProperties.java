@@ -131,6 +131,17 @@ public class TelephonyProperties {
     /** 连续这么久有声音却一个字都识别不出, 判定为线路噪声并挂机(ms); <=0 关闭。兜住 450Hz 之外的情况。 */
     private int noSpeechHangupMs = 20_000;
 
+    /**
+     * 接通后头这么久的上行音频不交给 VAD(ms); <=0 关闭。
+     *
+     * <p>线上实测(HT813 的 FXO 口接插卡盒): 六通电话里五通在接通后 0.2~0.9 秒, 来电方向有一个峰值
+     * 0.16~0.22 的冲击脉冲 —— 网关摘机瞬间的线路冲击, 不是人声。它响度够、时长也够, VAD 判成
+     * "客户开口了", 而客户一开口就会清掉正在播的开场白(这本是给外呼设计的: 客户常在开场白中途说
+     * "不需要")。结果客户接通后只听到半个"您好"就一片寂静, 十几秒后说"听不见你说话呀"。
+     * 外呼同样受益: 接通瞬间那声"喂?"不该把开场白打断。
+     */
+    private int answerGuardMs = 1500;
+
     /** 开场白文本。启动时预合成并缓存, 接通瞬间直接出声(首包延迟≈0)。留空则接通后直接进聆听。 */
     private String greeting = "";
 
@@ -752,7 +763,7 @@ public class TelephonyProperties {
 
     public CallConfig toCallConfig() {
         return new CallConfig(pacingMs, maxBufferedMs, ttsSampleRate, maxCallSeconds, greetingBargeIn,
-                toneHangup, noSpeechHangupMs);
+                toneHangup, noSpeechHangupMs, answerGuardMs);
     }
 
     /** VAD 目标采样率固定 16k: Silero 要求, ASR 也按 16k 送。上行 8k 会被升采样到此。 */
@@ -937,6 +948,14 @@ public class TelephonyProperties {
 
     public void setNoSpeechHangupMs(int noSpeechHangupMs) {
         this.noSpeechHangupMs = noSpeechHangupMs;
+    }
+
+    public int getAnswerGuardMs() {
+        return answerGuardMs;
+    }
+
+    public void setAnswerGuardMs(int answerGuardMs) {
+        this.answerGuardMs = answerGuardMs;
     }
 
     public String getAsrVocabularyId() {

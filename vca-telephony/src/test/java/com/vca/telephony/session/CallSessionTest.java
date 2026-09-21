@@ -182,7 +182,12 @@ class CallSessionTest {
 
     private static CallSession callSession(FakeCallLeg leg, AsrProvider asr, byte[] greeting,
                                            byte[] errorPrompt, int noSpeechMs) {
-        CallConfig cfg = new CallConfig(20, 30_000, TTS_RATE, 300, true, true, noSpeechMs);
+        return callSession(leg, asr, greeting, errorPrompt, noSpeechMs, 0);   // 保护期另有专门的用例
+    }
+
+    private static CallSession callSession(FakeCallLeg leg, AsrProvider asr, byte[] greeting,
+                                           byte[] errorPrompt, int noSpeechMs, int answerGuardMs) {
+        CallConfig cfg = new CallConfig(20, 30_000, TTS_RATE, 300, true, true, noSpeechMs, answerGuardMs);
         CallSession call = new CallSession(leg, conversation(asr),
                 VadConfig.defaults(), new EnergyVad(), cfg, greeting, errorPrompt);
         call.attach();
@@ -433,6 +438,49 @@ class CallSessionTest {
             call.tick();
         }
         assertThat(leg.written).isEmpty();
+    }
+
+    // ---- 接通保护期 ----
+
+    /**
+     * 回归: 摘机瞬间的线路冲击不能把开场白清掉。
+     *
+     * <p>线上实测(HT813 FXO 口): 六通电话里五通在接通后 0.2~0.9 秒有一个峰值 0.16~0.22 的冲击脉冲,
+     * VAD 判成"客户开口", 开场白在 0.6 秒处戛然而止, 客户接通后一片寂静, 十几秒后说"听不见你说话呀"。
+     */
+    @Test
+    void lineTransientRightAfterAnswerDoesNotKillTheGreeting() {
+        FakeCallLeg leg = new FakeCallLeg();
+        AtomicInteger turns = new AtomicInteger();
+        byte[] greeting = new byte[FRAME_BYTES * 150];   // 3 秒开场白
+        CallSession call = callSession(leg, fakeAsr("", turns), greeting, null, 20_000, 1500);
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        // 按录音实测复现: 安静 300ms → 冲击 500ms → 安静, 边收边播
+        for (int i = 0; i < 150; i++) {
+            boolean burst = i >= 15 && i < 40;
+            leg.inbound.tryEmitNext(burst ? speech() : silence());
+            call.tick();
+        }
+
+        assertThat(turns.get()).as("冲击不是人声, 不该起回合").isZero();
+        assertThat(leg.written).as("3 秒开场白应当一帧不少地播完").hasSize(150);
+    }
+
+    /** 保护期一过, 客户开口照常成轮 */
+    @Test
+    void speechAfterTheAnswerGuardStillStartsATurn() {
+        FakeCallLeg leg = new FakeCallLeg();
+        AtomicInteger turns = new AtomicInteger();
+        CallSession call = callSession(leg, fakeAsr("我想了解一下", turns), null, null, 20_000, 1500);
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        for (int i = 0; i < 80; i++) {            // 1.6 秒安静, 走完保护期
+            leg.inbound.tryEmitNext(silence());
+        }
+        speakThenPause(leg);
+
+        assertThat(turns.get()).isEqualTo(1);
     }
 
     // ---- 线路信号音 / 无字挂机 ----

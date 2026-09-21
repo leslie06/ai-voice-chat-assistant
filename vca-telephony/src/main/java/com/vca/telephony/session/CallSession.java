@@ -85,6 +85,8 @@ public final class CallSession {
     /** 本轮有没有真的播出过音频; 决定出错时要不要顶一句兜底话术 */
     private boolean turnProducedAudio;
 
+    /** 接通以来已经收到多少毫秒的上行音频; 接通保护期按它计(音频时长, 可确定性单测) */
+    private long inboundSinceAnswerMs;
     /** 线路信号音检测(忙音/拨号音); 配置关掉时为 null */
     private final LineToneDetector toneDetector;
     /** 客户此刻是否处在"正在说话"(VAD 已判开口、还没判说完)的阶段 */
@@ -238,6 +240,12 @@ public final class CallSession {
     /** 上行音频。未接通前一律丢弃(见 {@link CallEvent.Type#EARLY_MEDIA})。 */
     private synchronized void onInboundAudio(byte[] pcm) {
         if (!answered || closed) {
+            return;
+        }
+        // 接通保护期: 摘机瞬间线上有个冲击脉冲, 响度时长都够得上"开口", 会把开场白当成被插话清掉。
+        // 这段时间开场白本来就在播, 挡掉它的代价几乎为零。
+        if (inboundSinceAnswerMs < cfg.answerGuardMs()) {
+            inboundSinceAnswerMs += Math.max(1, pcm.length * 500L / mediaRate);
             return;
         }
         // 第一道: 听出忙音就挂。模拟线没有挂机信令, 客户挂断后线上只是开始放忙音, 网关漏检时
