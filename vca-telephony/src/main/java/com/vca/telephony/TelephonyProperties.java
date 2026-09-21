@@ -119,6 +119,18 @@ public class TelephonyProperties {
     /** 开场白是否可被打断。外呼应为 true —— 客户常在开场白中途就说"不需要"。 */
     private boolean greetingBargeIn = true;
 
+    /**
+     * 听到线路信号音(忙音/拨号音/拥塞音)就挂机。
+     *
+     * <p>模拟线(FXO 网关、插卡盒)没有挂机信令, 客户挂断后线上只是开始放 450Hz 的忙音。网关本该听出来并拆线,
+     * 但那要在网关上单独配、参数还得对上当地制式, 漏配是常态。线上实测一通客户已挂断的电话被忙音"撑"了
+     * 221 秒, 期间线路被占、后面的来电全进不来。开着它, 忙音响起约 4 秒后本进程自己挂机。
+     */
+    private boolean toneHangup = true;
+
+    /** 连续这么久有声音却一个字都识别不出, 判定为线路噪声并挂机(ms); <=0 关闭。兜住 450Hz 之外的情况。 */
+    private int noSpeechHangupMs = 20_000;
+
     /** 开场白文本。启动时预合成并缓存, 接通瞬间直接出声(首包延迟≈0)。留空则接通后直接进聆听。 */
     private String greeting = "";
 
@@ -739,7 +751,8 @@ public class TelephonyProperties {
     }
 
     public CallConfig toCallConfig() {
-        return new CallConfig(pacingMs, maxBufferedMs, ttsSampleRate, maxCallSeconds, greetingBargeIn);
+        return new CallConfig(pacingMs, maxBufferedMs, ttsSampleRate, maxCallSeconds, greetingBargeIn,
+                toneHangup, noSpeechHangupMs);
     }
 
     /** VAD 目标采样率固定 16k: Silero 要求, ASR 也按 16k 送。上行 8k 会被升采样到此。 */
@@ -908,6 +921,22 @@ public class TelephonyProperties {
 
     public void setAsrModel(String asrModel) {
         this.asrModel = asrModel == null ? "" : asrModel.strip();
+    }
+
+    public boolean isToneHangup() {
+        return toneHangup;
+    }
+
+    public void setToneHangup(boolean toneHangup) {
+        this.toneHangup = toneHangup;
+    }
+
+    public int getNoSpeechHangupMs() {
+        return noSpeechHangupMs;
+    }
+
+    public void setNoSpeechHangupMs(int noSpeechHangupMs) {
+        this.noSpeechHangupMs = noSpeechHangupMs;
     }
 
     public String getAsrVocabularyId() {

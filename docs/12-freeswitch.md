@@ -520,9 +520,11 @@ grep ^ATA_ /opt/vca/freeswitch/.env
 | FXO PORT（LINE 口） | SIP Server | `<服务器公网 IP>:5060` |
 | FXO PORT | SIP User ID / Authenticate ID | `8001` |
 | FXO PORT | Password | `.env` 里的 `ATA_LINE_PASSWORD` |
-| FXO PORT | Number of Rings Before Pickup | `2`（响两声自动接，别设 0） |
-| FXO PORT | **Unconditional Call Forward to VOIP** | `5000`（美好口腔）或 `5001`（启明少儿英语） |
-| FXO PORT | Enable Current Disconnect / Busy Tone Disconnect | 打开 |
+| FXO PORT | Number of Rings | `2`（响两声自动接，别设 1，会影响来电号码检测） |
+| FXO PORT | PSTN Ring Thru FXS | `No`（否则来电先让座机响，人一接就绕过了 AI） |
+| **BASIC SETTINGS** | **Unconditional Call Forward to VOIP** | 三个框都要填：User ID `5000`（美好口腔）或 `5001`，Sip Server `<服务器公网 IP>`，端口 `5060` |
+| FXO PORT | Enable Current Disconnect | `Yes` |
+| FXO PORT | Enable PSTN Disconnect Tone Detection | `Yes`，Tone 填 `f1=450@-32,f2=450@-32,c=350/350;`（出厂是美国忙音，国内匹配不上） |
 | 两个口 | 语音编码 | 只留 PCMA（或 PCMU），关掉其它 |
 | 两个口 | Caller ID Scheme | 按线路选（大陆多为 FSK Bellcore） |
 | 两个口 | NAT Traversal | 关掉（FreeSWITCH 这边已按 NAT 后处理，两边都开反而错） |
@@ -870,7 +872,41 @@ VCA_TELEPHONY_MERCHANTS_0_KNOWLEDGE_OWNER=11
 | **答了一两轮之后 AI 再也不出声**，日志"熔断打开, 跳过候选 ASR:ALIYUN" | 见下面的"熔断锁死" |
 | **注册成功但一拨号就 408 超时**，服务器日志只有一条 `receiving invite` 后跟 `Abandoned` | 见下面的"认证后的 INVITE 太大" |
 | **有些词一直识别不准**，比如"洗牙"被听成抵押、拿、压 | 见下面的"窄带线路要用窄带模型" |
+| **客户挂断后通话不结束**，线路被占几分钟，后面的电话打不进来 | 见下面的"模拟线没有挂机信令" |
 | 日志刷 `Failed to connect to /127.0.0.1:7890` | 本机代理（Clash 这类）被 JVM 当成了全局代理，见下面的"系统代理" |
+
+### 模拟线没有挂机信令（已加兜底，2026-09-21）
+
+**现象**：第一通真实线路的电话一切正常，紧接着第二通"打不进 AI"。查日志发现第二通其实接通了，
+客户说了句"喂喂"就挂了，可这通电话在服务器上又挂了 221 秒，最后一条日志是一次"客户插话"，之后一片空白。
+
+**原因**：FXO 网关接的固话线、插卡盒这类模拟线**没有挂机信令**。客户挂断后，线上只是开始放忙音，
+网关得靠"听忙音"来判断该不该拆线。这一步要在网关上单独开、参数还得对上当地制式，漏配是常态。
+把那通电话的录音拿出来量过，卡住的三分多钟里线上是：**450Hz 纯音，响 380ms 停 320ms**，标准的国内忙音。
+
+本进程这边，VAD 把循环的忙音当成"有人在不停说话"：忙音的间隔 320ms 够不上句尾静音要求的 800ms，
+这一轮永远等不到"说完了"，一直挂到单通上限（300 秒）。期间线路被占着，后面的来电全进不来。
+
+**网关上要配的**（HT813 的 FXO PORT 页最下面）：
+
+| 字段 | 值 |
+|---|---|
+| Enable PSTN Disconnect Tone Detection | `Yes` |
+| PSTN Disconnect Tone | `f1=450@-32,f2=450@-32,c=350/350;` |
+| AC Termination Model → Country-based | `CHINA` 开头的那项 |
+
+出厂填的是美国忙音（480+620Hz，500/500），国内线路上永远匹配不上。
+
+**服务器上的两道兜底**（网关漏检时靠它，默认都开着）：
+
+| 配置 | 默认 | 作用 |
+|---|---|---|
+| `VCA_TELEPHONY_TONE_HANGUP` | `true` | 听出线路信号音就挂机。纯音的过零间隔几乎恒定、人声忽长忽短，据此区分；最近 4 秒里响帧绝大多数是 380~520Hz 的纯音即判定。忙音、连续拨号音、700/700 的拥塞音都认得，回铃音（响 1 秒停 4 秒）凑不够帧数不会误判 |
+| `VCA_TELEPHONY_NO_SPEECH_HANGUP_MS` | `20000` | 连续这么久"有人在说话"却一个字都没识别出来，判定为线路噪声并挂机。兜住 450Hz 之外的信号音、传真音、串线 |
+
+拿线上两通真实录音验证过：101 秒的真人对话全程不误判；卡死的那通在忙音响起后约 3 秒被认出来
+（实际它挂了 221 秒）。挂机原因在日志里是 `line-tone` 或 `no-speech`，看到它们就说明网关那边的
+忙音检测没生效，该回头去配网关——兜底能止损，但每通电话白占几秒线路，根治还得靠网关。
 
 ### 窄带线路要用窄带模型（已修，2026-09-19）
 

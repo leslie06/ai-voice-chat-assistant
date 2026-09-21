@@ -46,6 +46,8 @@ class CallSessionTest {
     private static final int TTS_RATE = 24000;
     /** 20ms @8k = 160 采样 = 320 字节, 与 RTP 包长一致 */
     private static final int FRAME_BYTES = 320;
+    /** 无字挂机的门槛。单测里调短, 免得喂几千帧 */
+    private static final int NO_SPEECH_MS = 3000;
 
     // ---- 内存 CallLeg ----
 
@@ -175,7 +177,12 @@ class CallSessionTest {
 
     private static CallSession callSession(FakeCallLeg leg, AsrProvider asr, byte[] greeting,
                                            byte[] errorPrompt) {
-        CallConfig cfg = new CallConfig(20, 30_000, TTS_RATE, 300, true);
+        return callSession(leg, asr, greeting, errorPrompt, NO_SPEECH_MS);
+    }
+
+    private static CallSession callSession(FakeCallLeg leg, AsrProvider asr, byte[] greeting,
+                                           byte[] errorPrompt, int noSpeechMs) {
+        CallConfig cfg = new CallConfig(20, 30_000, TTS_RATE, 300, true, true, noSpeechMs);
         CallSession call = new CallSession(leg, conversation(asr),
                 VadConfig.defaults(), new EnergyVad(), cfg, greeting, errorPrompt);
         call.attach();
@@ -426,6 +433,110 @@ class CallSessionTest {
             call.tick();
         }
         assertThat(leg.written).isEmpty();
+    }
+
+    // ---- 线路信号音 / 无字挂机 ----
+
+    /** 20ms 一帧的国内忙音: 450Hz, 响 380ms 停 320ms, 电平按线上录音实测取 0.27 */
+    private static byte[] busyToneFrame(int frameIndex) {
+        byte[] pcm = new byte[FRAME_BYTES];
+        double peak = 0.27 * Math.sqrt(2) * 32767;
+        for (int i = 0; i < FRAME_BYTES / 2; i++) {
+            int n = frameIndex * (FRAME_BYTES / 2) + i;
+            int ms = n * 1000 / MEDIA_RATE;
+            short v = (ms % 700) < 380 ? (short) (peak * Math.sin(2 * Math.PI * 450 * n / MEDIA_RATE)) : 0;
+            pcm[2 * i] = (byte) (v & 0xff);
+            pcm[2 * i + 1] = (byte) ((v >> 8) & 0xff);
+        }
+        return pcm;
+    }
+
+    /** 响度够、但既不是纯音也识别不出字的线路噪声 */
+    private static byte[] noiseFrame(java.util.Random rnd) {
+        byte[] pcm = new byte[FRAME_BYTES];
+        for (int i = 0; i < FRAME_BYTES / 2; i++) {
+            short v = (short) (rnd.nextInt(16000) - 8000);
+            pcm[2 * i] = (byte) (v & 0xff);
+            pcm[2 * i + 1] = (byte) ((v >> 8) & 0xff);
+        }
+        return pcm;
+    }
+
+    /** 边收音频边出中间转写的识别: 模拟"客户确实在说话, 只是说得很长" */
+    private static AsrProvider chattyAsr() {
+        return new AsrProvider() {
+            @Override
+            public VendorType vendor() {
+                return VendorType.ALIYUN;
+            }
+
+            @Override
+            public Flux<AsrEvent> transcribe(Flux<AudioFrame> audio, AsrConfig cfg) {
+                return audio.index()
+                        .filter(t -> t.getT1() % 25 == 24)
+                        .map(t -> AsrEvent.partial("我想咨询一下种植牙的事情", 0))
+                        .concatWith(Flux.just(AsrEvent.finalResult("我想咨询一下种植牙的事情", 200, 0.95)));
+            }
+        };
+    }
+
+    /**
+     * 回归: 客户挂断后线上是忙音, 网关没拆线 —— 本进程必须自己听出来并挂机。
+     *
+     * <p>线上事故: 一通客户早已挂断的电话被忙音"撑"了 221 秒。VAD 把循环的忙音当成有人在不停说话
+     * (忙音间隔 320ms, 够不上句尾静音的 800ms), 这一轮永远等不到"说完了"; 期间线路被占, 后面的来电全进不来。
+     */
+    @Test
+    void busyToneOnTheLineHangsUpWithinSeconds() {
+        FakeCallLeg leg = new FakeCallLeg();
+        // 无字挂机用线上的 20 秒门槛: 这条要验的是忙音检测自己够快, 不能让第二道保险抢了先
+        CallSession call = callSession(leg, fakeAsr("", new AtomicInteger()), null, null, 20_000);
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        int fedMs = 0;
+        for (int i = 0; i < 400 && !call.isClosed(); i++) {   // 最多喂 8 秒
+            leg.inbound.tryEmitNext(busyToneFrame(i));
+            fedMs += 20;
+        }
+
+        assertThat(call.isClosed()).as("忙音响着, 通话必须被挂掉").isTrue();
+        assertThat(leg.hangupReason).isEqualTo("line-tone");
+        assertThat(fedMs).as("从忙音响起到挂机不该超过 5 秒").isLessThanOrEqualTo(5000);
+    }
+
+    /** 忙音之外的线路噪声: 声音一直有、字一个没有, 到点挂机 */
+    @Test
+    void endlessNoiseWithoutAnyRecognizedTextHangsUp() {
+        FakeCallLeg leg = new FakeCallLeg();
+        CallSession call = callSession(leg, new AtomicInteger(), null);
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        java.util.Random rnd = new java.util.Random(3);
+        int fedMs = 0;
+        for (int i = 0; i < 400 && !call.isClosed(); i++) {
+            leg.inbound.tryEmitNext(noiseFrame(rnd));
+            fedMs += 20;
+        }
+
+        assertThat(call.isClosed()).isTrue();
+        assertThat(leg.hangupReason).isEqualTo("no-speech");
+        assertThat(fedMs).as("门槛 %dms, 加上开口判定的一两百毫秒", NO_SPEECH_MS)
+                .isBetween(NO_SPEECH_MS, NO_SPEECH_MS + 600);
+    }
+
+    /** 客户真的在长篇大论(识别一直在出字)时不能挂: 无字挂机只针对"没有字"的声音 */
+    @Test
+    void longMonologueWithRecognizedTextIsNotHungUp() {
+        FakeCallLeg leg = new FakeCallLeg();
+        CallSession call = callSession(leg, chattyAsr(), null, null);
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        java.util.Random rnd = new java.util.Random(5);
+        for (int i = 0; i < (NO_SPEECH_MS + 3000) / 20; i++) {
+            leg.inbound.tryEmitNext(noiseFrame(rnd));
+        }
+
+        assertThat(call.isClosed()).as("识别一直有字, 说明是人在说话, 不能挂").isFalse();
     }
 
     private static void speakThenPause(FakeCallLeg leg) {

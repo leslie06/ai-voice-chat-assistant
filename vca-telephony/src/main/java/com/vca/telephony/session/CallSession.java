@@ -3,6 +3,7 @@ package com.vca.telephony.session;
 import com.vca.domain.model.AudioChunk;
 import com.vca.domain.model.AudioFrame;
 import com.vca.orchestrator.session.ConversationSession;
+import com.vca.orchestrator.session.TurnListener;
 import com.vca.orchestrator.vad.HandsFreeVad;
 import com.vca.orchestrator.vad.PcmAudio;
 import com.vca.orchestrator.vad.VadConfig;
@@ -84,6 +85,15 @@ public final class CallSession {
     /** 本轮有没有真的播出过音频; 决定出错时要不要顶一句兜底话术 */
     private boolean turnProducedAudio;
 
+    /** 线路信号音检测(忙音/拨号音); 配置关掉时为 null */
+    private final LineToneDetector toneDetector;
+    /** 客户此刻是否处在"正在说话"(VAD 已判开口、还没判说完)的阶段 */
+    private boolean userSpeaking;
+    /** 本次"说话"已经持续了多少毫秒的音频。按音频时长计而不是墙钟: 可确定性单测, 媒体断流也不会误计 */
+    private long speakingMs;
+    /** 本次"说话"期间识别有没有出过哪怕一个字(中间结果也算); 由识别线程写, 故 volatile */
+    private volatile boolean asrTextThisUtterance;
+
     /**
      * @param vadConfig VAD 阈值。<b>务必用电话专用的一组</b>: 浏览器那套是按 48k 麦克风调的,
      *                  窄带 + 线路底噪下的电平分布完全不同
@@ -110,6 +120,23 @@ public final class CallSession {
         this.pacing = new PacingBuffer(mediaRate, this.cfg.pacingMs(), this.cfg.maxBufferedMs());
         this.greeting = greeting;
         this.errorPrompt = errorPrompt;
+        this.toneDetector = this.cfg.toneHangup() ? new LineToneDetector(mediaRate) : null;
+        // 只为一件事监听识别: "这段声音里到底有没有字"。忙音之外的线路噪声靠它兜底, 见 onInboundAudio
+        conversation.setTurnListener(new TurnListener() {
+            @Override
+            public void onAsrPartial(String text) {
+                if (text != null && !text.isBlank()) {
+                    asrTextThisUtterance = true;
+                }
+            }
+
+            @Override
+            public void onAsrFinal(String text) {
+                if (text != null && !text.isBlank()) {
+                    asrTextThisUtterance = true;
+                }
+            }
+        });
         this.silenceFrame = leg.needsContinuousMedia() ? new byte[pacing.frameBytes()] : null;
         this.vad = new HandsFreeVad(vadConfig, vadListener(), detector);
     }
@@ -213,7 +240,24 @@ public final class CallSession {
         if (!answered || closed) {
             return;
         }
+        // 第一道: 听出忙音就挂。模拟线没有挂机信令, 客户挂断后线上只是开始放忙音, 网关漏检时
+        // 这通电话会被忙音一直"撑"着 —— VAD 把循环的忙音当成有人在不停说话, 永远等不到句尾。
+        if (toneDetector != null && toneDetector.accept(pcm)) {
+            log.warn("[{}] 线上是信号音(忙音/拨号音), 对端已挂断而网关没拆线, 主动挂机。"
+                    + "根治要在网关上开忙音检测(HT813: Enable PSTN Disconnect Tone Detection)", leg.callId());
+            close("line-tone");
+            return;
+        }
         vad.accept(pcm, botPlaying());
+        // 第二道: 450Hz 之外的噪声(别的制式的信号音、传真音、串线)。判据是"声音一直有、字一个没有"。
+        if (userSpeaking && cfg.noSpeechHangupMs() > 0) {
+            speakingMs += Math.max(1, pcm.length * 500L / mediaRate);
+            if (speakingMs > cfg.noSpeechHangupMs() && !asrTextThisUtterance) {
+                log.warn("[{}] 连续 {}ms 有声音却一个字都没识别出来, 判定为线路噪声, 主动挂机",
+                        leg.callId(), speakingMs);
+                close("no-speech");
+            }
+        }
     }
 
     // ---- 回合(与 Connection 同构) ----
@@ -230,6 +274,9 @@ public final class CallSession {
         resumeEpoch = -1;
         seq.set(0);
         turnProducedAudio = false;
+        userSpeaking = true;
+        speakingMs = 0;
+        asrTextThisUtterance = false;
         final long myEpoch = ++epoch;
         turnSink = Sinks.many().unicast().onBackpressureBuffer();
         turnSubscription = conversation.handleUserTurn(turnSink.asFlux())
@@ -246,6 +293,7 @@ public final class CallSession {
 
     /** 客户说完: 补一帧 endOfSpeech 并结束上行流, 触发 ASR 出 final。 */
     private synchronized void commitTurn() {
+        userSpeaking = false;   // VAD 判了句尾: 这次"说话"正常结束, 无字计时停表
         if (turnSink == null) {
             return;
         }
@@ -306,6 +354,7 @@ public final class CallSession {
     private synchronized void resetTurn() {
         turnSink = null;
         turnSubscription = null;
+        userSpeaking = false;
     }
 
     // ---- 下行节流 ----
