@@ -187,7 +187,7 @@ class CallSessionTest {
 
     private static CallSession callSession(FakeCallLeg leg, AsrProvider asr, byte[] greeting,
                                            byte[] errorPrompt, int noSpeechMs, int answerGuardMs) {
-        CallConfig cfg = new CallConfig(20, 30_000, TTS_RATE, 300, true, true, noSpeechMs, answerGuardMs);
+        CallConfig cfg = new CallConfig(20, 30_000, TTS_RATE, 300, true, true, noSpeechMs, answerGuardMs, 0);
         CallSession call = new CallSession(leg, conversation(asr),
                 VadConfig.defaults(), new EnergyVad(), cfg, greeting, errorPrompt);
         call.attach();
@@ -438,6 +438,59 @@ class CallSessionTest {
             call.tick();
         }
         assertThat(leg.written).isEmpty();
+    }
+
+    // ---- 开场白延迟 ----
+
+    /**
+     * 回归: 真实线路上客户反映"开场白前几个字被吞了"。录音显示我们从接通第 0 帧就在发, 吞掉发生在
+     * 网关→电话线→手机网络那一段(摘机后语音通道还没建好)。接通后先停 greetingDelayMs 再放。
+     */
+    @Test
+    void greetingWaitsForTheLineToSettleBeforePlaying() {
+        FakeCallLeg leg = new FakeCallLeg();
+        CallConfig cfg = new CallConfig(20, 30_000, TTS_RATE, 300, true, true, 20_000, 0, 800);
+        CallSession call = new CallSession(leg, conversation(fakeAsr("", new AtomicInteger())),
+                VadConfig.defaults(), new EnergyVad(), cfg, new byte[640], null);   // 2 帧开场白
+        call.attach();
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        for (int i = 0; i < 39; i++) {          // 800ms = 40 拍, 前 39 拍不该出声
+            call.tick();
+        }
+        assertThat(leg.written).as("延迟期内一帧都不该发").isEmpty();
+
+        for (int i = 0; i < 5; i++) {
+            call.tick();
+        }
+        assertThat(leg.written).as("延迟一到, 2 帧开场白照常播完").hasSize(2);
+    }
+
+    /** 客户在延迟期内就开口了(外呼常见: 接通就"喂?"), 开场白不再放, 直接进对话 */
+    @Test
+    void greetingIsSkippedIfCustomerSpeaksDuringTheDelay() {
+        FakeCallLeg leg = new FakeCallLeg();
+        AtomicInteger turns = new AtomicInteger();
+        CallConfig cfg = new CallConfig(20, 30_000, TTS_RATE, 300, true, true, 20_000, 0, 800);
+        CallSession call = new CallSession(leg, conversation(fakeAsr("喂", turns)),
+                VadConfig.defaults(), new EnergyVad(), cfg, new byte[640], null);
+        call.attach();
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        feedFrames(leg, call, 10);               // 延迟期内客户开口
+        for (int i = 0; i < 40; i++) {
+            call.tick();
+        }
+
+        assertThat(turns.get()).isEqualTo(1);
+        assertThat(leg.written).as("已经在对话了, 开场白不能再插进来").isEmpty();
+    }
+
+    private static void feedFrames(FakeCallLeg leg, CallSession call, int loudFrames) {
+        for (int i = 0; i < loudFrames; i++) {
+            leg.inbound.tryEmitNext(speech());
+            call.tick();
+        }
     }
 
     // ---- 接通保护期 ----

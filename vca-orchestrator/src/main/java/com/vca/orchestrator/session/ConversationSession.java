@@ -363,6 +363,48 @@ public class ConversationSession {
      *
      * <p>没启用的那几路不做线程切换(就地跑, 立即返回 null), 避免为纯闲聊白付一次调度开销。
      */
+    /** 判停时用中间转写提前发起的知识库检索; 最终文本一致时直接复用, 见 {@link #prefetchKnowledge} */
+    private record PrefetchedKnowledge(String key, Mono<Optional<String>> result) {
+    }
+
+    private final AtomicReference<PrefetchedKnowledge> prefetchedKnowledge = new AtomicReference<>();
+
+    /**
+     * 接入层在 VAD 判停那一刻调用, 拿<b>识别的中间转写</b>提前发起知识库检索。
+     *
+     * <p>为什么值得: 检索要先调一次向量接口(100~200ms), 原来必须等识别出最终文本才开始, 而判停到
+     * 最终文本之间本来就有两三百毫秒在干等 —— 两段串着, 就是电话里那种"停顿"的一部分。
+     * 中间转写与最终文本多半只差标点, 所以判停时就能查。真正回复时若最终文本(去掉标点后)与当时
+     * 一致就直接复用; 不一致就当没预取过, 照常再查一次, 不会用错资料。
+     *
+     * <p>没接知识库、或文本为空时什么都不做。
+     */
+    public void prefetchKnowledge(String interimText) {
+        if (knowledge == KnowledgeStore.NOOP || knowledgeOwner() == null
+                || interimText == null || interimText.isBlank()) {
+            return;
+        }
+        String key = prefetchKey(interimText);
+        if (key.isEmpty()) {
+            return;
+        }
+        Mono<Optional<String>> result = offload(true, () -> knowledgeContext(interimText)).cache();
+        result.subscribe(v -> { }, e -> { });   // 立刻发起, 结果留在 cache 里等人来取
+        prefetchedKnowledge.set(new PrefetchedKnowledge(key, result));
+    }
+
+    /** 比对用的键: 去掉标点和空白 —— 中间转写和最终文本的差别几乎只在这里 */
+    private static String prefetchKey(String text) {
+        StringBuilder sb = new StringBuilder(text.length());
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (Character.isLetterOrDigit(c)) {
+                sb.append(Character.toLowerCase(c));
+            }
+        }
+        return sb.toString();
+    }
+
     private Mono<List<Message>> assembleContext(String userText) {
         boolean memBlocking = memory != MemoryStore.NOOP && userId != null;
         boolean kbBlocking = knowledge != KnowledgeStore.NOOP && knowledgeOwner() != null
@@ -371,7 +413,17 @@ public class ConversationSession {
                 && WebSearchHeuristic.isTimeSensitive(userText);
 
         Mono<Optional<String>> mem = offload(memBlocking, () -> memoryContext(userText));
-        Mono<Optional<String>> kb = offload(kbBlocking, () -> knowledgeContext(userText));
+        Mono<Optional<String>> kb;
+        PrefetchedKnowledge pre = prefetchedKnowledge.getAndSet(null);   // 一次性: 取走即作废
+        if (kbBlocking && pre != null && pre.key().equals(prefetchKey(userText))) {
+            kb = pre.result();
+            log.debug("知识库检索复用判停时的预取结果");
+        } else {
+            if (pre != null && kbBlocking) {
+                log.debug("知识库预取的文本与最终文本不一致, 重新检索");
+            }
+            kb = offload(kbBlocking, () -> knowledgeContext(userText));
+        }
         Mono<Optional<String>> web = offload(webBlocking, () -> webSearchContext(userText));
 
         return Mono.zip(mem, kb, web).map(ctx -> {
@@ -713,7 +765,11 @@ public class ConversationSession {
 
     /** 三段式: ASR(中间结果透传给语义端点判定, 取 final) → 交给 {@link #respond} 走 LLM → 分句 → TTS */
     private Flux<AudioChunk> pipelineTurn(Flux<AudioFrame> userAudio) {
-        return asr.transcribe(userAudio, context.asrConfig())
+        // 量"识别收尾": 上行音频结束(VAD 判停)到拿到最终文本。这段以前没计量, 而它是判停之后、
+        // 大模型之前那段"谁都不知道花在哪"的空档
+        java.util.concurrent.atomic.AtomicLong audioEndedAt = new java.util.concurrent.atomic.AtomicLong();
+        Flux<AudioFrame> timedAudio = userAudio.doOnComplete(() -> audioEndedAt.set(System.currentTimeMillis()));
+        return asr.transcribe(timedAudio, context.asrConfig())
                 // 旁路中间转写给接入层做语义端点判定(自适应断句); 不影响主链路
                 .doOnNext(ev -> {
                     if (!ev.isFinal() && !ev.isBlank()) {
@@ -724,7 +780,12 @@ public class ConversationSession {
                 .next()                                  // 取本轮最终识别结果
                 .filter(ev -> !ev.isBlank())
                 .flatMapMany(ev -> {
-                    log.debug("ASR final: {}", ev.text());
+                    long ended = audioEndedAt.get();
+                    if (ended > 0) {
+                        log.debug("ASR final: {} (识别收尾 {} ms)", ev.text(), System.currentTimeMillis() - ended);
+                    } else {
+                        log.debug("ASR final: {}", ev.text());
+                    }
                     return respond(ev.text(), true, true);
                 });
     }

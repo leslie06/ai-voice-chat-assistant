@@ -87,6 +87,10 @@ public final class CallSession {
 
     /** 接通以来已经收到多少毫秒的上行音频; 接通保护期按它计(音频时长, 可确定性单测) */
     private long inboundSinceAnswerMs;
+    /** 开场白还要等几拍才放(按节流拍数计, 可确定性单测); 0 = 已放或不需要 */
+    private int greetingTicksLeft;
+    /** 本轮最近一次识别中间转写: 判停时拿它提前发起知识库检索, 不等最终文本 */
+    private volatile String lastInterimText = "";
     /** 线路信号音检测(忙音/拨号音); 配置关掉时为 null */
     private final LineToneDetector toneDetector;
     /** 客户此刻是否处在"正在说话"(VAD 已判开口、还没判说完)的阶段 */
@@ -129,6 +133,8 @@ public final class CallSession {
             public void onAsrPartial(String text) {
                 if (text != null && !text.isBlank()) {
                     asrTextThisUtterance = true;
+                    lastInterimText = text;
+                    vad.setInterimText(text);   // 语义判停: 据"说完了没"动态调句尾静音阈值
                 }
             }
 
@@ -229,10 +235,17 @@ public final class CallSession {
         }
         answered = true;
         if (greeting != null && greeting.length > 0) {
-            pacing.offer(greeting);
+            // 不立刻放: 摘机后头几百毫秒对方那边的语音通道还没建好, 先发的会被吞。按节流拍数倒数。
+            greetingTicksLeft = cfg.greetingDelayMs() > 0
+                    ? Math.max(1, cfg.greetingDelayMs() / Math.max(1, cfg.pacingMs())) : 0;
+            if (greetingTicksLeft == 0) {
+                pacing.offer(greeting);
+            }
         }
         vad.start(mediaRate);
-        log.info("[{}] 接通, 开场白 {}ms", leg.callId(), pacing.bufferedMs());
+        log.info("[{}] 接通, 开场白 {}ms{}", leg.callId(),
+                greeting == null ? 0 : greeting.length * 500 / mediaRate,
+                greetingTicksLeft > 0 ? ", 延迟 " + cfg.greetingDelayMs() + "ms 再放" : "");
     }
 
     // ---- 上行 ----
@@ -285,6 +298,7 @@ public final class CallSession {
         userSpeaking = true;
         speakingMs = 0;
         asrTextThisUtterance = false;
+        lastInterimText = "";
         final long myEpoch = ++epoch;
         turnSink = Sinks.many().unicast().onBackpressureBuffer();
         turnSubscription = conversation.handleUserTurn(turnSink.asFlux())
@@ -305,6 +319,10 @@ public final class CallSession {
         if (turnSink == null) {
             return;
         }
+        // 判停那一刻就用中间转写去查知识库, 与识别收尾并行: 最终文本多半与它只差标点,
+        // 检索(一次向量接口调用, 100~200ms)就不用等最终文本回来才开始
+        conversation.prefetchKnowledge(lastInterimText);
+        lastInterimText = "";
         turnSink.tryEmitNext(AudioFrame.endOfSpeech(seq.getAndIncrement(), System.currentTimeMillis()));
         turnSink.tryEmitComplete();
     }
@@ -382,6 +400,9 @@ public final class CallSession {
                 log.info("[{}] 达单通时长上限, 挂机", leg.callId());
                 close("max-duration");
                 return;
+            }
+            if (greetingTicksLeft > 0 && --greetingTicksLeft == 0 && turnSubscription == null) {
+                pacing.offer(greeting);   // 客户要是在等待期就开口了(turnSubscription != null), 开场白就不放了
             }
             frame = pacing.nextFrame();
             // 必须同时满足"本轮已产完"与"缓冲已排空"。只看缓冲是不够的: 工具是在回合<b>进行中</b>

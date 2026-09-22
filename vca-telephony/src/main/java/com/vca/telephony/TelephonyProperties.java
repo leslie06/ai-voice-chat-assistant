@@ -120,6 +120,16 @@ public class TelephonyProperties {
     private boolean greetingBargeIn = true;
 
     /**
+     * 接通后等多久再开始放开场白(ms); <=0 立刻放。
+     *
+     * <p>真实线路上客户反映"开场白前几个字被吞了"。录音显示我们从接通第 0 帧就在发, 吞掉发生在
+     * 网关→电话线→手机网络这一段: 摘机瞬间模拟线路和移动网络的语音通道都还没完全建立, 头几百毫秒
+     * 的音频到不了对方耳朵。IVR 系统的通行做法就是接通后先停一下再放提示音。软电话联调时这段
+     * 通道是瞬时的, 可以设 0。
+     */
+    private int greetingDelayMs = 800;
+
+    /**
      * 听到线路信号音(忙音/拨号音/拥塞音)就挂机。
      *
      * <p>模拟线(FXO 网关、插卡盒)没有挂机信令, 客户挂断后线上只是开始放 450Hz 的忙音。网关本该听出来并拆线,
@@ -654,7 +664,15 @@ public class TelephonyProperties {
          */
         private int silenceMs = 500;
         private double bargeThreshold = 0.025;
-        private int bargeMs = 250;
+        /**
+         * 插话要持续超过阈值多久才算打断。
+         *
+         * <p>电话上比浏览器(250)短: 真实线路实测, 客户插话时电平 0.11~0.28 足够高, 但被网关的回声抑制
+         * 切得断断续续, 一次插话累计只有 120~200ms 就落回去了 —— 250 永远够不着。150 能接住其中大半。
+         * 代价是更容易被残余回声误触发, 靠 bargeGraceMs 和阈值挡; 若日志里出现峰值很低的"打断: 客户插话",
+         * 就是回声在触发, 调回 200。
+         */
+        private int bargeMs = 150;
         private int prerollMs = 400;
         /** 起播保护期(ms): 机器人刚开口这段不判打断, 挡线路回声导致的自打断。 */
         private int bargeGraceMs = 200;
@@ -763,7 +781,7 @@ public class TelephonyProperties {
 
     public CallConfig toCallConfig() {
         return new CallConfig(pacingMs, maxBufferedMs, ttsSampleRate, maxCallSeconds, greetingBargeIn,
-                toneHangup, noSpeechHangupMs, answerGuardMs);
+                toneHangup, noSpeechHangupMs, answerGuardMs, greetingDelayMs);
     }
 
     /** VAD 目标采样率固定 16k: Silero 要求, ASR 也按 16k 送。上行 8k 会被升采样到此。 */
@@ -777,7 +795,10 @@ public class TelephonyProperties {
                 // halfDuplex=false: 电话线路本就是全双工, 打断照常判
                 // echoAware=false: 回声判别依赖"服务端知道下行音频"的时序模型, 电话侧下行走
                 //                  定速缓冲(PacingBuffer), 时间轴与 Web 不同, 未验证
-                false, false, false, 400, 1600, sampleRate);
+                // semanticEndpoint=true: 电话的识别开着标点预测, 中间转写带句末标点, 语义判停的
+                //                  "已说完"能判出来 —— 问完"多少钱?"只等 400ms 而不是 500ms;
+                //                  "然后…""那个…"这类半句则多等到 800ms, 少切断人
+                false, false, true, 400, 1600, sampleRate);
     }
 
     // ---- getters / setters ----
@@ -948,6 +969,14 @@ public class TelephonyProperties {
 
     public void setNoSpeechHangupMs(int noSpeechHangupMs) {
         this.noSpeechHangupMs = noSpeechHangupMs;
+    }
+
+    public int getGreetingDelayMs() {
+        return greetingDelayMs;
+    }
+
+    public void setGreetingDelayMs(int greetingDelayMs) {
+        this.greetingDelayMs = greetingDelayMs;
     }
 
     public int getAnswerGuardMs() {
