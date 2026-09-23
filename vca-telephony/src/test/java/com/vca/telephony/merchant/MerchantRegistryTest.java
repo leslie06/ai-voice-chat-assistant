@@ -120,4 +120,106 @@ class MerchantRegistryTest {
         assertThat(props.toMerchantRegistry().resolve("5000").systemPrompt())
                 .isEqualTo("你是电话客服助手。");
     }
+
+    // ---- 接数据库: 库里优先、缓存、改动即时生效 ----
+
+    /** 内存版存储: 记录查库次数, 能手动触发变更通知 */
+    private static class MemStore implements com.vca.orchestrator.merchant.MerchantStore {
+        final java.util.Map<String, com.vca.orchestrator.merchant.MerchantProfile> byNumber = new java.util.HashMap<>();
+        final java.util.List<Runnable> listeners = new java.util.ArrayList<>();
+        int lookups;
+
+        void put(com.vca.orchestrator.merchant.MerchantProfile p) {
+            byNumber.put(p.number(), p);
+        }
+
+        void changed() {
+            listeners.forEach(Runnable::run);
+        }
+
+        @Override public java.util.Optional<com.vca.orchestrator.merchant.MerchantProfile> findByNumber(String number) {
+            lookups++;
+            return java.util.Optional.ofNullable(byNumber.get(number.trim())).filter(com.vca.orchestrator.merchant.MerchantProfile::enabled);
+        }
+        @Override public java.util.Optional<com.vca.orchestrator.merchant.MerchantProfile> findById(long id) { return java.util.Optional.empty(); }
+        @Override public java.util.List<com.vca.orchestrator.merchant.MerchantProfile> listByOwner(long ownerId) { return java.util.List.of(); }
+        @Override public java.util.List<com.vca.orchestrator.merchant.MerchantProfile> listEnabled() { return java.util.List.copyOf(byNumber.values()); }
+        @Override public com.vca.orchestrator.merchant.MerchantProfile save(com.vca.orchestrator.merchant.MerchantProfile p) { put(p); changed(); return p; }
+        @Override public boolean delete(long ownerId, long id) { return false; }
+        @Override public void addChangeListener(Runnable l) { listeners.add(l); }
+    }
+
+    private static com.vca.orchestrator.merchant.MerchantProfile clinic(String number, String name, long owner, String hours) {
+        return new com.vca.orchestrator.merchant.MerchantProfile(1L, owner, number, name, true,
+                "您好，这里是" + name, "说话要热情", "user/8002@vca.local", "", "",
+                "东城区", hours, "", "", "洗牙 200-400 元", "", "", "", null, null);
+    }
+
+    @Test
+    void databaseMerchantWinsOverConfigAndRendersProfileIntoPrompt() {
+        TelephonyProperties p = baseProps();
+        p.setSystemPrompt("你是电话客服，回答必须简短。");
+        p.setMerchants(List.of(props("5000", "配置文件里的旧店", "11")));
+        MemStore store = new MemStore();
+        store.put(clinic("5000", "美好口腔", 21, "每天 9:00-20:00"));
+        List<Merchant> loaded = new java.util.ArrayList<>();
+        MerchantRegistry registry = p.toMerchantRegistry(store, loaded::add);
+
+        Merchant m = registry.resolve("5000");
+
+        assertThat(m.label()).as("库里的优先于配置文件").isEqualTo("美好口腔");
+        assertThat(m.knowledgeOwner()).as("知识库归属 = 资料所属账号").isEqualTo("21");
+        assertThat(m.greeting()).isEqualTo("您好，这里是美好口腔");
+        assertThat(m.systemPrompt())
+                .as("电话人设在前, 机构资料在中, 商家补充在后")
+                .contains("回答必须简短").contains("营业时间: 每天 9:00-20:00").contains("说话要热情");
+        assertThat(m.systemPrompt().indexOf("回答必须简短")).isLessThan(m.systemPrompt().indexOf("营业时间"));
+        assertThat(m.systemPrompt().indexOf("营业时间")).isLessThan(m.systemPrompt().indexOf("说话要热情"));
+        assertThat(loaded).as("新加载到的商家要回调一次(预合成开场白用)").extracting(Merchant::label).containsExactly("美好口腔");
+    }
+
+    @Test
+    void cachesLookupsAndInvalidatesOnChange() {
+        TelephonyProperties p = baseProps();
+        MemStore store = new MemStore();
+        store.put(clinic("5000", "美好口腔", 21, "9:00-18:00"));
+        MerchantRegistry registry = p.toMerchantRegistry(store, m -> { });
+
+        registry.resolve("5000");
+        registry.resolve("5000");
+        registry.resolve("5000");
+        assertThat(store.lookups).as("同一个号反复来电只查一次库").isEqualTo(1);
+
+        // 诊所在网页上改了营业时间 → 存储层通知 → 下一通电话就是新的
+        store.save(clinic("5000", "美好口腔", 21, "9:00-21:00"));
+        assertThat(registry.resolve("5000").systemPrompt()).contains("9:00-21:00");
+        assertThat(store.lookups).isEqualTo(2);
+    }
+
+    @Test
+    void unknownNumberIsNegativelyCachedAndFallsBackToConfigThenDefault() {
+        TelephonyProperties p = baseProps();
+        p.setMerchants(List.of(props("5001", "启明培训", "12")));
+        MemStore store = new MemStore();
+        MerchantRegistry registry = p.toMerchantRegistry(store, m -> { });
+
+        assertThat(registry.resolve("5001").label()).as("库里没有 → 配置文件").isEqualTo("启明培训");
+        assertThat(registry.resolve("9999").label()).as("哪都没有 → 默认").isEqualTo("默认");
+        registry.resolve("9999");
+        registry.resolve("9999");
+        assertThat(store.lookups).as("扫号机器人拨的随机号不能每次都打库(负缓存)").isEqualTo(2);
+    }
+
+    @Test
+    void storeFailureFallsBackInsteadOfBreakingTheCall() {
+        TelephonyProperties p = baseProps();
+        p.setMerchants(List.of(props("5000", "配置里的店", "11")));
+        com.vca.orchestrator.merchant.MerchantStore broken = new MemStore() {
+            @Override public java.util.Optional<com.vca.orchestrator.merchant.MerchantProfile> findByNumber(String n) {
+                throw new IllegalStateException("数据库连不上");
+            }
+        };
+        MerchantRegistry registry = p.toMerchantRegistry(broken, m -> { });
+        assertThat(registry.resolve("5000").label()).as("查库失败退回配置文件, 电话照接").isEqualTo("配置里的店");
+    }
 }

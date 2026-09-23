@@ -18,6 +18,7 @@ import com.vca.telephony.session.CallConversationFactory;
 import com.vca.telephony.session.CallSession;
 import com.vca.orchestrator.call.CallSummaryStore;
 import com.vca.telephony.merchant.Merchant;
+import com.vca.orchestrator.merchant.MerchantStore;
 import com.vca.telephony.merchant.MerchantRegistry;
 import com.vca.telephony.session.PendingCalls;
 import com.vca.telephony.summary.CallAftermath;
@@ -114,13 +115,21 @@ public class TelephonyAutoConfiguration {
      * 没配 {@code merchants} 时只有一个默认商家(顶层配置), 与单店部署完全一致。
      */
     @Bean
-    MerchantRegistry merchantRegistry(TelephonyProperties props) {
-        MerchantRegistry registry = props.toMerchantRegistry();
-        if (registry.size() == 0) {
-            log.info("单商家模式: 所有来电都用顶层配置");
+    MerchantRegistry merchantRegistry(TelephonyProperties props, ObjectProvider<MerchantStore> stores,
+                                      PromptCache prompts) {
+        MerchantStore store = stores.getIfAvailable(() -> MerchantStore.NOOP);
+        // 库里新加载到一家商家就把它的开场白合成好: 合成要几秒, 不能等到接通了再做
+        MerchantRegistry registry = props.toMerchantRegistry(store, m -> {
+            if (m.greeting() != null && !m.greeting().isBlank()) {
+                reactor.core.scheduler.Schedulers.boundedElastic().schedule(() -> prompts.preload(m.greeting()));
+            }
+        });
+        List<Merchant> all = registry.all();
+        if (all.isEmpty()) {
+            log.info("单商家模式: 所有来电都用顶层配置{}", store == MerchantStore.NOOP ? "" : "(库里还没有登记商家)");
         } else {
-            log.info("多商家模式: 已登记 {} 家 —— {}", registry.size(),
-                    registry.all().stream().map(m -> m.number() + "=" + m.label()).toList());
+            log.info("多商家模式: 配置文件 {} 家, 库里 {} 家 —— {}", registry.size(), all.size() - registry.size(),
+                    all.stream().map(m -> m.number() + "=" + m.label()).toList());
         }
         return registry;
     }

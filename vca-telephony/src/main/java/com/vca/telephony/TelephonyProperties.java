@@ -1057,6 +1057,36 @@ public class TelephonyProperties {
         return new com.vca.telephony.merchant.MerchantRegistry(fallback, list);
     }
 
+    /** 同上, 但接上数据库: 库里的商家优先, 资料改动即时生效。 */
+    public com.vca.telephony.merchant.MerchantRegistry toMerchantRegistry(
+            com.vca.orchestrator.merchant.MerchantStore store,
+            java.util.function.Consumer<com.vca.telephony.merchant.Merchant> onLoaded) {
+        com.vca.telephony.merchant.MerchantRegistry staticOnly = toMerchantRegistry();
+        com.vca.telephony.merchant.Merchant fallback = staticOnly.resolve(null);
+        return new com.vca.telephony.merchant.MerchantRegistry(fallback, staticOnly.all(), store,
+                this::toMerchant, java.time.Duration.ofSeconds(30), onLoaded);
+    }
+
+    /**
+     * 库里的商家资料 → 一通电话用的配置。留空的项回退到顶层默认; 结构化资料渲染进人设,
+     * 顺序是 电话人设(通道硬约束) → 机构资料(事实) → 商家自己的补充(语气与禁忌)。
+     * 知识库归属就是资料的所属账号: 诊所用哪个账号登录填的资料, 就查哪个账号上传的文档。
+     */
+    public com.vca.telephony.merchant.Merchant toMerchant(com.vca.orchestrator.merchant.MerchantProfile p) {
+        String profile = p.renderProfile();
+        String extra = p.systemPrompt();
+        String merchantPart = profile.isEmpty() ? extra
+                : (extra.isEmpty() ? profile : profile + "\n\n" + extra);
+        return new com.vca.telephony.merchant.Merchant(
+                p.number(), p.label(),
+                orDefault(p.greeting(), greeting),
+                mergePrompt(systemPrompt, merchantPart),
+                String.valueOf(p.ownerId()),
+                orDefault(p.transferDialString(), transferDialString),
+                orDefault(p.summaryWebhook(), summary.getWebhookUrl()),
+                orDefault(p.ttsVoice(), ttsVoice));
+    }
+
     private static String orDefault(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
     }

@@ -37,8 +37,12 @@ import com.vca.store.mapper.KnowledgeChunkMapper;
 import com.vca.store.mapper.KnowledgeDocMapper;
 import com.vca.store.mapper.PhoneCallSummaryMapper;
 import com.vca.store.mapper.PhoneLeadMapper;
+import com.vca.store.mapper.PhoneMerchantMapper;
 import com.vca.store.call.MyBatisCallSummaryStore;
 import com.vca.store.lead.MyBatisLeadStore;
+import com.vca.store.merchant.MerchantRoutes;
+import com.vca.store.merchant.MyBatisMerchantStore;
+import com.vca.orchestrator.merchant.MerchantStore;
 import com.vca.store.mapper.UserMemoryMapper;
 import com.vca.store.mapper.UserMusicPlayMapper;
 import com.vca.store.mapper.UserMusicUploadMapper;
@@ -418,6 +422,28 @@ public class StoreAutoConfiguration {
     @ConditionalOnMissingBean(CallSummaryStore.class)
     CallSummaryStore callSummaryStore(PhoneCallSummaryMapper mapper) {
         return new MyBatisCallSummaryStore(mapper);
+    }
+
+    // ---- 商家资料: 诊所在网页上维护, 电话按接入号取用, 改动即时生效 ----
+
+    @Bean
+    @ConditionalOnMissingBean
+    PhoneMerchantMapper phoneMerchantMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, PhoneMerchantMapper.class);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(MerchantStore.class)
+    MerchantStore merchantStore(PhoneMerchantMapper mapper) {
+        return new MyBatisMerchantStore(mapper);
+    }
+
+    /** 商家资料 REST(/api/merchants*): 诊所自助维护自己的资料。 */
+    @Bean
+    org.springframework.web.reactive.function.server.RouterFunction<
+            org.springframework.web.reactive.function.server.ServerResponse> merchantRoutes(
+            UserService userService, MerchantStore merchantStore) {
+        return MerchantRoutes.create(userService, merchantStore);
     }
 
     // ---- 长期记忆(跨会话个性化): remember 工具写入, 每轮对话回灌上下文(语义召回) ----

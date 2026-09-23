@@ -848,8 +848,44 @@ VCA_TELEPHONY_MERCHANTS_0_KNOWLEDGE_OWNER=11
 
 通话小结也各自推给各自的群，日志里带商家名：`通话小结(启明少儿英语): 意向=B…`。
 
-**现在是配置驱动、启动时定死**，加一家要改配置重启。等商家多到需要自助开通，把 `MerchantRegistry`
-换成查库 + 缓存即可，调用方只认这个接口。
+### 12.1 商家进库：诊所自己填资料（2026-09-23）
+
+上面的配置文件方式留着给单店和联调用；产品形态是**诊所用自己的账号登录网页，自己维护门店资料**，
+存在 `phone_merchant` 表里，改完下一通电话就生效，不用重启。
+
+**两个来源，库里优先**：`MerchantRegistry.resolve(被叫号)` 先查库（`MerchantStore`），没有再看配置文件，
+都没有回退到顶层默认商家。库里的结果缓存 30 秒（查不到的号也缓存，扫号机器人拨的随机号不会每个都打库）；
+资料一有增删改，存储层通过变更通知把缓存整体作废。查库失败不让电话失败：退回配置文件里的商家，记一行 warn。
+
+**资料字段**（`MerchantProfile`）分两层：
+
+| 层 | 字段 | 给谁用 |
+|---|---|---|
+| 接线参数 | `number`（接入号，全局唯一）、`enabled`、`greeting`、`ttsVoice`、`transferDialString`、`summaryWebhook` | 留空回退顶层默认 |
+| 机构资料 | `address`、`businessHours`、`phone`、`transport`、`services`、`doctors`、`bookingRules`、`notes`、`systemPrompt`（补充要求） | 渲染成一段"机构资料"文本 |
+
+人设的拼法是 **电话人设 + 机构资料 + 商家补充**（`TelephonyProperties.toMerchant`）：电话人设里"简短、
+一次只问一件事"这些约束不能丢——早先商家人设整段替换电话人设，结果 AI 一开口就是长篇大论，说到一半被判停。
+机构资料只渲染填了的项，结尾固定加一句"资料里没有的信息一律不要编造"。知识库归属直接取门店所属账号
+（`knowledgeOwner = ownerId`），所以诊所在同一个账号下传的资料，电话里就能查到。
+
+**接口**（`MerchantRoutes`，与知识库接口同样的 `Authorization: Bearer <token>` 鉴权，只能看改自己名下的）：
+
+```
+GET    /api/merchants              我名下的门店
+POST   /api/merchants              新建, number 必填; 号被别家占了返回 409
+GET    /api/merchants/{id}
+PUT    /api/merchants/{id}         整体覆盖
+DELETE /api/merchants/{id}
+GET    /api/merchants/{id}/preview AI 实际拿到的机构资料文本, 调试用
+```
+
+网页端在"设置 → 电话客服（我的门店）"里有对应的表单。新加载到一家商家时会预合成它的开场白
+（`MerchantRegistry` 的 `onLoaded` 回调），这家店的第一通电话不用等合成。
+
+**实测**（本机，账号 13 在网页上登记接入号 5000 为"美好口腔"，配置文件里没配这家）：拨 5000，
+日志 `建立通话会话: … 被叫=5000, 商家=美好口腔`，开场白是库里那句，知识库按 `user_id = 13` 查，
+通话小结带着商家名。改资料后下一通即生效，改的是哪一家不重要——缓存整体重填的代价只是几次查库。
 
 > 改 `deploy/freeswitch/conf/` 下的拨号计划后要 **重启容器**，`reloadxml` 不够——
 > 容器启动时才把 `/conf` 的模板渲染进 `/etc/freeswitch`，热重载读的是渲染后的那份。

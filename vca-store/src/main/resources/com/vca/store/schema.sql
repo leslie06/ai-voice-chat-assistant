@@ -178,6 +178,34 @@ CREATE TABLE IF NOT EXISTS knowledge_chunk (
     KEY idx_chunk_doc (doc_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'RAG 文档切块';
 
+-- 商家资料: 一家诊所/机构的电话客服配置与结构化资料。按接入号(客户拨的号码)路由, 全局唯一。
+-- owner_id 是所属账号, 知识库/线索/小结都按它归属。改动即时生效(注册表按变更通知作废缓存), 不用重启。
+CREATE TABLE IF NOT EXISTS phone_merchant (
+    id                   BIGINT       NOT NULL AUTO_INCREMENT,
+    owner_id             BIGINT       NOT NULL COMMENT '所属账号 id',
+    number               VARCHAR(32)  NOT NULL COMMENT '接入号(被叫号码)',
+    name                 VARCHAR(128) NOT NULL DEFAULT '',
+    enabled              TINYINT(1)   NOT NULL DEFAULT 1,
+    greeting             VARCHAR(512) NOT NULL DEFAULT '',
+    system_prompt        TEXT         COMMENT '商家自己的人设补充, 追加在电话人设之后',
+    transfer_dial_string VARCHAR(128) NOT NULL DEFAULT '' COMMENT '转人工拨号串, 如 user/8002@vca.local',
+    summary_webhook      VARCHAR(512) NOT NULL DEFAULT '',
+    tts_voice            VARCHAR(64)  NOT NULL DEFAULT '',
+    address              VARCHAR(512) NOT NULL DEFAULT '',
+    business_hours       VARCHAR(512) NOT NULL DEFAULT '',
+    phone                VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '对外电话(AI 报给客户用)',
+    transport            VARCHAR(512) NOT NULL DEFAULT '',
+    services             TEXT         COMMENT '项目与价格, 一行一项',
+    doctors              TEXT,
+    booking_rules        TEXT,
+    notes                TEXT,
+    created_at           DATETIME     NOT NULL,
+    updated_at           DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_merchant_number (number),
+    KEY idx_merchant_owner (owner_id, id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '商家资料';
+
 -- 电话线索: 客户在通话里留下的预约/留资信息。按 owner_id(商家账号)归属, 与知识库同一个账号体系。
 -- call_id 与 conversation_turn.session_id、录音文件名一致, 凭它能回听这通电话。
 CREATE TABLE IF NOT EXISTS phone_lead (

@@ -120,6 +120,19 @@
     .field{margin-bottom:14px;}
     .field label{display:block;font-size:13px;color:var(--sub);margin-bottom:7px;}
     .field-hint{font-size:12px;color:var(--sub);margin-top:7px;line-height:1.5;}
+    /* 电话客服: 诊所资料表单 */
+    .mform{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;margin:8px 0}
+    .mform .full{grid-column:1/-1}
+    .mform label{display:block;font-size:12px;color:var(--sub);margin-bottom:4px}
+    .mform input,.mform textarea{width:100%;box-sizing:border-box;font:inherit;font-size:14px;color:var(--text);
+      background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+    .mform textarea{min-height:64px;resize:vertical;line-height:1.5}
+    .mrow{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid var(--line)}
+    .mrow .mname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .mrow .moff{color:var(--sub);font-size:12px}
+    .mprev{white-space:pre-wrap;font-size:12.5px;line-height:1.6;background:rgba(127,127,127,.12);
+      border-radius:8px;padding:10px 12px;margin-top:8px;max-height:260px;overflow:auto}
+    @media (max-width:520px){.mform{grid-template-columns:1fr}}
     /* 对话区 */
     main{flex:1;overflow-y:auto;padding:20px 0 8px;}
     .wrap{max-width:760px;margin:0 auto;padding:0 16px;}
@@ -631,6 +644,39 @@
         <button class="modelsel" id="kbUpload" style="cursor:pointer;text-align:left">📄 上传文档（txt / md / pdf）</button>
         <div id="kbList" style="margin:6px 0"></div>
         <div class="field-hint">上传你的资料后，提问时助手会自动检索并据此回答（按账号隔离，仅你可见）。需已配置 embedding。</div>
+      </div>
+      <div class="field authonly">
+        <label>电话客服（我的门店）</label>
+        <div id="mList" style="margin:6px 0"></div>
+        <button class="modelsel" id="mNew" style="cursor:pointer;text-align:left">➕ 添加门店</button>
+        <div id="mEditor" hidden>
+          <div class="mform">
+            <div><label>门店名称 *</label><input id="mName" placeholder="美好口腔东城店"></div>
+            <div><label>接入号 *</label><input id="mNumber" placeholder="网关转接的号码，如 5000"></div>
+            <div class="full"><label>开场白</label><input id="mGreeting" placeholder="您好，这里是美好口腔，请问有什么可以帮您？"></div>
+            <div><label>营业时间</label><input id="mHours" placeholder="每天 9:00-20:00，除夕初一休息"></div>
+            <div><label>对外电话</label><input id="mPhone" placeholder="010-8888-6666"></div>
+            <div class="full"><label>地址</label><input id="mAddress" placeholder="东城区东直门南大街 12 号美好大厦 2 层"></div>
+            <div class="full"><label>交通与停车</label><input id="mTransport" placeholder="地铁 2 号线东直门 C 口步行 5 分钟；大厦地下车库免 2 小时"></div>
+            <div class="full"><label>项目与价格（一行一项）</label><textarea id="mServices" placeholder="洗牙 200-400 元&#10;种植牙 6800 元起，含种植体、基台和牙冠&#10;正畸 12000 元起"></textarea></div>
+            <div class="full"><label>医生 / 老师</label><textarea id="mDoctors" placeholder="张伟，种植科主任，从业 15 年"></textarea></div>
+            <div class="full"><label>预约规则</label><textarea id="mBooking" placeholder="留下称呼、手机号和希望的时间段，前台 1 小时内回电确认；改期请提前 4 小时"></textarea></div>
+            <div class="full"><label>其他要让 AI 知道的</label><textarea id="mNotes" placeholder="停车怎么免费、医保哪些能报、常见顾虑怎么答……"></textarea></div>
+            <div class="full"><label>语气与禁忌（可选）</label><textarea id="mPrompt" placeholder="称呼客户为您；不承诺任何治疗效果；被问到别家诊所一律不评价"></textarea></div>
+            <div><label>转人工分机</label><input id="mTransfer" placeholder="user/8002@vca.local"></div>
+            <div><label>小结推送地址</label><input id="mWebhook" placeholder="企业微信 / 钉钉机器人 webhook"></div>
+            <div class="full" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <label style="margin:0;display:flex;align-items:center;gap:6px;color:var(--text);font-size:13px"><input type="checkbox" id="mEnabled" checked style="width:auto">启用</label>
+              <span style="flex:1"></span>
+              <button class="modelsel" id="mPreview" style="cursor:pointer">👁 预览 AI 看到的资料</button>
+              <button class="modelsel" id="mCancel" style="cursor:pointer">取消</button>
+              <button class="modelsel" id="mSave" style="cursor:pointer;font-weight:600">保存</button>
+            </div>
+            <div class="full field-hint" id="mMsg" style="display:none;margin:0"></div>
+            <div class="full mprev" id="mPrevBox" hidden></div>
+          </div>
+        </div>
+        <div class="field-hint">每家门店一个接入号（网关或线路送来的被叫号码）。填的资料会直接交给电话 AI 作答，改完立即生效，不用重启。价格和时间以这里为准，AI 不会编造资料里没有的信息。</div>
       </div>
       <div class="field">
         <label>对话记录</label>
@@ -2200,7 +2246,7 @@ engineSel.onchange=()=>{ sendEngine(); addSys('— 已切换为'+(engineSel.valu
 
 /* ---------- 设置面板开关 ---------- */
 const settings=document.getElementById('settings');
-function openSettings(){ settings.hidden=false; if(authed()) refreshKnowledge(); }
+function openSettings(){ settings.hidden=false; if(authed()){ refreshKnowledge(); refreshMerchants(); } }
 function closeSettings(){ settings.hidden=true; }
 document.getElementById('settingsBtn').onclick=openSettings;
 
@@ -2241,6 +2287,74 @@ async function uploadKnowledge(file){
   }catch(e){ btn.textContent='❌ 上传失败'; }
   finally{ btn.disabled=false; setTimeout(()=>{ btn.textContent=old; }, 1800); }
 }
+/* ---------- 电话客服: 门店资料 (对应 /api/merchants) ---------- */
+const M_FIELDS={mName:'name',mNumber:'number',mGreeting:'greeting',mHours:'businessHours',mPhone:'phone',
+  mAddress:'address',mTransport:'transport',mServices:'services',mDoctors:'doctors',mBooking:'bookingRules',
+  mNotes:'notes',mPrompt:'systemPrompt',mTransfer:'transferDialString',mWebhook:'summaryWebhook'};
+let mEditingId=null;
+async function refreshMerchants(){
+  const r=await api('GET','/api/merchants');
+  renderMerchantList(r.ok ? (r.data||[]) : []);
+}
+function renderMerchantList(list){
+  const box=document.getElementById('mList'); if(!box) return;
+  box.innerHTML='';
+  if(!list.length){ box.innerHTML='<div class="field-hint" style="margin:0">（还没有门店。添加后，打到该接入号的电话就由 AI 用这里的资料接听）</div>'; return; }
+  for(const m of list){
+    const row=document.createElement('div'); row.className='mrow';
+    const name=document.createElement('span'); name.className='mname';
+    name.textContent='🏥 '+(m.name||'未命名')+'  ·  接入号 '+m.number+(m.enabled?'':'  ·  已停用');
+    if(!m.enabled) name.classList.add('moff');
+    const edit=document.createElement('button'); edit.className='iconbtn'; edit.textContent='✏️'; edit.title='编辑';
+    edit.onclick=()=>openMerchantEditor(m);
+    const del=document.createElement('button'); del.className='iconbtn'; del.textContent='🗑'; del.title='删除';
+    del.onclick=()=>deleteMerchant(m);
+    row.appendChild(name); row.appendChild(edit); row.appendChild(del); box.appendChild(row);
+  }
+}
+function openMerchantEditor(m){
+  mEditingId=m?m.id:null;
+  for(const [el,key] of Object.entries(M_FIELDS)) document.getElementById(el).value=(m&&m[key])||'';
+  document.getElementById('mEnabled').checked=m?m.enabled!==false:true;
+  document.getElementById('mPrevBox').hidden=true; setMerchantMsg('');
+  document.getElementById('mEditor').hidden=false;
+  document.getElementById('mName').focus();
+}
+function closeMerchantEditor(){ document.getElementById('mEditor').hidden=true; mEditingId=null; }
+function setMerchantMsg(text, ok){
+  const el=document.getElementById('mMsg'); el.textContent=text; el.style.display=text?'block':'none';
+  el.style.color=ok===false?'#d33':'var(--sub)';
+}
+function merchantFormBody(){
+  const b={}; for(const [el,key] of Object.entries(M_FIELDS)) b[key]=document.getElementById(el).value.trim();
+  b.enabled=document.getElementById('mEnabled').checked; return b;
+}
+async function saveMerchant(){
+  const b=merchantFormBody();
+  if(!b.name){ setMerchantMsg('门店名称不能为空', false); return; }
+  if(!b.number){ setMerchantMsg('接入号不能为空', false); return; }
+  const btn=document.getElementById('mSave'); btn.disabled=true;
+  const r= mEditingId ? await api('PUT','/api/merchants/'+mEditingId, b) : await api('POST','/api/merchants', b);
+  btn.disabled=false;
+  if(r.ok){ setMerchantMsg('已保存，下一通电话即生效', true); mEditingId=r.data.id; await refreshMerchants(); setTimeout(closeMerchantEditor, 900); }
+  else setMerchantMsg((r.data&&r.data.error)||'保存失败', false);
+}
+async function deleteMerchant(m){
+  if(!confirm('删除门店「'+(m.name||m.number)+'」？打到 '+m.number+' 的电话将按默认配置接听。')) return;
+  await api('DELETE','/api/merchants/'+m.id); refreshMerchants();
+}
+async function previewMerchant(){
+  const box=document.getElementById('mPrevBox');
+  if(!mEditingId){ setMerchantMsg('先保存一次再预览', false); return; }
+  const r=await api('GET','/api/merchants/'+mEditingId+'/preview');
+  box.textContent=r.ok ? ((r.data&&r.data.prompt)||'（资料为空，AI 只会用通用话术）') : '预览失败';
+  box.hidden=false;
+}
+document.getElementById('mNew').onclick=()=>openMerchantEditor(null);
+document.getElementById('mSave').onclick=saveMerchant;
+document.getElementById('mCancel').onclick=closeMerchantEditor;
+document.getElementById('mPreview').onclick=previewMerchant;
+
 document.getElementById('kbUpload').onclick=()=>document.getElementById('kbFile').click();
 document.getElementById('kbFile').onchange=e=>{ const f=e.target.files[0]; e.target.value=''; uploadKnowledge(f); };
 document.getElementById('settingsClose').onclick=closeSettings;
