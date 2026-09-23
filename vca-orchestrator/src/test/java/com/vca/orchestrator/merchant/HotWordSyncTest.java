@@ -139,7 +139,7 @@ class HotWordSyncTest {
     private HotWordSync sync;
 
     private HotWordSync sync(MemStore store, FakeClient client) {
-        sync = new HotWordSync(store, client, MODEL, scheduler, Duration.ofMillis(50));
+        sync = new HotWordSync(store, client, "vca", MODEL, scheduler, Duration.ofMillis(50));
         return sync;
     }
 
@@ -183,7 +183,7 @@ class HotWordSyncTest {
         client.calls.clear();
 
         // "重启": 新的同步器, 内存里没有 id
-        HotWordSync restarted = new HotWordSync(store, client, MODEL, Executors.newSingleThreadScheduledExecutor(),
+        HotWordSync restarted = new HotWordSync(store, client, "vca", MODEL, Executors.newSingleThreadScheduledExecutor(),
                 Duration.ofMillis(50));
         try {
             assertThat(restarted.syncNow().get(Industry.DENTAL)).isEqualTo(id);
@@ -275,6 +275,23 @@ class HotWordSyncTest {
 
         assertThat(client.tables.get(id).words()).hasSize(HotWordSync.MAX_WORDS);
         assertThat(client.tables.get(id).words()).as("基础词优先, 门店词按顺序截断").startsWith("预约");
+    }
+
+    @Test
+    void environmentPrefixKeepsDevAndProdTablesApart() {
+        MemStore store = new MemStore();
+        store.rows.add(merchant(1, "5000", "美好口腔", "dental", ""));
+        FakeClient client = new FakeClient();
+        HotWordSync dev = new HotWordSync(store, client, "DEV-local", MODEL, Executors.newSingleThreadScheduledExecutor(),
+                Duration.ofMillis(50));
+        try {
+            String id = dev.syncNow().get(Industry.DENTAL);
+            assertThat(dev.prefixFor(Industry.DENTAL)).as("规整成小写字母数字、最多 3 位, 再拼行业").isEqualTo("devdental");
+            assertThat(id).startsWith("vocab-devdental-");
+            assertThat(HotWordSync.sanitizePrefix("")).as("空的兜成 vca").isEqualTo("vca");
+        } finally {
+            dev.close();
+        }
     }
 
     /** 数字 → 汉字数字, 让每行的项目名都是不同的汉字串 */

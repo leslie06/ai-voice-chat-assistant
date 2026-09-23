@@ -213,6 +213,8 @@ vca:
     # 识别热词表: asr-vocabulary-id(VCA_TELEPHONY_ASR_VOCABULARY_ID)是全局那张; 库里登记了行业的门店
     # 还会按行业自动维护各自的表(基础词 + 该行业所有门店的店名与项目名, 资料一改就同步)。关掉只用全局表。
     hot-word-sync: ${VCA_TELEPHONY_HOT_WORD_SYNC:true}
+    # 热词表的环境前缀(最多 3 个小写字母数字)。本机联调与线上共用一个厂商账号时必须不同(本机填 dev), 否则互相覆盖
+    hot-word-prefix: ${VCA_TELEPHONY_HOT_WORD_PREFIX:vca}
     # 电话专用工具(按通话建): 留资、转人工、主动挂机。默认全开 —— 这三个正是"电话客服"与
     # "能打电话的聊天机器人"的区别。每多一个工具都会抬高一点首字延迟, 用不上的可以去掉。
     agent-tools: ${VCA_TELEPHONY_AGENT_TOOLS:save_lead,transfer_to_human,end_call}

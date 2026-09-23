@@ -17,8 +17,8 @@ class IndustryTest {
     @Test
     void vocabularyPrefixesObeyVendorRulesAndAreDistinct() {
         for (Industry i : Industry.values()) {
-            assertThat(i.vocabularyPrefix()).as("%s 的前缀只能小写字母数字且少于 10 个字符", i)
-                    .matches("[a-z0-9]{1,9}");
+            assertThat(i.vocabularyPrefix()).as("%s 的前缀行业部分只能小写字母数字, 与 3 位环境前缀拼起来要少于 10 个字符", i)
+                    .matches("[a-z0-9]{1,6}");
         }
         assertThat(java.util.Arrays.stream(Industry.values()).map(Industry::vocabularyPrefix).distinct().count())
                 .as("每个行业一张表, 前缀不能撞").isEqualTo(Industry.values().length);

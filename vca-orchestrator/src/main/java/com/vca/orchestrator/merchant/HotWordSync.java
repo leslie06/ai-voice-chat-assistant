@@ -26,9 +26,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * 而热词只是加权, 同行业的店共用一张表互不妨碍 —— 客户打给 A 店时把 B 店的名字也拉高一点先验,
  * 没有任何坏处。表数于是只与行业数挂钩, 门店随便加。
  *
- * <p><b>怎么做到重启不重建</b>: 建表时给每个行业一个固定前缀({@link Industry#vocabularyPrefix()}),
- * 厂商把前缀编进表 id; 启动时按前缀列一下就找回自己的表, 查出词表比对, 一样就直接用, 不一样才改。
- * 不需要在库里另存"行业 → 表 id"的映射。
+ * <p><b>怎么做到重启不重建</b>: 建表时给每个行业一个固定前缀(环境前缀 + {@link Industry#vocabularyPrefix()},
+ * 如 {@code vcadental}), 厂商把前缀编进表 id; 启动时按前缀列一下就找回自己的表, 查出词表比对, 一样就直接用,
+ * 不一样才改。不需要在库里另存"行业 → 表 id"的映射。环境前缀让本机联调与线上共用一个厂商账号时各用各的表,
+ * 否则两边会拿各自库里的门店互相覆盖对方的词集。
  *
  * <p><b>什么时候跑</b>: 启动时一次; 之后门店资料一有增删改, 延迟 {@code debounce} 合并一次(连续改十个字段
  * 只跑一遍)。每次都是全量比对, 幂等。厂商接口失败只记 warn, 上一张表继续用 —— 热词表不通不能让电话不通。
@@ -41,9 +42,12 @@ public final class HotWordSync implements AutoCloseable {
 
     /** 厂商单表上限 500 词, 留余量 */
     static final int MAX_WORDS = 400;
+    /** 环境前缀最多 3 个字符: 与最长的行业部分(dental)拼起来正好 9, 不超厂商"少于 10 个字符"的限制 */
+    static final int MAX_ENV_PREFIX = 3;
 
     private final MerchantStore store;
     private final VocabularyClient client;
+    private final String envPrefix;
     private final String targetModel;
     private final ScheduledExecutorService scheduler;
     private final Duration debounce;
@@ -52,14 +56,16 @@ public final class HotWordSync implements AutoCloseable {
     private final Object syncLock = new Object();
 
     /**
+     * @param envPrefix   环境前缀(线上 vca、本机联调 dev 之类), 只保留小写字母数字、最多 {@value #MAX_ENV_PREFIX} 个字符
      * @param targetModel 电话识别用的模型; 热词表必须绑定它, 换模型会自动重建
      * @param scheduler   跑同步的线程(同步是几次 HTTP 往返, 不能占用请求线程); 归本类所有, {@link #close()} 时关掉
      * @param debounce    资料变更后多久合并执行一次
      */
-    public HotWordSync(MerchantStore store, VocabularyClient client, String targetModel,
+    public HotWordSync(MerchantStore store, VocabularyClient client, String envPrefix, String targetModel,
                        ScheduledExecutorService scheduler, Duration debounce) {
         this.store = store;
         this.client = client;
+        this.envPrefix = sanitizePrefix(envPrefix);
         this.targetModel = targetModel;
         this.scheduler = scheduler;
         this.debounce = debounce == null ? Duration.ofSeconds(3) : debounce;
@@ -125,10 +131,28 @@ public final class HotWordSync implements AutoCloseable {
         return out;
     }
 
+    /** 这个行业在厂商那边的表前缀: 环境前缀 + 行业部分 */
+    String prefixFor(Industry industry) {
+        return envPrefix + industry.vocabularyPrefix();
+    }
+
+    static String sanitizePrefix(String raw) {
+        StringBuilder sb = new StringBuilder();
+        for (char c : (raw == null ? "" : raw.toLowerCase(java.util.Locale.ROOT)).toCharArray()) {
+            if (c >= 'a' && c <= 'z' || c >= '0' && c <= '9') {
+                sb.append(c);
+            }
+            if (sb.length() == MAX_ENV_PREFIX) {
+                break;
+            }
+        }
+        return sb.isEmpty() ? "vca" : sb.toString();
+    }
+
     private String ensure(Industry industry, List<String> words) {
         String id = ids.get(industry);
         if (id == null) {
-            List<String> existing = client.list(industry.vocabularyPrefix());
+            List<String> existing = client.list(prefixFor(industry));
             id = existing.isEmpty() ? null : existing.get(0);
         }
         if (id != null) {
@@ -147,7 +171,7 @@ public final class HotWordSync implements AutoCloseable {
                 return id;
             }
         }
-        id = client.create(industry.vocabularyPrefix(), targetModel, words);
+        id = client.create(prefixFor(industry), targetModel, words);
         log.info("热词表已建: 行业={}, id={}, model={}, 词数={}", industry.label(), id, targetModel, words.size());
         return id;
     }

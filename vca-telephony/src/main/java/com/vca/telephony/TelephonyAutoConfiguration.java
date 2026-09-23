@@ -161,9 +161,11 @@ public class TelephonyAutoConfiguration {
                     t.setDaemon(true);
                     return t;
                 });
-        HotWordSync sync = new HotWordSync(store, client, props.getAsrModel(), scheduler, Duration.ofSeconds(3));
+        HotWordSync sync = new HotWordSync(store, client, props.getHotWordPrefix(), props.getAsrModel(), scheduler,
+                Duration.ofSeconds(3));
         sync.start();
-        log.info("热词表自动维护: 按行业各一张, 绑定模型 {}, 门店资料变更后 3 秒内同步", props.getAsrModel());
+        log.info("热词表自动维护: 按行业各一张(前缀 {}), 绑定模型 {}, 门店资料变更后 3 秒内同步",
+                props.getHotWordPrefix(), props.getAsrModel());
         return sync;
     }
 

@@ -195,6 +195,12 @@ public class TelephonyProperties {
      */
     private boolean hotWordSync = true;
 
+    /**
+     * 热词表的环境前缀(最多 3 个小写字母数字)。本机联调与线上共用一个厂商账号时必须不同(比如本机 dev),
+     * 否则两边会拿各自库里的门店互相覆盖对方的表。
+     */
+    private String hotWordPrefix = "vca";
+
     /** 开场白合成用的 TTS 厂商与采样率。 */
     private VendorType ttsVendor = VendorType.ALIYUN;
 
@@ -1017,6 +1023,14 @@ public class TelephonyProperties {
 
     public void setHotWordSync(boolean hotWordSync) {
         this.hotWordSync = hotWordSync;
+    }
+
+    public String getHotWordPrefix() {
+        return hotWordPrefix;
+    }
+
+    public void setHotWordPrefix(String v) {
+        this.hotWordPrefix = v == null || v.isBlank() ? "vca" : v.strip();
     }
 
     public String getErrorPrompt() {
