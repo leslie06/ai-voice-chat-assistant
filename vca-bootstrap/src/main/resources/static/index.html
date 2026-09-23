@@ -120,11 +120,11 @@
     .field{margin-bottom:14px;}
     .field label{display:block;font-size:13px;color:var(--sub);margin-bottom:7px;}
     .field-hint{font-size:12px;color:var(--sub);margin-top:7px;line-height:1.5;}
-    /* 电话客服: 诊所资料表单 */
+    /* 电话客服: 门店资料表单(诊所/培训机构/其他商家) */
     .mform{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px;margin:8px 0}
     .mform .full{grid-column:1/-1}
     .mform label{display:block;font-size:12px;color:var(--sub);margin-bottom:4px}
-    .mform input,.mform textarea{width:100%;box-sizing:border-box;font:inherit;font-size:14px;color:var(--text);
+    .mform input,.mform textarea,.mform select{width:100%;box-sizing:border-box;font:inherit;font-size:14px;color:var(--text);
       background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
     .mform textarea{min-height:64px;resize:vertical;line-height:1.5}
     .mrow{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid var(--line)}
@@ -651,20 +651,23 @@
         <button class="modelsel" id="mNew" style="cursor:pointer;text-align:left">➕ 添加门店</button>
         <div id="mEditor" hidden>
           <div class="mform">
-            <div><label>门店名称 *</label><input id="mName" placeholder="美好口腔东城店"></div>
+            <div><label>行业</label><select id="mIndustry"></select></div>
             <div><label>接入号 *</label><input id="mNumber" placeholder="网关转接的号码，如 5000"></div>
-            <div class="full"><label>开场白</label><input id="mGreeting" placeholder="您好，这里是美好口腔，请问有什么可以帮您？"></div>
+            <div><label id="mNameLabel">门店名称 *</label><input id="mName" placeholder="美好口腔东城店"></div>
+            <div><label>开场白（留空则按名称生成）</label><input id="mGreeting" placeholder="您好，这里是美好口腔，请问有什么可以帮您？"></div>
             <div><label>营业时间</label><input id="mHours" placeholder="每天 9:00-20:00，除夕初一休息"></div>
             <div><label>对外电话</label><input id="mPhone" placeholder="010-8888-6666"></div>
             <div class="full"><label>地址</label><input id="mAddress" placeholder="东城区东直门南大街 12 号美好大厦 2 层"></div>
             <div class="full"><label>交通与停车</label><input id="mTransport" placeholder="地铁 2 号线东直门 C 口步行 5 分钟；大厦地下车库免 2 小时"></div>
-            <div class="full"><label>项目与价格（一行一项）</label><textarea id="mServices" placeholder="洗牙 200-400 元&#10;种植牙 6800 元起，含种植体、基台和牙冠&#10;正畸 12000 元起"></textarea></div>
-            <div class="full"><label>医生 / 老师</label><textarea id="mDoctors" placeholder="张伟，种植科主任，从业 15 年"></textarea></div>
-            <div class="full"><label>预约规则</label><textarea id="mBooking" placeholder="留下称呼、手机号和希望的时间段，前台 1 小时内回电确认；改期请提前 4 小时"></textarea></div>
+            <div class="full"><label id="mServicesLabel">项目与价格（一行一项）</label><textarea id="mServices" placeholder="洗牙 200-400 元&#10;种植牙 6800 元起，含种植体、基台和牙冠&#10;正畸 12000 元起"></textarea></div>
+            <div class="full"><label id="mStaffLabel">医生团队（一行一人）</label><textarea id="mStaff" placeholder="张伟，种植科主任，从业 15 年"></textarea></div>
+            <div class="full"><label id="mBookingLabel">预约规则</label><textarea id="mBooking" placeholder="留下称呼、手机号和希望的时间段，前台 1 小时内回电确认；改期请提前 4 小时"></textarea></div>
             <div class="full"><label>其他要让 AI 知道的</label><textarea id="mNotes" placeholder="停车怎么免费、医保哪些能报、常见顾虑怎么答……"></textarea></div>
             <div class="full"><label>语气与禁忌（可选）</label><textarea id="mPrompt" placeholder="称呼客户为您；不承诺任何治疗效果；被问到别家诊所一律不评价"></textarea></div>
             <div><label>转人工分机</label><input id="mTransfer" placeholder="user/8002@vca.local"></div>
             <div><label>小结推送地址</label><input id="mWebhook" placeholder="企业微信 / 钉钉机器人 webhook"></div>
+            <div><label>音色（可选）</label><input id="mVoice" placeholder="留空用系统默认"></div>
+            <div><label>识别热词表 ID（运营配置，一般留空）</label><input id="mVocab" placeholder="留空则用本行业自动维护的热词表"></div>
             <div class="full" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <label style="margin:0;display:flex;align-items:center;gap:6px;color:var(--text);font-size:13px"><input type="checkbox" id="mEnabled" checked style="width:auto">启用</label>
               <span style="flex:1"></span>
@@ -676,7 +679,7 @@
             <div class="full mprev" id="mPrevBox" hidden></div>
           </div>
         </div>
-        <div class="field-hint">每家门店一个接入号（网关或线路送来的被叫号码）。填的资料会直接交给电话 AI 作答，改完立即生效，不用重启。价格和时间以这里为准，AI 不会编造资料里没有的信息。</div>
+        <div class="field-hint">每家门店一个接入号（网关或线路送来的被叫号码）。选好行业后，AI 会按行业的路数接电话（诊所约面诊、培训机构约试听），资料填进去直接交给电话 AI 作答，改完立即生效，不用重启。价格和时间以这里为准，AI 不会编造资料里没有的信息；店名和项目名会自动进识别热词表，电话里听得更准。</div>
       </div>
       <div class="field">
         <label>对话记录</label>
@@ -2288,11 +2291,48 @@ async function uploadKnowledge(file){
   finally{ btn.disabled=false; setTimeout(()=>{ btn.textContent=old; }, 1800); }
 }
 /* ---------- 电话客服: 门店资料 (对应 /api/merchants) ---------- */
-const M_FIELDS={mName:'name',mNumber:'number',mGreeting:'greeting',mHours:'businessHours',mPhone:'phone',
-  mAddress:'address',mTransport:'transport',mServices:'services',mDoctors:'doctors',mBooking:'bookingRules',
-  mNotes:'notes',mPrompt:'systemPrompt',mTransfer:'transferDialString',mWebhook:'summaryWebhook'};
+const M_FIELDS={mName:'name',mNumber:'number',mIndustry:'industry',mGreeting:'greeting',mHours:'businessHours',mPhone:'phone',
+  mAddress:'address',mTransport:'transport',mServices:'services',mStaff:'staff',mBooking:'bookingRules',
+  mNotes:'notes',mPrompt:'systemPrompt',mTransfer:'transferDialString',mWebhook:'summaryWebhook',mVoice:'ttsVoice',mVocab:'asrVocabularyId'};
+/* 行业预设: 字段叫法来自后端(/api/merchants/industries), 占位示例按行业在这里配, 没配的行业用通用的 */
+const M_PLACEHOLDERS={
+  dental:{name:'美好口腔东城店',greeting:'您好，这里是美好口腔，请问有什么可以帮您？',
+    services:'洗牙 200-400 元\n种植牙 6800 元起，含种植体、基台和牙冠\n正畸 12000 元起',
+    staff:'张伟，种植科主任，从业 15 年',booking:'留下称呼、手机号和希望的时间段，前台 1 小时内回电确认；改期请提前 4 小时',
+    notes:'停车怎么免费、医保哪些能报、常见顾虑怎么答……',prompt:'称呼客户为您；不承诺任何治疗效果；被问到别家诊所一律不评价',icon:'🦷'},
+  education:{name:'启明少儿英语（望京校区）',greeting:'您好，这里是启明少儿英语，请问有什么可以帮您？',
+    services:'少儿英语启蒙班（3-6 岁）每课时 150 元\n小学同步班 每课时 180 元\n雅思冲刺班 12000 元/期',
+    staff:'李老师，剑桥少儿英语考官，8 年教龄',booking:'免费试听需提前一天预约，留下家长称呼、孩子年龄和手机号；开课后 3 次课内可全额退费',
+    notes:'寒暑假班几月开、校区有没有停车位、教材是否另收费……',prompt:'称呼家长为您；不承诺提分或通过率；不评价其他机构',icon:'🎓'},
+  generic:{name:'门店名称',greeting:'您好，这里是××，请问有什么可以帮您？',
+    services:'产品或服务名 价格\n一行一项',staff:'姓名，职务，一句话介绍',booking:'预约或办理要留什么信息、提前多久、能不能改期',
+    notes:'常见问题怎么答、哪些事要转给同事……',prompt:'称呼客户为您；不确定的事不要承诺',icon:'🏪'}};
+let M_INDUSTRIES=[];
 let mEditingId=null;
+async function loadIndustries(){
+  if(M_INDUSTRIES.length) return;
+  const r=await api('GET','/api/merchants/industries');
+  M_INDUSTRIES=r.ok&&Array.isArray(r.data)&&r.data.length ? r.data : [{code:'generic',label:'其他商家',servicesLabel:'产品/服务与价格',staffLabel:'团队成员',bookingLabel:'预约与办理'}];
+  const sel=document.getElementById('mIndustry'); sel.innerHTML='';
+  for(const i of M_INDUSTRIES){ const o=document.createElement('option'); o.value=i.code; o.textContent=i.label; sel.appendChild(o); }
+  sel.onchange=applyIndustry;
+}
+/* 换行业只换字段的叫法和示例, 已填的内容不动 */
+function applyIndustry(){
+  const code=document.getElementById('mIndustry').value;
+  const ind=M_INDUSTRIES.find(i=>i.code===code)||M_INDUSTRIES[0];
+  const ph=M_PLACEHOLDERS[code]||M_PLACEHOLDERS.generic;
+  document.getElementById('mNameLabel').textContent=(code==='education'?'机构名称':'门店名称')+' *';
+  document.getElementById('mServicesLabel').textContent=ind.servicesLabel+'（一行一项）';
+  document.getElementById('mStaffLabel').textContent=ind.staffLabel+'（一行一人）';
+  document.getElementById('mBookingLabel').textContent=ind.bookingLabel;
+  document.getElementById('mName').placeholder=ph.name; document.getElementById('mGreeting').placeholder=ph.greeting;
+  document.getElementById('mServices').placeholder=ph.services; document.getElementById('mStaff').placeholder=ph.staff;
+  document.getElementById('mBooking').placeholder=ph.booking; document.getElementById('mNotes').placeholder=ph.notes;
+  document.getElementById('mPrompt').placeholder=ph.prompt;
+}
 async function refreshMerchants(){
+  await loadIndustries();
   const r=await api('GET','/api/merchants');
   renderMerchantList(r.ok ? (r.data||[]) : []);
 }
@@ -2303,7 +2343,8 @@ function renderMerchantList(list){
   for(const m of list){
     const row=document.createElement('div'); row.className='mrow';
     const name=document.createElement('span'); name.className='mname';
-    name.textContent='🏥 '+(m.name||'未命名')+'  ·  接入号 '+m.number+(m.enabled?'':'  ·  已停用');
+    const ind=M_INDUSTRIES.find(i=>i.code===m.industry);
+    name.textContent=((M_PLACEHOLDERS[m.industry]||M_PLACEHOLDERS.generic).icon)+' '+(m.name||'未命名')+'  ·  '+(ind?ind.label:'其他商家')+'  ·  接入号 '+m.number+(m.enabled?'':'  ·  已停用');
     if(!m.enabled) name.classList.add('moff');
     const edit=document.createElement('button'); edit.className='iconbtn'; edit.textContent='✏️'; edit.title='编辑';
     edit.onclick=()=>openMerchantEditor(m);
@@ -2315,6 +2356,8 @@ function renderMerchantList(list){
 function openMerchantEditor(m){
   mEditingId=m?m.id:null;
   for(const [el,key] of Object.entries(M_FIELDS)) document.getElementById(el).value=(m&&m[key])||'';
+  if(!(m&&m.industry)) document.getElementById('mIndustry').value=M_INDUSTRIES[0]?M_INDUSTRIES[0].code:'generic';
+  applyIndustry();
   document.getElementById('mEnabled').checked=m?m.enabled!==false:true;
   document.getElementById('mPrevBox').hidden=true; setMerchantMsg('');
   document.getElementById('mEditor').hidden=false;
@@ -2331,7 +2374,7 @@ function merchantFormBody(){
 }
 async function saveMerchant(){
   const b=merchantFormBody();
-  if(!b.name){ setMerchantMsg('门店名称不能为空', false); return; }
+  if(!b.name){ setMerchantMsg('名称不能为空', false); return; }
   if(!b.number){ setMerchantMsg('接入号不能为空', false); return; }
   const btn=document.getElementById('mSave'); btn.disabled=true;
   const r= mEditingId ? await api('PUT','/api/merchants/'+mEditingId, b) : await api('POST','/api/merchants', b);

@@ -4,6 +4,7 @@ import com.vca.orchestrator.skill.Skill;
 import com.vca.orchestrator.skill.SkillResult;
 import com.vca.orchestrator.lead.Lead;
 import com.vca.orchestrator.lead.LeadStore;
+import com.vca.orchestrator.merchant.Industry;
 import com.vca.telephony.session.CallConversationFactory.CallContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,11 +31,18 @@ public final class SaveLeadSkill implements Skill {
     private final LeadStore store;
     private final CallContext call;
     private final String ownerId;
+    private final Industry industry;
 
     public SaveLeadSkill(LeadStore store, CallContext call, String ownerId) {
+        this(store, call, ownerId, null);
+    }
+
+    /** @param industry 商家行业, 决定"意向"字段怎么向模型解释(诊所是想做的项目, 培训机构是想学的课程); null 按其他商家 */
+    public SaveLeadSkill(LeadStore store, CallContext call, String ownerId, Industry industry) {
         this.store = store == null ? LeadStore.NOOP : store;
         this.call = call;
         this.ownerId = ownerId;
+        this.industry = industry == null ? Industry.GENERIC : industry;
     }
 
     @Override
@@ -45,7 +53,7 @@ public final class SaveLeadSkill implements Skill {
     @Override
     public String description() {
         return "登记客户的预约或留资信息。只要客户表达了想预约、想到店、想让人回电, 或主动留下了姓名/电话/"
-                + "想做的项目/方便的时间, 就调用本工具把已知信息记下来 —— 不必等信息齐全, 缺的可以之后补。"
+                + "诉求/方便的时间, 就调用本工具把已知信息记下来 —— 不必等信息齐全, 缺的可以之后补。"
                 + "不要为了调用本工具而盘问客户, 只记他说过的。";
     }
 
@@ -55,7 +63,7 @@ public final class SaveLeadSkill implements Skill {
         props.put("name", Map.of("type", "string", "description", "客户称呼, 如“王先生”; 没说就留空"));
         props.put("phone", Map.of("type", "string",
                 "description", "客户留的回电号码; 没说就留空(系统已记录来电号码)"));
-        props.put("intent", Map.of("type", "string", "description", "想做的项目或诉求, 如“种植牙面诊”"));
+        props.put("intent", Map.of("type", "string", "description", industry.leadIntentHint()));
         props.put("preferred_time", Map.of("type", "string",
                 "description", "期望到店/回电时间, 用客户的原话即可, 如“这周六上午”"));
         props.put("note", Map.of("type", "string", "description", "其它需要转告商家的信息; 没有就留空"));

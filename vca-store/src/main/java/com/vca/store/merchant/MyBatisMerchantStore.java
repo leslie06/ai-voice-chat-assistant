@@ -117,10 +117,10 @@ public class MyBatisMerchantStore implements MerchantStore {
 
     static MerchantProfile toProfile(PhoneMerchant r) {
         return new MerchantProfile(r.getId(), r.getOwnerId() == null ? 0 : r.getOwnerId(), r.getNumber(),
-                r.getName(), !Boolean.FALSE.equals(r.getEnabled()), r.getGreeting(), r.getSystemPrompt(),
-                r.getTransferDialString(), r.getSummaryWebhook(), r.getTtsVoice(), r.getAddress(),
-                r.getBusinessHours(), r.getPhone(), r.getTransport(), r.getServices(), r.getDoctors(),
-                r.getBookingRules(), r.getNotes(), r.getCreatedAt(), r.getUpdatedAt());
+                r.getName(), !Boolean.FALSE.equals(r.getEnabled()), r.getIndustry(), r.getGreeting(),
+                r.getSystemPrompt(), r.getTransferDialString(), r.getSummaryWebhook(), r.getTtsVoice(),
+                r.getAsrVocabularyId(), r.getAddress(), r.getBusinessHours(), r.getPhone(), r.getTransport(),
+                r.getServices(), r.getStaff(), r.getBookingRules(), r.getNotes(), r.getCreatedAt(), r.getUpdatedAt());
     }
 
     private static PhoneMerchant toRow(MerchantProfile p) {
@@ -130,17 +130,19 @@ public class MyBatisMerchantStore implements MerchantStore {
         r.setNumber(p.number());
         r.setName(p.name());
         r.setEnabled(p.enabled());
+        r.setIndustry(p.industry());
         r.setGreeting(p.greeting());
         r.setSystemPrompt(p.systemPrompt());
         r.setTransferDialString(p.transferDialString());
         r.setSummaryWebhook(p.summaryWebhook());
         r.setTtsVoice(p.ttsVoice());
+        r.setAsrVocabularyId(p.asrVocabularyId());
         r.setAddress(p.address());
         r.setBusinessHours(p.businessHours());
         r.setPhone(p.phone());
         r.setTransport(p.transport());
         r.setServices(p.services());
-        r.setDoctors(p.doctors());
+        r.setStaff(p.staff());
         r.setBookingRules(p.bookingRules());
         r.setNotes(p.notes());
         return r;

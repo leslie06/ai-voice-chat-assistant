@@ -861,13 +861,32 @@ VCA_TELEPHONY_MERCHANTS_0_KNOWLEDGE_OWNER=11
 
 | 层 | 字段 | 给谁用 |
 |---|---|---|
-| 接线参数 | `number`（接入号，全局唯一）、`enabled`、`greeting`、`ttsVoice`、`transferDialString`、`summaryWebhook` | 留空回退顶层默认 |
-| 机构资料 | `address`、`businessHours`、`phone`、`transport`、`services`、`doctors`、`bookingRules`、`notes`、`systemPrompt`（补充要求） | 渲染成一段"机构资料"文本 |
+| 接线参数 | `number`（接入号，全局唯一）、`enabled`、`industry`、`greeting`、`ttsVoice`、`transferDialString`、`summaryWebhook`、`asrVocabularyId` | 留空回退：开场白按店名生成，其余回退顶层默认 |
+| 机构资料 | `address`、`businessHours`、`phone`、`transport`、`services`、`staff`、`bookingRules`、`notes`、`systemPrompt`（补充要求） | 渲染成一段"角色说明 + 资料"文本 |
 
 人设的拼法是 **电话人设 + 机构资料 + 商家补充**（`TelephonyProperties.toMerchant`）：电话人设里"简短、
 一次只问一件事"这些约束不能丢——早先商家人设整段替换电话人设，结果 AI 一开口就是长篇大论，说到一半被判停。
 机构资料只渲染填了的项，结尾固定加一句"资料里没有的信息一律不要编造"。知识库归属直接取门店所属账号
 （`knowledgeOwner = ownerId`），所以诊所在同一个账号下传的资料，电话里就能查到。
+
+**行业是一层"皮"**（`Industry`：`dental` 口腔诊所 / `education` 培训机构 / `generic` 其他商家）。
+字段对所有行业一样，行业只决定四件事，加一个行业就是加一个枚举值：
+
+| 行业决定的 | 口腔诊所 | 培训机构 | 其他商家 |
+|---|---|---|---|
+| 字段叫法（网页与渲染文本） | 项目与价格 / 医生团队 / 预约规则 | 课程与费用 / 师资 / 试听与报名 | 产品/服务与价格 / 团队成员 / 预约与办理 |
+| 人设里的角色说明 | 来电多问价格、营业时间、能不能约面诊；有意向就邀约到店面诊；疗效只说以面诊为准 | 来电多是家长问课程、学费、师资、试听；有意向就邀约免费试听；不承诺提分 | 问产品/价格/时间/地址；有意向记下称呼与需求交同事回电 |
+| 留资/小结的措辞 | "想做的项目" | "想学的课程" | "需求" |
+| 识别热词的基础词 | 洗牙、种植牙、正畸…… | 试听、课时、雅思、少儿英语…… | 营业时间、优惠、退款…… |
+
+**热词表按行业自动维护**（`HotWordSync`，开关 `VCA_TELEPHONY_HOT_WORD_SYNC`，默认开）。每个行业一张表，
+词 = 行业基础词 + 该行业下所有启用门店的店名和项目/人员每行开头的名字（"洗牙 200-400 元"→洗牙，
+"李老师，剑桥考官"→李老师），封顶 400 词。为什么按行业不按门店：厂商对每个账号能建的表数有上限，
+按门店建撑不了几家；热词只是加权，同行业共用一张表互不妨碍。启动时按固定前缀（`vcadental`/`vcaedu`/`vcaother`）
+从厂商那边找回自己的表，比对词集，一样就直接用，不一样才改，所以重启不重建、库里也不用存映射；
+门店资料一改，3 秒后同步一次（连续改合并）。识别时取表的顺序：门店自己填的 `asrVocabularyId` →
+所属行业的表 → 全局 `VCA_TELEPHONY_ASR_VOCABULARY_ID`。厂商接口不通只记 warn，旧表继续用。
+换识别模型（`asr-model`）会自动重建：热词表与模型绑定，绑错模型的旧表会被删掉。
 
 **接口**（`MerchantRoutes`，与知识库接口同样的 `Authorization: Bearer <token>` 鉴权，只能看改自己名下的）：
 
@@ -886,6 +905,10 @@ GET    /api/merchants/{id}/preview AI 实际拿到的机构资料文本, 调试�
 **实测**（本机，账号 13 在网页上登记接入号 5000 为"美好口腔"，配置文件里没配这家）：拨 5000，
 日志 `建立通话会话: … 被叫=5000, 商家=美好口腔`，开场白是库里那句，知识库按 `user_id = 13` 查，
 通话小结带着商家名。改资料后下一通即生效，改的是哪一家不重要——缓存整体重填的代价只是几次查库。
+
+再登记一家培训机构"启明少儿英语"（接入号 5001，行业 education，不填开场白）：保存 3 秒后日志
+`热词表已建: 行业=培训机构, id=vocab-vcaedu-…, 词数=49`；拨 5001，开场白是按店名生成的"您好，这里是启明少儿英语，
+请问有什么可以帮您？"，`阿里云 ASR 开始 … vocabulary=vocab-vcaedu-…`，问"你们是干什么的"答"负责课程解答及预约试听"。
 
 > 改 `deploy/freeswitch/conf/` 下的拨号计划后要 **重启容器**，`reloadxml` 不够——
 > 容器启动时才把 `/conf` 的模板渲染进 `/etc/freeswitch`，热重载读的是渲染后的那份。
@@ -1072,6 +1095,9 @@ curl -X POST https://dashscope.aliyuncs.com/api/v1/services/audio/asr/customizat
        "vocabulary":[{"text":"洗牙","weight":4,"lang":"zh"},
                      {"text":"种植牙","weight":4,"lang":"zh"}]}}'
 ```
+
+> 2026-09-23 起热词表按行业自动维护（见 §12.1），库里登记了行业的门店不用再手工建表；下面的手工步骤
+> 只对"配置文件里的商家 / 默认商家"仍然需要——它们没有行业，用的是全局那张表。
 
 拿到 `vocabulary_id` 后配进去，改词用 `update_vocabulary`：
 

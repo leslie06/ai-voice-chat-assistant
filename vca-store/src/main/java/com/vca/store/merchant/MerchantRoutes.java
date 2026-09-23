@@ -1,5 +1,6 @@
 package com.vca.store.merchant;
 
+import com.vca.orchestrator.merchant.Industry;
 import com.vca.orchestrator.merchant.MerchantProfile;
 import com.vca.orchestrator.merchant.MerchantStore;
 import com.vca.store.account.UserService;
@@ -31,6 +32,7 @@ import static org.springframework.web.reactive.function.server.RequestPredicates
  *   PUT    /api/merchants/{id}      {profile} → profile  整体覆盖(没传的字段按空处理)
  *   DELETE /api/merchants/{id}      → {ok}
  *   GET    /api/merchants/{id}/preview → {prompt}        看 AI 实际会拿到的机构资料文本(调试用)
+ *   GET    /api/merchants/industries   → [industry]       可选的行业及各字段在该行业里的叫法(网页表单用)
  * </pre>
  *
  * <p>字段名与 {@link MerchantProfile} 一致(驼峰)。{@code ownerId}/{@code createdAt}/{@code updatedAt} 由服务端定,
@@ -50,6 +52,7 @@ public final class MerchantRoutes {
         MerchantRoutes r = new MerchantRoutes(users, store);
         return RouterFunctions.route(GET("/api/merchants"), r::list)
                 .andRoute(POST("/api/merchants"), r::createOne)
+                .andRoute(GET("/api/merchants/industries"), r::industries)
                 .andRoute(GET("/api/merchants/{id}/preview"), r::preview)
                 .andRoute(GET("/api/merchants/{id}"), r::get)
                 .andRoute(PUT("/api/merchants/{id}"), r::update)
@@ -63,6 +66,21 @@ public final class MerchantRoutes {
         }
         return blocking(() -> store.listByOwner(uid))
                 .flatMap(list -> json(200, list.stream().map(MerchantRoutes::dto).toList()));
+    }
+
+    /** 行业预设不需要登录: 只是字段叫法, 没有任何商家数据 */
+    private Mono<ServerResponse> industries(ServerRequest req) {
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (Industry i : Industry.values()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("code", i.code());
+            m.put("label", i.label());
+            m.put("servicesLabel", i.servicesLabel());
+            m.put("staffLabel", i.staffLabel());
+            m.put("bookingLabel", i.bookingLabel());
+            out.add(m);
+        }
+        return json(200, out);
     }
 
     private Mono<ServerResponse> get(ServerRequest req) {
@@ -135,10 +153,11 @@ public final class MerchantRoutes {
                 id, uid,
                 str(b, "number"), str(b, "name"),
                 b.get("enabled") == null || Boolean.TRUE.equals(b.get("enabled")) || "true".equals(String.valueOf(b.get("enabled"))),
+                str(b, "industry"),
                 str(b, "greeting"), str(b, "systemPrompt"), str(b, "transferDialString"),
-                str(b, "summaryWebhook"), str(b, "ttsVoice"),
+                str(b, "summaryWebhook"), str(b, "ttsVoice"), str(b, "asrVocabularyId"),
                 str(b, "address"), str(b, "businessHours"), str(b, "phone"), str(b, "transport"),
-                str(b, "services"), str(b, "doctors"), str(b, "bookingRules"), str(b, "notes"),
+                str(b, "services"), str(b, "staff"), str(b, "bookingRules"), str(b, "notes"),
                 null, null);
     }
 
@@ -148,17 +167,19 @@ public final class MerchantRoutes {
         m.put("number", p.number());
         m.put("name", p.name());
         m.put("enabled", p.enabled());
+        m.put("industry", p.industry());
         m.put("greeting", p.greeting());
         m.put("systemPrompt", p.systemPrompt());
         m.put("transferDialString", p.transferDialString());
         m.put("summaryWebhook", p.summaryWebhook());
         m.put("ttsVoice", p.ttsVoice());
+        m.put("asrVocabularyId", p.asrVocabularyId());
         m.put("address", p.address());
         m.put("businessHours", p.businessHours());
         m.put("phone", p.phone());
         m.put("transport", p.transport());
         m.put("services", p.services());
-        m.put("doctors", p.doctors());
+        m.put("staff", p.staff());
         m.put("bookingRules", p.bookingRules());
         m.put("notes", p.notes());
         m.put("createdAt", p.createdAt() == null ? null : p.createdAt().toString());

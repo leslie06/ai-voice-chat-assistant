@@ -4,6 +4,7 @@ import com.vca.domain.model.LlmConfig;
 import com.vca.domain.model.Message;
 import com.vca.domain.spi.LlmProvider;
 import com.vca.orchestrator.call.CallSummary;
+import com.vca.orchestrator.merchant.Industry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
@@ -40,7 +41,7 @@ public final class CallSummarizer {
             禁止: markdown(不要 * # - 这些符号)、加粗、列表、分点、标题、解释你在做什么、输出这三行之外的任何内容。
 
             示例输出:
-            摘要: 王先生想做种植牙, 已登记周六上午的面诊, 未留其它联系方式。
+            摘要: 王先生问了价格, 已登记周六上午到店, 未留其它联系方式。
             意向: A
             跟进: 周六上午前电话确认到店时间
             """;
@@ -62,6 +63,14 @@ public final class CallSummarizer {
      * @return 小结; 大模型不可用时以 error 结束, 由调用方降级
      */
     public Mono<CallSummary> summarize(EndedCall call, String ownerId) {
+        return summarize(call, ownerId, null);
+    }
+
+    /**
+     * @param ownerId  商家账号 id(可为空: 那只是没法落库归属, 摘要照样出)
+     * @param industry 商家行业; 给模型一句行业提示(诊所"约了面诊算 A", 培训机构"约了试听算 A"), null 不提示
+     */
+    public Mono<CallSummary> summarize(EndedCall call, String ownerId, Industry industry) {
         String transcript = transcript(call.history());
         if (transcript.isBlank()) {
             // 一句话都没说(秒挂/彩铃/静音): 不值得调模型
@@ -69,7 +78,8 @@ public final class CallSummarizer {
                     call.durationSec(), 0, "客户接通后没有说话。", "D", null, LocalDateTime.now()));
         }
         // 格式要求在 system 与 user 里各说一遍: 小模型对 system 的遵守度明显差一些(实测有模型直接输出 markdown 分点)
-        List<Message> input = List.of(Message.user("通话记录:\n" + transcript
+        String hint = industry == null || industry.summaryHint().isBlank() ? "" : industry.summaryHint() + "\n\n";
+        List<Message> input = List.of(Message.user(hint + "通话记录:\n" + transcript
                 + "\n\n通话时长 " + call.durationSec() + " 秒, 结束原因 " + call.reason() + "。"
                 + "\n\n按 摘要: / 意向: / 跟进: 三行输出, 不要 markdown, 不要分点。"
                 + "意向那行只写 A、B、C、D 其中一个字母。"));

@@ -50,7 +50,7 @@ public final class CallAftermath {
             return;
         }
         Merchant m = merchant == null ? Merchant.NONE : merchant;
-        summarizer.summarize(call, m.knowledgeOwner())
+        summarizer.summarize(call, m.knowledgeOwner(), m.industry())
                 .subscribeOn(Schedulers.boundedElastic())
                 .subscribe(summary -> deliver(summary, m),
                         e -> log.warn("[{}] 通话小结未生成: {}", call.callId(), e.toString()));

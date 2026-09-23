@@ -4,6 +4,8 @@ import com.vca.orchestrator.session.TurnListener;
 import com.vca.orchestrator.skill.Skill;
 import com.vca.orchestrator.skill.SkillRegistry;
 import com.vca.orchestrator.lead.LeadStore;
+import com.vca.orchestrator.merchant.HotWordSync;
+import com.vca.orchestrator.merchant.Industry;
 import com.vca.telephony.TelephonyProperties;
 import com.vca.telephony.merchant.Merchant;
 import com.vca.telephony.skill.EndCallSkill;
@@ -20,6 +22,8 @@ import org.springframework.context.annotation.Configuration;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * 把电话接入层接到编排层。
@@ -67,12 +71,17 @@ public class TelephonyWiring {
     CallConversationFactory callConversationFactory(ConversationSessionFactory factory,
                                                     TelephonyProperties props,
                                                     ObjectProvider<Skill> skills,
-                                                    ObjectProvider<LeadStore> leads) {
+                                                    ObjectProvider<LeadStore> leads,
+                                                    ObjectProvider<HotWordSync> hotWords) {
         List<Skill> shared = telephonySkills(props.getTools(), skills);
         logKnowledge(props.getKnowledgeOwner());
         logAgentTools(props);
         // 多商家时上面这两行说的是"默认商家"的情况; 每家实际生效的配置在通话开始那行日志里
         LeadStore leadStore = leads.getIfAvailable(() -> LeadStore.NOOP);
+        // 热词表按通话取: 商家自己指定的 → 所属行业自动维护的(同步器在跑, 每次取最新) → 全局配置
+        HotWordSync sync = hotWords.getIfAvailable();
+        Function<Industry, Optional<String>> industryVocabulary =
+                ind -> sync == null ? Optional.empty() : sync.vocabularyIdFor(ind);
         return call -> {
             // 商家由被叫号码决定(单店时就是那个默认商家): 知识库、人设、音色、坐席号码都跟着它走
             Merchant merchant = call.merchant() == null ? Merchant.NONE : call.merchant();
@@ -84,7 +93,7 @@ public class TelephonyWiring {
                     false,    // 电话不做自动联网注入: 实测一次 2.3 秒, 是体感延迟里最大的一块
                     merchant.knowledgeOwner(),
                     // 电话是 8k 窄带线路, 识别要用 8k 专用模型并按原生采样率送音频, 见 TelephonyProperties#asrModel
-                    props.getAsrModel(), props.getSampleRate(), props.getAsrVocabularyId());
+                    props.getAsrModel(), props.getSampleRate(), props.vocabularyFor(merchant, industryVocabulary));
             return factory.create(call.callId(), null, TurnListener.NOOP, overrides);
         };
     }
@@ -95,7 +104,7 @@ public class TelephonyWiring {
         List<String> on = props.getAgentTools();
         List<Skill> tools = new ArrayList<>(3);
         if (on.contains(SaveLeadSkill.NAME)) {
-            tools.add(new SaveLeadSkill(leadStore, call, merchant.knowledgeOwner()));
+            tools.add(new SaveLeadSkill(leadStore, call, merchant.knowledgeOwner(), merchant.industry()));
         }
         // 这家没配坐席号码就不下发: 宁可 AI 说"我让同事回电", 也不能让客户在转不出去的电话里干等
         if (on.contains(TransferToHumanSkill.NAME) && !merchant.transferDialString().isBlank()) {

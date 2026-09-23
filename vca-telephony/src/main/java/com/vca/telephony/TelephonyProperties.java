@@ -189,6 +189,12 @@ public class TelephonyProperties {
      */
     private String asrVocabularyId = "";
 
+    /**
+     * 按行业自动维护热词表: 每个行业一张, 词 = 行业基础词 + 该行业所有启用门店的店名与项目名,
+     * 门店资料一改就同步。关掉则只用上面那张全局表。见 {@code HotWordSync}。
+     */
+    private boolean hotWordSync = true;
+
     /** 开场白合成用的 TTS 厂商与采样率。 */
     private VendorType ttsVendor = VendorType.ALIYUN;
 
@@ -220,6 +226,8 @@ public class TelephonyProperties {
         private String number = "";
         /** 商家名, 只用于日志和推送消息 */
         private String name = "";
+        /** 行业 code(dental/education/generic); 留空表示没登记, 措辞按其他商家 */
+        private String industry = "";
         private String greeting = "";
         private String systemPrompt = "";
         private String knowledgeOwner = "";
@@ -241,6 +249,14 @@ public class TelephonyProperties {
 
         public void setName(String v) {
             this.name = v == null ? "" : v;
+        }
+
+        public String getIndustry() {
+            return industry;
+        }
+
+        public void setIndustry(String v) {
+            this.industry = v == null ? "" : v;
         }
 
         public String getGreeting() {
@@ -995,6 +1011,14 @@ public class TelephonyProperties {
         this.asrVocabularyId = v == null ? "" : v.strip();
     }
 
+    public boolean isHotWordSync() {
+        return hotWordSync;
+    }
+
+    public void setHotWordSync(boolean hotWordSync) {
+        this.hotWordSync = hotWordSync;
+    }
+
     public String getErrorPrompt() {
         return errorPrompt;
     }
@@ -1052,7 +1076,9 @@ public class TelephonyProperties {
                         orDefault(m.getKnowledgeOwner(), knowledgeOwner),
                         orDefault(m.getTransferDialString(), transferDialString),
                         orDefault(m.getSummaryWebhook(), summary.getWebhookUrl()),
-                        orDefault(m.getTtsVoice(), ttsVoice)))
+                        orDefault(m.getTtsVoice(), ttsVoice),
+                        m.getIndustry().isBlank() ? null : com.vca.orchestrator.merchant.Industry.of(m.getIndustry()),
+                        ""))
                 .toList();
         return new com.vca.telephony.merchant.MerchantRegistry(fallback, list);
     }
@@ -1079,12 +1105,39 @@ public class TelephonyProperties {
                 : (extra.isEmpty() ? profile : profile + "\n\n" + extra);
         return new com.vca.telephony.merchant.Merchant(
                 p.number(), p.label(),
-                orDefault(p.greeting(), greeting),
+                orDefault(p.greeting(), defaultGreeting(p.name())),
                 mergePrompt(systemPrompt, merchantPart),
                 String.valueOf(p.ownerId()),
                 orDefault(p.transferDialString(), transferDialString),
                 orDefault(p.summaryWebhook(), summary.getWebhookUrl()),
-                orDefault(p.ttsVoice(), ttsVoice));
+                orDefault(p.ttsVoice(), ttsVoice),
+                p.industryPreset(),
+                p.asrVocabularyId());
+    }
+
+    /** 没写开场白的店按店名生成一句; 连店名都没有才退到全局开场白 */
+    String defaultGreeting(String name) {
+        return name == null || name.isBlank() ? greeting : "您好，这里是" + name.strip() + "，请问有什么可以帮您？";
+    }
+
+    /**
+     * 这通电话识别用哪张热词表: 商家自己指定的 → 所属行业自动维护的 → 全局配置。
+     *
+     * @param industryVocabulary 行业 → 表 id 的查找, 没同步过返回空
+     */
+    public String vocabularyFor(com.vca.telephony.merchant.Merchant merchant,
+                                java.util.function.Function<com.vca.orchestrator.merchant.Industry,
+                                        java.util.Optional<String>> industryVocabulary) {
+        if (merchant != null && merchant.asrVocabularyId() != null && !merchant.asrVocabularyId().isBlank()) {
+            return merchant.asrVocabularyId();
+        }
+        if (merchant != null && merchant.industry() != null && industryVocabulary != null) {
+            java.util.Optional<String> id = industryVocabulary.apply(merchant.industry());
+            if (id != null && id.isPresent() && !id.get().isBlank()) {
+                return id.get();
+            }
+        }
+        return asrVocabularyId;
     }
 
     private static String orDefault(String value, String fallback) {

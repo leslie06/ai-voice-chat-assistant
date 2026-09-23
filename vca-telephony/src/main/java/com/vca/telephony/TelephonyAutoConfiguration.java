@@ -2,6 +2,7 @@ package com.vca.telephony;
 
 import com.vca.domain.enums.AudioFormat;
 import com.vca.domain.model.TtsConfig;
+import com.vca.domain.spi.VocabularyClient;
 import com.vca.gateway.GatewayAutoConfiguration;
 import com.vca.gateway.ProviderGateway;
 import com.vca.orchestrator.vad.EnergyVad;
@@ -18,6 +19,7 @@ import com.vca.telephony.session.CallConversationFactory;
 import com.vca.telephony.session.CallSession;
 import com.vca.orchestrator.call.CallSummaryStore;
 import com.vca.telephony.merchant.Merchant;
+import com.vca.orchestrator.merchant.HotWordSync;
 import com.vca.orchestrator.merchant.MerchantStore;
 import com.vca.telephony.merchant.MerchantRegistry;
 import com.vca.telephony.session.PendingCalls;
@@ -132,6 +134,41 @@ public class TelephonyAutoConfiguration {
                     all.stream().map(m -> m.number() + "=" + m.label()).toList());
         }
         return registry;
+    }
+
+    /**
+     * 按行业自动维护识别热词表。要库里有商家资料、厂商热词接口在、开关打开三者齐备才建;
+     * 缺一个就不建(返回 null), 识别照旧用全局那张表。
+     */
+    @Bean(destroyMethod = "close")
+    HotWordSync hotWordSync(TelephonyProperties props, ObjectProvider<MerchantStore> stores,
+                            ObjectProvider<VocabularyClient> clients) {
+        MerchantStore store = stores.getIfAvailable();
+        VocabularyClient client = clients.getIfAvailable();
+        if (!props.isHotWordSync()) {
+            log.info("热词表自动维护: 已关闭(vca.telephony.hot-word-sync=false), 只用全局表 {}", blankAsNone(props.getAsrVocabularyId()));
+            return null;
+        }
+        if (store == null || client == null || props.getAsrModel().isBlank()) {
+            log.info("热词表自动维护: 未启用({}), 只用全局表 {}",
+                    store == null ? "没有商家资料库" : client == null ? "识别厂商不支持热词管理" : "电话识别模型为空",
+                    blankAsNone(props.getAsrVocabularyId()));
+            return null;
+        }
+        java.util.concurrent.ScheduledExecutorService scheduler =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "vca-hotwords");
+                    t.setDaemon(true);
+                    return t;
+                });
+        HotWordSync sync = new HotWordSync(store, client, props.getAsrModel(), scheduler, Duration.ofSeconds(3));
+        sync.start();
+        log.info("热词表自动维护: 按行业各一张, 绑定模型 {}, 门店资料变更后 3 秒内同步", props.getAsrModel());
+        return sync;
+    }
+
+    private static String blankAsNone(String s) {
+        return s == null || s.isBlank() ? "(无)" : s;
     }
 
     @Bean

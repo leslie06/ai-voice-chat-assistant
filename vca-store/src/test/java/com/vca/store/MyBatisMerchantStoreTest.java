@@ -27,16 +27,18 @@ class MyBatisMerchantStoreTest {
                       number VARCHAR(32) NOT NULL,
                       name VARCHAR(128) NOT NULL DEFAULT '',
                       enabled TINYINT NOT NULL DEFAULT 1,
+                      industry VARCHAR(32) NOT NULL DEFAULT 'generic',
                       greeting VARCHAR(512) NOT NULL DEFAULT '',
                       system_prompt TEXT,
                       transfer_dial_string VARCHAR(128) NOT NULL DEFAULT '',
                       summary_webhook VARCHAR(512) NOT NULL DEFAULT '',
                       tts_voice VARCHAR(64) NOT NULL DEFAULT '',
+                      asr_vocabulary_id VARCHAR(128) NOT NULL DEFAULT '',
                       address VARCHAR(512) NOT NULL DEFAULT '',
                       business_hours VARCHAR(512) NOT NULL DEFAULT '',
                       phone VARCHAR(64) NOT NULL DEFAULT '',
                       transport VARCHAR(512) NOT NULL DEFAULT '',
-                      services TEXT, doctors TEXT, booking_rules TEXT, notes TEXT,
+                      services TEXT, staff TEXT, booking_rules TEXT, notes TEXT,
                       created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL,
                       UNIQUE (number)
                     )""");
@@ -50,8 +52,8 @@ class MyBatisMerchantStoreTest {
     }
 
     private static MerchantProfile profile(Long id, long owner, String number, String name) {
-        return new MerchantProfile(id, owner, number, name, true, "您好，这里是" + name, "", "user/8002@vca.local",
-                "", "", "东城区", "9:00-20:00", "", "", "洗牙 200-400", "", "", "", null, null);
+        return new MerchantProfile(id, owner, number, name, true, "dental", "您好，这里是" + name, "", "user/8002@vca.local",
+                "", "", "", "东城区", "9:00-20:00", "", "", "洗牙 200-400", "张伟 种植科", "", "", null, null);
     }
 
     @Test
@@ -62,6 +64,8 @@ class MyBatisMerchantStoreTest {
         assertThat(saved.id()).isNotNull();
         assertThat(saved.createdAt()).isNotNull();
         assertThat(s.findByNumber("5000")).get().extracting(MerchantProfile::name).isEqualTo("美好口腔");
+        assertThat(s.findByNumber("5000")).get().as("行业与人员列也要原样存取")
+                .extracting(MerchantProfile::industry, MerchantProfile::staff).containsExactly("dental", "张伟 种植科");
         assertThat(s.findByNumber(" 5000 ")).as("号码两边的空白不该影响命中").isPresent();
         assertThat(s.listByOwner(11)).hasSize(1);
         assertThat(s.listByOwner(12)).isEmpty();
@@ -97,8 +101,8 @@ class MyBatisMerchantStoreTest {
     void disabledMerchantIsNotResolvedByNumber() throws Exception {
         MyBatisMerchantStore s = store("m4");
         MerchantProfile p = profile(null, 11, "5000", "美好口腔");
-        MerchantProfile off = new MerchantProfile(null, 11, p.number(), p.name(), false, p.greeting(), "", "",
-                "", "", "", "", "", "", "", "", "", "", null, null);
+        MerchantProfile off = new MerchantProfile(null, 11, p.number(), p.name(), false, "", p.greeting(), "", "",
+                "", "", "", "", "", "", "", "", "", "", "", null, null);
         s.save(off);
         assertThat(s.findByNumber("5000")).as("停用的店来电按默认商家处理").isEmpty();
         assertThat(s.listByOwner(11)).as("但自己名下还看得到").hasSize(1);

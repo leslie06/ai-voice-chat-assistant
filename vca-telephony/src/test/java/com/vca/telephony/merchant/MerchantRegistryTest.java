@@ -150,9 +150,39 @@ class MerchantRegistryTest {
     }
 
     private static com.vca.orchestrator.merchant.MerchantProfile clinic(String number, String name, long owner, String hours) {
-        return new com.vca.orchestrator.merchant.MerchantProfile(1L, owner, number, name, true,
-                "您好，这里是" + name, "说话要热情", "user/8002@vca.local", "", "",
+        return clinic(number, name, owner, hours, "您好，这里是" + name, "");
+    }
+
+    private static com.vca.orchestrator.merchant.MerchantProfile clinic(String number, String name, long owner, String hours,
+                                                                         String greeting, String vocabularyId) {
+        return new com.vca.orchestrator.merchant.MerchantProfile(1L, owner, number, name, true, "dental",
+                greeting, "说话要热情", "user/8002@vca.local", "", "", vocabularyId,
                 "东城区", hours, "", "", "洗牙 200-400 元", "", "", "", null, null);
+    }
+
+    @Test
+    void industryAndVocabularyFlowFromProfileAndGreetingDefaultsToName() {
+        TelephonyProperties p = baseProps();
+        p.setAsrVocabularyId("vocab-global");
+        MemStore store = new MemStore();
+        store.put(clinic("5000", "美好口腔", 21, "9:00-18:00", "", ""));
+        store.put(clinic("5002", "阳光口腔", 22, "9:00-18:00", "", "vocab-mine"));
+        MerchantRegistry registry = p.toMerchantRegistry(store, m -> { });
+
+        Merchant a = registry.resolve("5000");
+        assertThat(a.industry()).isEqualTo(com.vca.orchestrator.merchant.Industry.DENTAL);
+        assertThat(a.greeting()).as("没写开场白就按店名生成").isEqualTo("您好，这里是美好口腔，请问有什么可以帮您？");
+        assertThat(a.systemPrompt()).contains("你是「美好口腔」的电话客服").contains("口腔诊所");
+
+        java.util.function.Function<com.vca.orchestrator.merchant.Industry, java.util.Optional<String>> none =
+                i -> java.util.Optional.empty();
+        java.util.function.Function<com.vca.orchestrator.merchant.Industry, java.util.Optional<String>> dentalTable =
+                i -> i == com.vca.orchestrator.merchant.Industry.DENTAL ? java.util.Optional.of("vocab-dental") : java.util.Optional.empty();
+        assertThat(p.vocabularyFor(a, none)).as("行业表还没建 → 全局").isEqualTo("vocab-global");
+        assertThat(p.vocabularyFor(a, dentalTable)).as("行业表建好了 → 行业表").isEqualTo("vocab-dental");
+        assertThat(p.vocabularyFor(registry.resolve("5002"), dentalTable)).as("店自己指定的最优先").isEqualTo("vocab-mine");
+        assertThat(p.vocabularyFor(registry.resolve("9999"), dentalTable)).as("默认商家没登记行业 → 全局").isEqualTo("vocab-global");
+        assertThat(registry.resolve("9999").industry()).isNull();
     }
 
     @Test

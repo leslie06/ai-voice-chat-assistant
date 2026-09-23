@@ -126,8 +126,8 @@ public class AliyunAsrProvider implements AsrProvider {
                     .onErrorMap(e -> e instanceof ProviderException ? e
                             : ProviderException.retryable(VendorType.ALIYUN, Capability.ASR,
                             "DashScope ASR 识别出错: " + e.getMessage(), e))
-                    .doOnSubscribe(s -> log.debug("阿里云 ASR 开始, model={}, sr={}, languageHints={}",
-                            model, cfg.sampleRate(), hints));
+                    .doOnSubscribe(s -> log.debug("阿里云 ASR 开始, model={}, sr={}, languageHints={}, vocabulary={}",
+                            model, cfg.sampleRate(), hints, vocabulary.isBlank() ? "(无)" : vocabulary));
         });
     }
 

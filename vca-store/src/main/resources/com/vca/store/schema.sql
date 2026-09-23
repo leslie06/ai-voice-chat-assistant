@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS knowledge_chunk (
     KEY idx_chunk_doc (doc_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'RAG 文档切块';
 
--- 商家资料: 一家诊所/机构的电话客服配置与结构化资料。按接入号(客户拨的号码)路由, 全局唯一。
+-- 商家资料: 一家诊所/培训机构/门店的电话客服配置与结构化资料。按接入号(客户拨的号码)路由, 全局唯一。
 -- owner_id 是所属账号, 知识库/线索/小结都按它归属。改动即时生效(注册表按变更通知作废缓存), 不用重启。
 CREATE TABLE IF NOT EXISTS phone_merchant (
     id                   BIGINT       NOT NULL AUTO_INCREMENT,
@@ -186,17 +186,19 @@ CREATE TABLE IF NOT EXISTS phone_merchant (
     number               VARCHAR(32)  NOT NULL COMMENT '接入号(被叫号码)',
     name                 VARCHAR(128) NOT NULL DEFAULT '',
     enabled              TINYINT(1)   NOT NULL DEFAULT 1,
-    greeting             VARCHAR(512) NOT NULL DEFAULT '',
+    industry             VARCHAR(32)  NOT NULL DEFAULT 'generic' COMMENT '行业: dental/education/generic, 决定字段叫法、人设措辞与热词表',
+    greeting             VARCHAR(512) NOT NULL DEFAULT '' COMMENT '开场白; 空则按店名生成',
     system_prompt        TEXT         COMMENT '商家自己的人设补充, 追加在电话人设之后',
     transfer_dial_string VARCHAR(128) NOT NULL DEFAULT '' COMMENT '转人工拨号串, 如 user/8002@vca.local',
     summary_webhook      VARCHAR(512) NOT NULL DEFAULT '',
     tts_voice            VARCHAR(64)  NOT NULL DEFAULT '',
+    asr_vocabulary_id    VARCHAR(128) NOT NULL DEFAULT '' COMMENT '识别热词表 id(运营配置); 空则用所属行业自动维护的表',
     address              VARCHAR(512) NOT NULL DEFAULT '',
     business_hours       VARCHAR(512) NOT NULL DEFAULT '',
     phone                VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '对外电话(AI 报给客户用)',
     transport            VARCHAR(512) NOT NULL DEFAULT '',
-    services             TEXT         COMMENT '项目与价格, 一行一项',
-    doctors              TEXT,
+    services             TEXT         COMMENT '项目/课程/产品与价格, 一行一项',
+    staff                TEXT         COMMENT '医生/老师/团队成员, 一行一人',
     booking_rules        TEXT,
     notes                TEXT,
     created_at           DATETIME     NOT NULL,

@@ -17,4 +17,10 @@ public class AliyunAsrAutoConfiguration {
     AliyunAsrProvider aliyunAsrProvider(AliyunAsrProperties props) {
         return new AliyunAsrProvider(props);
     }
+
+    /** 热词表管理(账号级低频操作, 与实时识别分开)。电话侧按行业自动维护热词表时用。 */
+    @Bean
+    AliyunVocabularyClient aliyunVocabularyClient(AliyunAsrProperties props) {
+        return new AliyunVocabularyClient(props);
+    }
 }
