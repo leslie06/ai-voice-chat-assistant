@@ -81,7 +81,7 @@ public class TelephonyAutoConfiguration {
                 AudioFormat.PCM, props.getTtsSampleRate(), 1.0f);
         PromptCache cache = new PromptCache(gateway.tts(), cfg, props.getSampleRate(), Duration.ofSeconds(15));
         if (!props.getGreeting().isBlank()) {
-            cache.preload(props.getGreeting());   // 启动时就合成好, 别等第一通电话
+            cache.preload(props.effectiveGreeting());   // 启动时就合成好, 别等第一通电话
         }
         return cache;
     }
@@ -362,7 +362,7 @@ public class TelephonyAutoConfiguration {
     private static void preloadGreetings(PromptCache prompts, MerchantRegistry merchants,
                                          TelephonyProperties props) {
         List<String> texts = new ArrayList<>();
-        texts.add(props.getGreeting());
+        texts.add(props.effectiveGreeting());
         // 兜底话术也要提前合成: 真出事的时候 TTS 可能正是挂掉的那一环, 现合成等于没有兜底
         texts.add(props.getErrorPrompt());
         texts.add(props.getTransferFailedPrompt());

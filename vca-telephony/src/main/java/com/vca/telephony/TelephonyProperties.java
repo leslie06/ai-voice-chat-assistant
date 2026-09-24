@@ -156,6 +156,12 @@ public class TelephonyProperties {
     private String greeting = "";
 
     /**
+     * 开场白里自动补上"智能助理接听、会录音"的告知(缺哪句补哪句, 见 {@link com.vca.telephony.merchant.GreetingNotice})。
+     * 法规要求的告知, 默认开; 关掉只适合内部联调。
+     */
+    private boolean greetingNotice = true;
+
+    /**
      * 回合彻底失败时的兜底话术, 与开场白一样在启动时预合成。
      *
      * <p>厂商熔断、密钥过期、网络抖动在电话里的表现都一样: AI 突然不吭声。客户不知道发生了什么,
@@ -971,6 +977,23 @@ public class TelephonyProperties {
         return greeting;
     }
 
+    /** 实际播放的顶层开场白(补过告知)。预合成与默认商家用它, 两边得是同一段文字才命中缓存 */
+    public String effectiveGreeting() {
+        return withNotice(greeting);
+    }
+
+    public boolean isGreetingNotice() {
+        return greetingNotice;
+    }
+
+    public void setGreetingNotice(boolean greetingNotice) {
+        this.greetingNotice = greetingNotice;
+    }
+
+    private String withNotice(String text) {
+        return greetingNotice ? com.vca.telephony.merchant.GreetingNotice.apply(text) : text;
+    }
+
     public void setGreeting(String greeting) {
         this.greeting = greeting;
     }
@@ -1093,12 +1116,12 @@ public class TelephonyProperties {
      */
     public com.vca.telephony.merchant.MerchantRegistry toMerchantRegistry() {
         com.vca.telephony.merchant.Merchant fallback = new com.vca.telephony.merchant.Merchant(
-                "", "默认", greeting, systemPrompt, knowledgeOwner, transferDialString,
+                "", "默认", effectiveGreeting(), systemPrompt, knowledgeOwner, transferDialString,
                 summary.getWebhookUrl(), ttsVoice);
         List<com.vca.telephony.merchant.Merchant> list = merchants.stream()
                 .map(m -> new com.vca.telephony.merchant.Merchant(
                         m.getNumber(), m.getName(),
-                        orDefault(m.getGreeting(), greeting),
+                        withNotice(orDefault(m.getGreeting(), greeting)),
                         // 商家人设是<b>追加</b>不是替换, 见 mergePrompt
                         mergePrompt(systemPrompt, m.getSystemPrompt()),
                         orDefault(m.getKnowledgeOwner(), knowledgeOwner),
@@ -1138,7 +1161,7 @@ public class TelephonyProperties {
                 : (extra.isEmpty() ? profile : profile + "\n\n" + extra);
         return new com.vca.telephony.merchant.Merchant(
                 p.number(), p.label(),
-                orDefault(p.greeting(), defaultGreeting(p.name())),
+                withNotice(orDefault(p.greeting(), defaultGreeting(p.name()))),
                 mergePrompt(systemPrompt, merchantPart),
                 String.valueOf(p.ownerId()),
                 safeFromStore(p, "转人工拨号串", p.transferDialString(),
@@ -1164,7 +1187,8 @@ public class TelephonyProperties {
 
     /** 没写开场白的店按店名生成一句; 连店名都没有才退到全局开场白 */
     String defaultGreeting(String name) {
-        return name == null || name.isBlank() ? greeting : "您好，这里是" + name.strip() + "，请问有什么可以帮您？";
+        return name == null || name.isBlank() ? greeting
+                : com.vca.telephony.merchant.GreetingNotice.forShop(name.strip(), greetingNotice);
     }
 
     /**

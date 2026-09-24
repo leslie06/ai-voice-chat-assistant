@@ -51,7 +51,8 @@ class MerchantRegistryTest {
 
         Merchant merchant = p.toMerchantRegistry().resolve("01088886666");
 
-        assertThat(merchant.greeting()).isEqualTo("您好，这里是美好口腔");   // 自己配的
+        assertThat(merchant.greeting()).as("自己配的, 前面补上 AI 与录音告知")
+                .isEqualTo("本通电话由智能助理接听，并会录音。您好，这里是美好口腔");
         assertThat(merchant.transferDialString()).isEqualTo("user/9000");   // 顶层的
         assertThat(merchant.ttsVoice()).isEqualTo("longanhuan_v3.6");
         assertThat(merchant.summaryWebhook()).isEqualTo("https://hook/default");
@@ -171,7 +172,8 @@ class MerchantRegistryTest {
 
         Merchant a = registry.resolve("5000");
         assertThat(a.industry()).isEqualTo(com.vca.orchestrator.merchant.Industry.DENTAL);
-        assertThat(a.greeting()).as("没写开场白就按店名生成").isEqualTo("您好，这里是美好口腔，请问有什么可以帮您？");
+        assertThat(a.greeting()).as("没写开场白就按店名生成, 告知直接说进去")
+                .isEqualTo("您好，这里是美好口腔的智能助理，本通电话会录音，请问有什么可以帮您？");
         assertThat(a.systemPrompt()).contains("你是「美好口腔」的电话客服").contains("口腔诊所");
 
         java.util.function.Function<com.vca.orchestrator.merchant.Industry, java.util.Optional<String>> none =
@@ -199,7 +201,7 @@ class MerchantRegistryTest {
 
         assertThat(m.label()).as("库里的优先于配置文件").isEqualTo("美好口腔");
         assertThat(m.knowledgeOwner()).as("知识库归属 = 资料所属账号").isEqualTo("21");
-        assertThat(m.greeting()).isEqualTo("您好，这里是美好口腔");
+        assertThat(m.greeting()).isEqualTo("本通电话由智能助理接听，并会录音。您好，这里是美好口腔");
         assertThat(m.systemPrompt())
                 .as("电话人设在前, 机构资料在中, 商家补充在后")
                 .contains("回答必须简短").contains("营业时间: 每天 9:00-20:00").contains("说话要热情");

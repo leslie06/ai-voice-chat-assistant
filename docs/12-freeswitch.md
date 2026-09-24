@@ -254,6 +254,7 @@ vca-telephony/src/main/java/com/vca/telephony/
 | `freeswitch.esl.answer-wait-ms` | `VCA_FS_ESL_ANSWER_WAIT_MS` | `45000` | 发起到媒体连入的总上限 |
 | `api-token` | `VCA_TELEPHONY_API_TOKEN` | 空 | 留空则不注册外呼端点 |
 | `greeting` | `VCA_TELEPHONY_GREETING` | 空 | 开场白，启动时预合成 |
+| `greeting-notice` | `VCA_TELEPHONY_GREETING_NOTICE` | `true` | 开场白自动补上"智能助理接听、会录音"的告知，见 §12.2 |
 | `max-call-seconds` | `VCA_TELEPHONY_MAX_CALL_SECONDS` | `300` | 单通上限 |
 | `vad.speech-threshold` | `VCA_TELEPHONY_VAD_SPEECH` | `0.02` | 开口判定音量 |
 | `vad.onset-ms` | `VCA_TELEPHONY_VAD_ONSETMS` | `150` | 持续多久算开口 |
@@ -999,6 +1000,27 @@ GET    /api/merchants/{id}/preview AI 实际拿到的机构资料文本, 调试�
 再登记一家培训机构"启明少儿英语"（接入号 5001，行业 education，不填开场白）：保存 3 秒后日志
 `热词表已建: 行业=培训机构, id=vocab-vcaedu-…, 词数=49`；拨 5001，开场白是按店名生成的"您好，这里是启明少儿英语，
 请问有什么可以帮您？"，`阿里云 ASR 开始 … vocabulary=vocab-vcaedu-…`，问"你们是干什么的"答"负责课程解答及预约试听"。
+
+### 12.2 开场白里的两句告知（2026-09-24）
+
+客户接通后必须听到两件事：**接电话的是 AI**，**这通电话会录音**。依据是《人工智能生成合成内容标识办法》
+（2025-09-01 施行，合成语音要在起始等位置加语音提示），以及录音、留资涉及客户的声音和手机号（诊所还有病情），
+按个人信息保护法要事先告知。放在开场白里代价最小：开场白是预合成的，多几个字不增加等待。
+
+商家自己写的开场白未必想得到这两点，所以由 `GreetingNotice` **只补缺的那部分**，三类商家（默认、配置文件、库里的门店）一样处理：
+
+| 开场白 | 实际播放 |
+|---|---|
+| 没写（按店名生成） | 您好，这里是美好口腔的智能助理，本通电话会录音，请问有什么可以帮您？ |
+| 两件都没提 | **本通电话由智能助理接听，并会录音。**您好，这里是美好口腔…… |
+| 只说了"智能客服" | **本通电话会录音。**您好，这里是美好口腔智能客服…… |
+| 两件都说了 | 原样 |
+
+电话人设里也加了一条：客户问"你是真人吗"时如实说是智能助理，不假装是人，需要就提出转人工或回电。
+本机实测问"请问你是真人还是机器人"，答"我是智能助理，不是真人。需要的话可以帮你转接人工客服。"
+
+代价：开场白长了一到两秒（接通保护期 1.5 秒内本来就在播）。客户中途开口照样能打断开场白。
+`VCA_TELEPHONY_GREETING_NOTICE=false` 可以关掉，只适合内部联调。
 
 > 改 `deploy/freeswitch/conf/` 下的拨号计划后要 **重启容器**，`reloadxml` 不够——
 > 容器启动时才把 `/conf` 的模板渲染进 `/etc/freeswitch`，热重载读的是渲染后的那份。
