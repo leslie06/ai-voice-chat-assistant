@@ -10,7 +10,8 @@
 # 一台网关 = 一家店 = 一个文件 gateways/gw-<LINE 分机>.xml:
 #   LINE 口(FXO, 接电话线)  分机 8NN1, 绑定 vca_access_number=<接入号>: 从它进来的电话一律按这家店接待,
 #                           不看网关上"转 VoIP"填的号码 —— 那个框填错了也串不到别家
-#   PHONE 口(FXS, 接话机)   分机 8NN2: 这家店的转人工分机, 在网页门店表单"转人工分机"里填它
+#   PHONE 口(FXS, 接话机)   分机 8NN2: 这家店的转人工分机, 在网页门店表单"转人工分机"里填它;
+#                           也是 AI 接不了(没起、重启、崩了)时来电转去的座机(LINE 分机上的 vca_fallback_dial)
 # 写完执行 reloadxml, 目录即刻生效; 在途通话不受影响。
 set -eu
 
@@ -130,6 +131,8 @@ cat > "$file" <<XML
       <variable name="effective_caller_id_number" value="$line"/>
       <variable name="sip-force-contact" value="NDLB-connectile-dysfunction"/>
       <variable name="vca_access_number" value="$number"/>
+      <!-- AI 接不了时(没起、正在重启、崩了)来电转到这家店的前台座机, 而不是挂断 -->
+      <variable name="vca_fallback_dial" value="user/$phone@vca.local"/>
     </variables>
   </user>
   <!-- PHONE 口(FXS, 接话机): 这家店的转人工分机 -->

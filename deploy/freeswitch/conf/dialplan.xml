@@ -75,7 +75,26 @@
         <action application="set" data="RECORD_STEREO=true"/>
         <action application="record_session" data="/recordings/${uuid}.wav"/>
         <action application="socket" data="@VCA_HOST@:@VCA_PORT@ async full"/>
+        <!--
+          走到这里说明 VCA 没接住这通电话: 连不上(没起、正在重启发布、崩了)、握手失败、或通话中途连接断了。
+          正常结束的通话走不到这里 —— 那时通道已经挂断, 拨号计划不再往下执行。
+          有兜底座机的(网关的 LINE 分机绑了 vca_fallback_dial)就转过去, 让前台接; 没有才挂断。
+        -->
+        <action application="execute_extension" data="vca-fallback XML ai-agent"/>
         <action application="hangup"/>
+      </condition>
+    </extension>
+
+    <!-- AI 接不了时转前台座机。条件是分机目录里配了 vca_fallback_dial(add-gateway.sh 会配成这家店的 PHONE 分机) -->
+    <extension name="vca-fallback">
+      <condition field="destination_number" expression="^vca-fallback$"/>
+      <condition field="${vca_fallback_dial}" expression="^user/[0-9A-Za-z_.-]+@[0-9A-Za-z_.-]+$">
+        <action application="log" data="WARNING VCA 没接住这通电话, 转前台 ${vca_fallback_dial}"/>
+        <!-- 等前台接的这段放国内回铃音(响 1 秒停 4 秒), 别让客户以为断线了 -->
+        <action application="set" data="ringback=%(1000,4000,450)"/>
+        <action application="set" data="call_timeout=40"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="bridge" data="${vca_fallback_dial}"/>
       </condition>
     </extension>
 

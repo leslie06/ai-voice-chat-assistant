@@ -85,15 +85,19 @@ fi
 
 ata_users=""
 ata_user_xml() {
-  # $1=分机号 $2=密码 $3=注释 $4=绑定的接入号(可空)
+  # $1=分机号 $2=密码 $3=注释 $4=绑定的接入号(可空) $5=AI 接不了时转去的座机拨号串(可空)
   access=""
   if [ -n "${4:-}" ]; then
     access="\n        <variable name=\"vca_access_number\" value=\"$4\"/>"
   fi
+  if [ -n "${5:-}" ]; then
+    access="${access}\n        <variable name=\"vca_fallback_dial\" value=\"$5\"/>"
+  fi
   printf "    <!-- %s -->\n    <user id=\"%s\">\n      <params>\n        <param name=\"password\" value=\"%s\"/>\n      </params>\n      <variables>\n        <variable name=\"user_context\" value=\"ai-agent\"/>\n        <variable name=\"effective_caller_id_number\" value=\"%s\"/>\n        <variable name=\"sip-force-contact\" value=\"NDLB-connectile-dysfunction\"/>${access}\n      </variables>\n    </user>\n" "$3" "$1" "$2" "$1"
 }
 if [ -n "$ATA_LINE_USER" ]; then
-  ata_users="${ata_users}$(ata_user_xml "$ATA_LINE_USER" "$ATA_LINE_PASSWORD" "语音网关 LINE 口(FXO): 电话线来电从这里进" "$ATA_LINE_NUMBER")"
+  ata_users="${ata_users}$(ata_user_xml "$ATA_LINE_USER" "$ATA_LINE_PASSWORD" "语音网关 LINE 口(FXO): 电话线来电从这里进" "$ATA_LINE_NUMBER" \
+    "${ATA_PHONE_USER:+user/${ATA_PHONE_USER}@vca.local}")"
 fi
 if [ -n "$ATA_PHONE_USER" ]; then
   ata_users="${ata_users}$(ata_user_xml "$ATA_PHONE_USER" "$ATA_PHONE_PASSWORD" "语音网关 PHONE 口(FXS): 转人工时这台话机响")"
