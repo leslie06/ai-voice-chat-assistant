@@ -466,7 +466,7 @@
 
     const opField = (key, label, hint, placeholder) => field(label,
       input(key, operator ? { placeholder } : { readonly: true, title: '由运营配置, 需要修改请联系运营' }),
-      { hint: operator ? hint : '由运营配置' });
+      { hint: operator ? hint : (key === 'number' ? '由运营配置。系统内部给门店的编号，客户不会拨它，也不是门店的对外电话' : '由运营配置') });
 
     const form = el('div', { class: 'form' },
       el('div', { class: 'section-title', text: '基本信息' }),
@@ -491,7 +491,7 @@
       field('通话小结推送', input('summaryWebhook', { placeholder: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…' }),
         { full: true, hint: '每通电话结束后, AI 写的小结会推到这个企业微信/钉钉群。在群设置里添加"群机器人", 复制它的 Webhook 地址粘贴到这里' }),
       el('div', { class: 'section-title', text: operator ? '线路（运营）' : '线路' }),
-      opField('number', '接入号', '网关或线路送来的被叫号码, 全局唯一', '5000'),
+      opField('number', '接入号', '系统内部给门店的编号，客户不会拨它，也不是门店的对外电话。用系统建议的即可；装网关时 HT813 的"转 VoIP 号码"填它', '5000'),
       opField('transferDialString', '转人工分机', '网关话机口的分机号; 开通网关时会自动填上', '8012'),
       operator ? opField('ttsVoice', '音色', '留空用系统默认', '留空用系统默认') : null,
       operator ? opField('asrVocabularyId', '识别热词表 ID', '一般留空, 用本行业自动维护的热词表', '留空自动') : null);

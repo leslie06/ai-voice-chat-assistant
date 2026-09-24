@@ -184,11 +184,16 @@
         field('商家手机号', f.phone, '登录商家后台用; 已注册过的手机号会直接把门店挂到这个账号下'),
         field('门店名称', f.name),
         field('行业', f.industry),
-        field('接入号', f.number, '已按顺序建议一个空闲号'),
+        field('接入号', f.number, '系统内部给门店的编号，客户不会拨它，也不是门店的对外电话。用系统建议的即可；装网关时 HT813 的"转 VoIP 号码"填它'),
         field('初始密码', f.password, '至少 8 位; 仅新账号需要'),
         field('邮箱', f.email, '用于找回密码; 不填时由运营重置'),
-        el('div', { class: 'field full' }, el('label', { class: 'switch' }, f.gateway, el('span', { class: 'track' }),
-          el('span', { text: canGateway ? '同时开通语音网关（HT813 的两个分机）' : '网关开通不可用: ' + (gw.ok ? gw.data.message || '电话交换未接入' : gw.error) })))),
+        el('div', { class: 'full option' },
+          el('div', null,
+            el('div', { class: 't1', text: '同时开通语音网关' }),
+            el('div', { class: 't2', text: '给这家店生成 HT813 的两个分机账号: LINE 口接诊所电话线(来电进 AI), PHONE 口接前台话机'
+              + '(转人工、AI 故障时来电转到这里)。添加完成后会显示 HT813 要填的账号密码; 不勾也可以稍后在门店的"网关"页开通。' }),
+            canGateway ? null : el('div', { class: 't2 warn', text: '现在开通不了: ' + (gw.ok ? gw.data.message || '电话交换未接入' : gw.error) })),
+          el('label', { class: 'switch', title: '同时开通语音网关' }, f.gateway, el('span', { class: 'track' })))),
       err);
     C.modal({
       title: '添加商家', body, wide: true,

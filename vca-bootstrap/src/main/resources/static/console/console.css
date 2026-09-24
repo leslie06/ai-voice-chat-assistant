@@ -222,13 +222,24 @@ table.t { width: 100%; border-collapse: collapse; }
 .section-title { grid-column: 1 / -1; font-weight: 600; font-size: 13px; color: var(--sub); padding-top: 6px;
   border-top: 1px dashed var(--line); margin-top: 4px; }
 .section-title:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
-.switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+/* 开关。选择器写成 .field label.switch 是为了压过上面 .field label 的块级样式 —— 否则滑轨宽度失效, 圆点叠在文字上 */
+.switch, .field label.switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none;
+  margin: 0; font-weight: 400; font-size: 14px; }
 .switch input { display: none; }
-.switch .track { width: 38px; height: 22px; border-radius: 99px; background: var(--line); position: relative; transition: background .15s; }
+.switch .track { display: inline-block; flex: none; width: 38px; height: 22px; border-radius: 99px; background: var(--line);
+  position: relative; transition: background .15s; }
 .switch .track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
   background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: transform .15s; }
 .switch input:checked + .track { background: var(--ok); }
 .switch input:checked + .track::after { transform: translateX(16px); }
+.switch input:disabled + .track { opacity: .5; }
+/* 带说明的开关选项块(如"同时开通语音网关") */
+.option { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 14px 16px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-2); }
+.option .t1 { font-weight: 600; }
+.option .t2 { color: var(--sub); font-size: 13px; margin-top: 2px; }
+.option .t2.warn { color: var(--warn); }
+.option .switch { margin-top: 2px; }
 .form-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--line-2);
   position: sticky; bottom: 0; background: var(--panel); border-radius: 0 0 var(--radius) var(--radius); }
 
