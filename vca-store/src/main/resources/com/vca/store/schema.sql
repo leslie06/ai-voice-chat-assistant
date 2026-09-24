@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS app_user (
     last_login_at DATETIME           COMMENT '最近一次成功登录时间',
     member_tier VARCHAR(16) NOT NULL DEFAULT 'free' COMMENT '会员等级 free/vip',
     member_expires_at DATETIME       COMMENT '会员到期时间, NULL=不过期',
+    role       VARCHAR(16)  NOT NULL DEFAULT 'user' COMMENT '角色 user/admin; admin = 运营管理员(运营后台里授予)',
     created_at DATETIME     NOT NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_user_name (username),
@@ -245,3 +246,21 @@ CREATE TABLE IF NOT EXISTS phone_call_summary (
     UNIQUE KEY uk_summary_call (call_id),
     KEY idx_summary_owner (owner_id, id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '通话小结';
+
+-- 语音网关分机: 一家店一台网关(HT813 这类 ATA), LINE 口来电进 AI, PHONE 口接话机(转人工/AI 故障时兜底)。
+-- 库是唯一来源: 运营后台开通/撤销网关时写这张表, 再由 VCA 生成 FreeSWITCH 的分机文件并重载。
+CREATE TABLE IF NOT EXISTS phone_gateway (
+    id             BIGINT       NOT NULL AUTO_INCREMENT,
+    merchant_id    BIGINT       NOT NULL COMMENT '所属门店 phone_merchant.id',
+    access_number  VARCHAR(32)  NOT NULL COMMENT '门店接入号(开通时的快照)',
+    label          VARCHAR(128) NOT NULL DEFAULT '' COMMENT '门店名',
+    line_user      VARCHAR(16)  NOT NULL COMMENT 'LINE 口分机号',
+    line_password  VARCHAR(64)  NOT NULL,
+    phone_user     VARCHAR(16)  NOT NULL COMMENT 'PHONE 口分机号(转人工)',
+    phone_password VARCHAR(64)  NOT NULL,
+    created_at     DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_gateway_merchant (merchant_id),
+    UNIQUE KEY uk_gateway_line (line_user),
+    UNIQUE KEY uk_gateway_phone (phone_user)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '语音网关分机';

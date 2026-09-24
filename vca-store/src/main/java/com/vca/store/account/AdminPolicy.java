@@ -12,15 +12,17 @@ import java.util.Set;
 public final class AdminPolicy {
 
     /** 没有管理员: 所有需要管理员的操作一律拒绝 */
-    public static final AdminPolicy NONE = new AdminPolicy(Set.of());
+    public static final AdminPolicy NONE = new AdminPolicy(Set.of(), id -> false);
 
-    private final Set<Long> adminIds;
+    private final Set<Long> superAdmins;
+    private final java.util.function.LongPredicate granted;
 
-    private AdminPolicy(Set<Long> adminIds) {
-        this.adminIds = Set.copyOf(adminIds);
+    private AdminPolicy(Set<Long> superAdmins, java.util.function.LongPredicate granted) {
+        this.superAdmins = Set.copyOf(superAdmins);
+        this.granted = granted;
     }
 
-    /** 解析 "11, 12" 这样的名单; 认不出的项忽略 */
+    /** 解析 "11, 12" 这样的名单(配置文件里的超级管理员); 认不出的项忽略 */
     public static AdminPolicy parse(String csv) {
         Set<Long> ids = new HashSet<>();
         if (csv != null) {
@@ -36,14 +38,31 @@ public final class AdminPolicy {
                 }
             }
         }
-        return new AdminPolicy(ids);
+        return new AdminPolicy(ids, id -> false);
+    }
+
+    /**
+     * 再加上在运营后台里授予的管理员(账号表的 role)。配置文件里的是<b>超级管理员</b>: 页面上撤不掉,
+     * 保证总有人能进后台 —— 否则把自己也撤了, 就只能上服务器改配置。
+     */
+    public AdminPolicy withGranted(java.util.function.LongPredicate granted) {
+        return new AdminPolicy(superAdmins, granted == null ? id -> false : granted);
     }
 
     public boolean isAdmin(Long userId) {
-        return userId != null && adminIds.contains(userId);
+        return userId != null && (superAdmins.contains(userId) || granted.test(userId));
     }
 
+    public boolean isSuperAdmin(Long userId) {
+        return userId != null && superAdmins.contains(userId);
+    }
+
+    public Set<Long> superAdmins() {
+        return superAdmins;
+    }
+
+    /** 配置文件里的超级管理员人数 */
     public int size() {
-        return adminIds.size();
+        return superAdmins.size();
     }
 }

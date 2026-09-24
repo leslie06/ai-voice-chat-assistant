@@ -35,6 +35,7 @@ class MemberTierTest {
                       last_login_at TIMESTAMP,
                       member_tier VARCHAR(16) NOT NULL DEFAULT 'free',
                       member_expires_at TIMESTAMP,
+                      role VARCHAR(16) NOT NULL DEFAULT 'user',
                       created_at TIMESTAMP NOT NULL
                     )
                     """);

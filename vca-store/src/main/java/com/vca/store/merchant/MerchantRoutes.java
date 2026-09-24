@@ -1,5 +1,6 @@
 package com.vca.store.merchant;
 
+import com.vca.orchestrator.merchant.GreetingNotice;
 import com.vca.orchestrator.merchant.Industry;
 import com.vca.orchestrator.merchant.MerchantProfile;
 import com.vca.orchestrator.merchant.MerchantRules;
@@ -65,12 +66,16 @@ public final class MerchantRoutes {
     private final AdminPolicy admins;
     /** 通话/线索/录音; null = 没有这些表(只用门店资料的部署), 相关接口返回空 */
     private final MerchantActivity activity;
+    /** 网关(商家版只看在线状态, 看不到密码); null = 没有网关功能 */
+    private final com.vca.store.gateway.GatewayProvisioning gateways;
 
-    private MerchantRoutes(UserService users, MerchantStore store, AdminPolicy admins, MerchantActivity activity) {
+    private MerchantRoutes(UserService users, MerchantStore store, AdminPolicy admins, MerchantActivity activity,
+                           com.vca.store.gateway.GatewayProvisioning gateways) {
         this.users = users;
         this.store = store;
         this.admins = admins == null ? AdminPolicy.NONE : admins;
         this.activity = activity;
+        this.gateways = gateways;
     }
 
     public static RouterFunction<ServerResponse> create(UserService users, MerchantStore store, AdminPolicy admins) {
@@ -79,11 +84,19 @@ public final class MerchantRoutes {
 
     public static RouterFunction<ServerResponse> create(UserService users, MerchantStore store, AdminPolicy admins,
                                                         MerchantActivity activity) {
-        MerchantRoutes r = new MerchantRoutes(users, store, admins, activity);
+        return create(users, store, admins, activity, null);
+    }
+
+    public static RouterFunction<ServerResponse> create(UserService users, MerchantStore store, AdminPolicy admins,
+                                                        MerchantActivity activity,
+                                                        com.vca.store.gateway.GatewayProvisioning gateways) {
+        MerchantRoutes r = new MerchantRoutes(users, store, admins, activity, gateways);
         return RouterFunctions.route(GET("/api/merchants"), r::list)
                 .andRoute(POST("/api/merchants"), r::createOne)
                 .andRoute(GET("/api/merchants/industries"), r::industries)
                 .andRoute(GET("/api/merchants/{id}/preview"), r::preview)
+                .andRoute(GET("/api/merchants/{id}/stats"), r::stats)
+                .andRoute(GET("/api/merchants/{id}/gateway"), r::gatewayStatus)
                 .andRoute(GET("/api/merchants/{id}/calls"), r::calls)
                 .andRoute(GET("/api/merchants/{id}/leads"), r::leads)
                 .andRoute(GET("/api/merchants/{id}/calls/{callId}/recording"), r::recording)
@@ -134,14 +147,53 @@ public final class MerchantRoutes {
         }
         long id = longOf(req.pathVariable("id"));
         return blocking(() -> store.findById(id).filter(p -> canSee(uid, p)))
-                .flatMap(opt -> opt.map(p -> json(200, Map.of("prompt", p.renderProfile())))
+                .flatMap(opt -> opt.map(p -> json(200, Map.of("prompt", p.renderProfile(), "greeting", spokenGreeting(p))))
                         .orElseGet(() -> json(404, Map.of("error", "商家不存在"))));
+    }
+
+    /** 电话里实际会播的开场白: 没写按店名生成, 再补上"智能助理接听、会录音"的告知(与电话侧同一套规则) */
+    static String spokenGreeting(MerchantProfile p) {
+        String g = p.greeting().isBlank() ? GreetingNotice.forShop(p.name().isBlank() ? p.number() : p.name(), true)
+                : p.greeting();
+        return GreetingNotice.apply(g);
+    }
+
+    /** 近 N 天(默认 30)按天的通话、意向、留资 */
+    private Mono<ServerResponse> stats(ServerRequest req) {
+        int days = req.queryParam("days").map(v -> {
+            try {
+                return Integer.parseInt(v);
+            } catch (NumberFormatException e) {
+                return 30;
+            }
+        }).orElse(30);
+        return withShop(req, shop -> activity == null ? Map.of() : activity.stats(shop, Math.max(1, Math.min(days, 90))));
+    }
+
+    /** 这家店的网关在不在线(商家版概览用; 不含密码) */
+    private Mono<ServerResponse> gatewayStatus(ServerRequest req) {
+        return withShop(req, shop -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            var g = gateways == null ? java.util.Optional.<com.vca.orchestrator.merchant.GatewayAccount>empty()
+                    : gateways.forMerchant(shop.id());
+            m.put("opened", g.isPresent());
+            g.ifPresent(a -> {
+                var reg = gateways.control().status().registered();
+                m.put("lineOnline", reg.contains(a.lineUser()));
+                m.put("phoneOnline", reg.contains(a.phoneUser()));
+                m.put("phoneExtension", a.phoneUser());
+            });
+            return m;
+        });
     }
 
     // ---- 通话 / 线索 / 录音: 门店所属账号或管理员能看 ----
 
     private Mono<ServerResponse> calls(ServerRequest req) {
         return withShop(req, shop -> {
+            if (activity == null) {
+                return List.of();
+            }
             LocalDateTime since = since(req, 30);
             return activity.calls(shop, since).stream().map(c -> {
                 Map<String, Object> m = new LinkedHashMap<>();
@@ -160,7 +212,7 @@ public final class MerchantRoutes {
     }
 
     private Mono<ServerResponse> leads(ServerRequest req) {
-        return withShop(req, shop -> activity.leads(shop, since(req, 90)).stream().map(l -> {
+        return withShop(req, shop -> activity == null ? List.of() : activity.leads(shop, since(req, 90)).stream().map(l -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("callId", l.getCallId());
             m.put("at", l.getCreatedAt() == null ? null : l.getCreatedAt().toString());
@@ -206,7 +258,7 @@ public final class MerchantRoutes {
         }
         long id = longOf(req.pathVariable("id"));
         return blocking(() -> store.findById(id).filter(p -> canSee(uid, p))
-                        .map(shop -> activity == null ? (Object) List.of() : query.apply(shop)))
+                        .map(query))
                 .flatMap(opt -> opt.map(body -> json(200, body))
                         .orElseGet(() -> json(404, Map.of("error", "商家不存在"))));
     }
@@ -324,7 +376,7 @@ public final class MerchantRoutes {
                 null, null);
     }
 
-    static Map<String, Object> dto(MerchantProfile p) {
+    public static Map<String, Object> dto(MerchantProfile p) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", p.id());
         m.put("ownerId", p.ownerId());

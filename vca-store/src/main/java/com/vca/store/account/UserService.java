@@ -8,6 +8,7 @@ import com.vca.store.entity.AppUser;
 import com.vca.store.mapper.AppUserMapper;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.regex.Pattern;
 
 /** 注册/登录/令牌校验。用户名与邮箱各自唯一, 密码 PBKDF2 加盐哈希; 登录签发无状态 HMAC 令牌。 */
@@ -140,6 +141,83 @@ public class UserService {
                 .eq("id", userId)
                 .set("member_tier", tier.code())
                 .set("member_expires_at", expiresAt));
+    }
+
+    // ---- 运营后台 ----
+
+    /** 运营管理员角色(在后台里授予的; 配置文件里的超级管理员不在这里) */
+    public static final String ROLE_ADMIN = "admin";
+    public static final String ROLE_USER = "user";
+
+    public boolean isAdminRole(long userId) {
+        AppUser u = users.selectById(userId);
+        return u != null && ROLE_ADMIN.equals(u.getRole());
+    }
+
+    public void setRole(long userId, String role) {
+        users.update(null, Wrappers.<AppUser>update().eq("id", userId).set("role", role));
+    }
+
+    public List<AppUser> listByRole(String role) {
+        return users.selectList(Wrappers.<AppUser>query().eq("role", role).orderByAsc("id"));
+    }
+
+    public List<AppUser> findByIds(java.util.Collection<Long> ids) {
+        return ids.isEmpty() ? List.of() : users.selectBatchIds(ids);
+    }
+
+    /** 按手机号找账号; 找不到返回 null */
+    public AppUser findByPhone(String phone) {
+        return phone == null ? null : findByName(phone.trim());
+    }
+
+    /**
+     * 运营在后台替商家开账号。和自助注册的区别: 邮箱可以不填(小诊所未必有, 忘了密码由运营在后台重置),
+     * 不填时用一个 .invalid 保留域名的占位地址(永远收不到信, 只是为了满足邮箱唯一的约束)。
+     *
+     * @return 新账号; 失败抛 {@link IllegalArgumentException}(手机号不对、已注册、密码太短)
+     */
+    public AppUser createByAdmin(String phone, String email, String password) {
+        String u = phone == null ? "" : phone.trim();
+        if (!isValidPhone(u)) {
+            throw new IllegalArgumentException("请输入正确的11位手机号");
+        }
+        if (findByName(u) != null) {
+            throw new IllegalArgumentException("该手机号已注册");
+        }
+        String mail = email == null || email.isBlank() ? "m" + u + "@noemail.invalid" : email.trim();
+        if (!EMAIL.matcher(mail).matches()) {
+            throw new IllegalArgumentException("邮箱格式不正确");
+        }
+        if (findByEmail(mail) != null) {
+            throw new IllegalArgumentException("邮箱已被其他账号使用");
+        }
+        if (password == null || password.length() < 8) {
+            throw new IllegalArgumentException("初始密码至少 8 位");
+        }
+        String salt = PasswordUtil.newSalt();
+        AppUser user = new AppUser();
+        user.setUsername(u);
+        user.setEmail(mail);
+        user.setPassSalt(salt);
+        user.setPassHash(PasswordUtil.hash(password, salt));
+        user.setRole(ROLE_USER);
+        user.setCreatedAt(LocalDateTime.now());
+        users.insert(user);
+        return user;
+    }
+
+    /** 已登录用户自己改密码: 必须提供旧密码 */
+    public void changePassword(long userId, String oldPassword, String newPassword) {
+        AppUser u = users.selectById(userId);
+        if (u == null || oldPassword == null
+                || !PasswordUtil.verify(oldPassword, u.getPassSalt(), u.getPassHash())) {
+            throw new IllegalArgumentException("原密码不对");
+        }
+        if (newPassword == null || newPassword.length() < 8) {
+            throw new IllegalArgumentException("新密码至少 8 位");
+        }
+        updatePassword(userId, newPassword);
     }
 
     /** 按用户名或邮箱定位账号(找回密码用); 找不到返回 null。 */

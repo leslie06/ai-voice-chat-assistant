@@ -22,6 +22,8 @@ public class AppUser {
     private String memberTier;
     /** 会员到期时间; NULL = 不过期(手工开通的长期会员)。 */
     private LocalDateTime memberExpiresAt;
+    /** user / admin。admin = 在运营后台里被授予的运营管理员(配置文件里的管理员不在这里) */
+    private String role;
     private LocalDateTime createdAt;
 
     public Long getId() {
@@ -102,5 +104,13 @@ public class AppUser {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public String getRole() {
+        return role;
+    }
+
+    public void setRole(String role) {
+        this.role = role;
     }
 }

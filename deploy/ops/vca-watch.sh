@@ -48,9 +48,10 @@ in_gateway_hours() {
 # 输出 "LINE分机|接入号|店名", 一行一台网关。不用制表符分隔: 它算空白, 连续两个会被 read 合并, 空的接入号就错位了
 gateways() {
   local f ext number label
-  for f in "$FS_DIR"/gateways/gw-*.xml; do
+  # gw-*.xml 是 add-gateway.sh 开的, vca-gw-*.xml 是运营后台页面上开的, 格式相同
+  for f in "$FS_DIR"/gateways/gw-*.xml "$FS_DIR"/gateways/vca-gw-*.xml; do
     [ -e "$f" ] || continue
-    ext=$(basename "$f" .xml); ext=${ext#gw-}
+    ext=$(basename "$f" .xml); ext=${ext##*gw-}
     number=$(sed -n 's/.*name="vca_access_number" value="\([^"]*\)".*/\1/p' "$f" | head -1)
     label=$(sed -n 's/.*<!-- 门店: \(.*\) -->.*/\1/p' "$f" | head -1)
     printf '%s|%s|%s\n' "$ext" "$number" "${label//|/}"

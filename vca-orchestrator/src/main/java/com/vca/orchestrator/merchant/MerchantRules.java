@@ -96,6 +96,11 @@ public final class MerchantRules {
                 existing.ttsVoice(), existing.asrVocabularyId());
     }
 
+    /** 只换转人工拨号串(开通/撤销网关时由系统设置, 不经过商家) */
+    public static MerchantProfile withTransferDialString(MerchantProfile p, String dialString) {
+        return with(p, p.number(), dialString, p.summaryWebhook(), p.ttsVoice(), p.asrVocabularyId());
+    }
+
     private static MerchantProfile with(MerchantProfile p, String number, String dialString, String webhook,
                                         String ttsVoice, String vocabularyId) {
         return new MerchantProfile(p.id(), p.ownerId(), number, p.name(), p.enabled(), p.industry(),

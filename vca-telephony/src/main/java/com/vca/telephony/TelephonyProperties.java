@@ -156,7 +156,7 @@ public class TelephonyProperties {
     private String greeting = "";
 
     /**
-     * 开场白里自动补上"智能助理接听、会录音"的告知(缺哪句补哪句, 见 {@link com.vca.telephony.merchant.GreetingNotice})。
+     * 开场白里自动补上"智能助理接听、会录音"的告知(缺哪句补哪句, 见 {@link com.vca.orchestrator.merchant.GreetingNotice})。
      * 法规要求的告知, 默认开; 关掉只适合内部联调。
      */
     private boolean greetingNotice = true;
@@ -426,6 +426,14 @@ public class TelephonyProperties {
         private int handshakeTimeoutMs = 5000;
         /** 外呼: 经事件套接字发 originate。不开只能接呼入 */
         private Esl esl = new Esl();
+        /**
+         * 语音网关分机文件的目录(FreeSWITCH 编排目录下的 gateways/, 挂载进容器)。配了它, 运营后台才能在页面上
+         * 开通/撤销网关: 本进程写分机文件, 再经事件套接字(esl.host/port/password, 与外呼开关无关)让 FreeSWITCH 重载。
+         * 服务器上是 /opt/vca/freeswitch/gateways, 本进程(vca 用户)要能写。留空 = 页面上不能开通网关。
+         */
+        private String gatewaysDir = "";
+        /** 网关上"SIP Server"要填的地址(服务器公网 IP 或域名), 开通后展示在页面上 */
+        private String sipServer = "";
 
         public static class Esl {
             /** 开关。关闭时不连 FreeSWITCH, 系统只能接呼入 */
@@ -568,6 +576,22 @@ public class TelephonyProperties {
 
         public void setHandshakeTimeoutMs(int v) {
             this.handshakeTimeoutMs = v;
+        }
+
+        public String getGatewaysDir() {
+            return gatewaysDir;
+        }
+
+        public void setGatewaysDir(String gatewaysDir) {
+            this.gatewaysDir = gatewaysDir == null ? "" : gatewaysDir.strip();
+        }
+
+        public String getSipServer() {
+            return sipServer;
+        }
+
+        public void setSipServer(String sipServer) {
+            this.sipServer = sipServer == null ? "" : sipServer.strip();
         }
 
         public Esl getEsl() {
@@ -991,7 +1015,7 @@ public class TelephonyProperties {
     }
 
     private String withNotice(String text) {
-        return greetingNotice ? com.vca.telephony.merchant.GreetingNotice.apply(text) : text;
+        return greetingNotice ? com.vca.orchestrator.merchant.GreetingNotice.apply(text) : text;
     }
 
     public void setGreeting(String greeting) {
@@ -1188,7 +1212,7 @@ public class TelephonyProperties {
     /** 没写开场白的店按店名生成一句; 连店名都没有才退到全局开场白 */
     String defaultGreeting(String name) {
         return name == null || name.isBlank() ? greeting
-                : com.vca.telephony.merchant.GreetingNotice.forShop(name.strip(), greetingNotice);
+                : com.vca.orchestrator.merchant.GreetingNotice.forShop(name.strip(), greetingNotice);
     }
 
     /**

@@ -13,7 +13,9 @@ import com.vca.telephony.provider.ami.AmiClient;
 import com.vca.telephony.provider.ami.AmiTelephonyProvider;
 import com.vca.telephony.provider.audiosocket.AudioSocketServer;
 import com.vca.telephony.provider.freeswitch.EslClient;
+import com.vca.telephony.provider.freeswitch.FreeSwitchGatewayControl;
 import com.vca.telephony.provider.freeswitch.FreeSwitchSocketServer;
+import com.vca.orchestrator.merchant.GatewayControl;
 import com.vca.telephony.provider.freeswitch.FreeSwitchTelephonyProvider;
 import com.vca.telephony.session.CallConversationFactory;
 import com.vca.telephony.session.CallSession;
@@ -244,6 +246,28 @@ public class TelephonyAutoConfiguration {
                     props.getFreeswitch().getListenAddress(), props.getFreeswitch().getPort(),
                     props.getSampleRate(), props.getMaxCallSeconds());
             return server;
+        }
+
+        /**
+         * 运营后台开通网关用: 写 FreeSWITCH 的分机文件、经事件套接字重载与查注册。
+         * 没配分机目录时给一个"不可用"的实现, 后台照常能用, 只是开通按钮提示电话交换未接入。
+         */
+        @Bean
+        GatewayControl freeSwitchGatewayControl(TelephonyProperties props) {
+            TelephonyProperties.FreeSwitch fs = props.getFreeswitch();
+            if (fs.getGatewaysDir().isBlank()) {
+                log.info("运营后台: 没配网关分机目录(VCA_FS_GATEWAYS_DIR), 页面上不能开通网关");
+                return GatewayControl.UNAVAILABLE;
+            }
+            java.nio.file.Path dir = java.nio.file.Path.of(fs.getGatewaysDir()).toAbsolutePath();
+            FreeSwitchGatewayControl control = new FreeSwitchGatewayControl(dir, fs.getEsl().getHost(),
+                    fs.getEsl().getPort(), fs.getEsl().getPassword(), fs.getSipServer());
+            if (!control.available()) {
+                log.warn("运营后台: 网关分机目录 {} 不存在或本进程写不了, 页面上开通网关会失败", dir);
+            } else {
+                log.info("运营后台: 网关分机目录 {}, 事件套接字 {}:{}", dir, fs.getEsl().getHost(), fs.getEsl().getPort());
+            }
+            return control;
         }
 
         /** ESL 连接。只在 {@code vca.telephony.freeswitch.esl.enabled=true} 时建 —— 不开就只能接呼入。 */

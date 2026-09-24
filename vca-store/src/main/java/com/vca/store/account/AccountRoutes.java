@@ -32,6 +32,7 @@ import static org.springframework.web.reactive.function.server.RequestPredicates
  *   POST /api/password/forgot {account}               → {ok} (dev 附 devToken)  发重置邮件
  *   POST /api/password/reset  {token,password}        → {ok}                    凭令牌设新密码
  *   POST /api/password/change-request                 → {ok} (dev 附 devToken)  已登录, 发重置邮件到本人邮箱
+ *   POST /api/password/change {oldPassword,newPassword} → {ok}                  已登录, 凭原密码直接改(商家后台用)
  *   GET    /api/conversations                         → [{id,title,updatedAt}]
  *   POST   /api/conversations {title?}                → {id,title}
  *   DELETE /api/conversations/{id}                    → {ok}
@@ -68,6 +69,7 @@ public final class AccountRoutes {
                 .andRoute(POST("/api/password/forgot"), r::forgot)
                 .andRoute(POST("/api/password/reset"), r::resetPassword)
                 .andRoute(POST("/api/password/change-request"), r::changeRequest)
+                .andRoute(POST("/api/password/change"), r::changePassword)
                 .andRoute(GET("/api/conversations"), r::listConvs)
                 .andRoute(POST("/api/conversations"), r::createConv)
                 .andRoute(DELETE("/api/conversations/{id}"), r::deleteConv)
@@ -97,6 +99,21 @@ public final class AccountRoutes {
     }
 
     /** 已登录用户请求修改密码: 发重置邮件到本人邮箱。 */
+    @SuppressWarnings("unchecked")
+    private Mono<ServerResponse> changePassword(ServerRequest req) {
+        Long uid = userId(req);
+        if (uid == null) {
+            return unauthorized();
+        }
+        return req.bodyToMono(Map.class).defaultIfEmpty(Map.of()).flatMap(body -> blocking(() -> {
+                    users.changePassword(uid, str(((Map<String, Object>) body).get("oldPassword")),
+                            str(((Map<String, Object>) body).get("newPassword")));
+                    return Map.of("ok", true);
+                }))
+                .flatMap(ok -> json(200, ok))
+                .onErrorResume(IllegalArgumentException.class, e -> json(400, Map.of("error", e.getMessage())));
+    }
+
     private Mono<ServerResponse> changeRequest(ServerRequest req) {
         Long uid = userId(req);
         if (uid == null) {

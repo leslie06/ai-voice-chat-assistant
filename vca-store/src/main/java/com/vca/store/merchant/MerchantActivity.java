@@ -9,8 +9,13 @@ import com.vca.store.mapper.PhoneLeadMapper;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
@@ -74,6 +79,76 @@ public final class MerchantActivity {
         }
         Path file = recordingsDir.resolve(callId + ".wav");
         return Files.isRegularFile(file) ? Optional.of(file) : Optional.empty();
+    }
+
+    /** 所有门店最近的通话小结(运营后台), 新的在前 */
+    public List<PhoneCallSummary> callsAll(LocalDateTime since) {
+        return summaries.selectList(Wrappers.<PhoneCallSummary>query()
+                .ge(since != null, "created_at", since).orderByDesc("id").last("limit " + MAX_ROWS));
+    }
+
+    /** 所有门店最近的线索(运营后台), 新的在前 */
+    public List<PhoneLead> leadsAll(LocalDateTime since) {
+        return leads.selectList(Wrappers.<PhoneLead>query()
+                .ge(since != null, "created_at", since).orderByDesc("id").last("limit " + MAX_ROWS));
+    }
+
+    /**
+     * 按天汇总: 有小结的通话数、意向分布、留资数。shop 为 null 时汇总所有门店(运营总览)。
+     * 试点期一家店一天几十通, 取行在内存里汇总比写两套库都认的分组 SQL 简单。
+     */
+    public Stats stats(MerchantProfile shop, int days) {
+        LocalDate today = LocalDate.now();
+        LocalDateTime since = today.minusDays(days - 1L).atStartOfDay();
+        var callQuery = Wrappers.<PhoneCallSummary>query().select("created_at", "intent", "called_number")
+                .ge("created_at", since);
+        var leadQuery = Wrappers.<PhoneLead>query().select("created_at", "called_number").ge("created_at", since);
+        if (shop != null) {
+            callQuery.eq("called_number", shop.number()).eq("owner_id", shop.ownerId());
+            leadQuery.eq("called_number", shop.number()).eq("owner_id", shop.ownerId());
+        }
+        List<PhoneCallSummary> calls = summaries.selectList(callQuery);
+        List<PhoneLead> leadRows = leads.selectList(leadQuery);
+        Map<String, Integer> intents = new LinkedHashMap<>();
+        for (String k : List.of("A", "B", "C", "D")) {
+            intents.put(k, 0);
+        }
+        Map<LocalDate, int[]> byDay = new TreeMap<>();
+        for (int i = 0; i < days; i++) {
+            byDay.put(today.minusDays(i), new int[2]);
+        }
+        Map<String, Integer> byNumber = new LinkedHashMap<>();
+        for (PhoneCallSummary c : calls) {
+            intents.merge(c.getIntent() == null ? "C" : c.getIntent(), 1, Integer::sum);
+            int[] d = byDay.get(c.getCreatedAt().toLocalDate());
+            if (d != null) {
+                d[0]++;
+            }
+            byNumber.merge(c.getCalledNumber() == null ? "" : c.getCalledNumber(), 1, Integer::sum);
+        }
+        for (PhoneLead l : leadRows) {
+            int[] d = byDay.get(l.getCreatedAt().toLocalDate());
+            if (d != null) {
+                d[1]++;
+            }
+        }
+        List<Day> daily = new ArrayList<>();
+        byDay.forEach((date, v) -> daily.add(new Day(date.toString(), v[0], v[1])));
+        return new Stats(calls.size(), intents, leadRows.size(), daily, byNumber);
+    }
+
+    /**
+     * @param calls    有小结(10 秒以上)的通话数
+     * @param intents  意向 A/B/C/D 各多少
+     * @param leads    留资条数
+     * @param daily    按天(旧的在前)
+     * @param byNumber 按接入号的通话数(运营总览用)
+     */
+    public record Stats(int calls, Map<String, Integer> intents, int leads, List<Day> daily,
+                        Map<String, Integer> byNumber) {
+    }
+
+    public record Day(String date, int calls, int leads) {
     }
 
     /** 录音还在不在(列表里决定显不显示"播放") */

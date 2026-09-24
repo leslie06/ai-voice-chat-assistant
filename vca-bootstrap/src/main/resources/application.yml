@@ -248,6 +248,11 @@ vca:
       media-bind-address: ${VCA_FS_MEDIA_BIND_ADDRESS:127.0.0.1}
       # 下发 unicast 后多久没收到媒体包就挂断并打出排查提示(多半是拨号计划里 vca_media_remote_host 配错)。
       media-wait-ms: ${VCA_FS_MEDIA_WAIT_MS:3000}
+      # 语音网关分机文件目录(运营后台在页面上开通网关用)。服务器上 /opt/vca/freeswitch/gateways, 本进程要能写;
+      # 本机联调 deploy/freeswitch/gateways。留空 = 页面上不能开通网关。重载走下面 esl 的地址和密码(与外呼开关无关)
+      gateways-dir: ${VCA_FS_GATEWAYS_DIR:}
+      # 网关上"SIP Server"要填的地址(服务器公网 IP 或域名), 开通后展示给运营
+      sip-server: ${VCA_FS_SIP_SERVER:}
       # 外呼: 经事件套接字发 originate。不开则只能接呼入。
       esl:
         enabled: ${VCA_FS_ESL_ENABLED:false}

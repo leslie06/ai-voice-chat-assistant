@@ -38,6 +38,11 @@ import com.vca.store.mapper.KnowledgeChunkMapper;
 import com.vca.store.mapper.KnowledgeDocMapper;
 import com.vca.store.mapper.PhoneCallSummaryMapper;
 import com.vca.store.mapper.PhoneLeadMapper;
+import com.vca.store.mapper.PhoneGatewayMapper;
+import com.vca.store.gateway.GatewayProvisioning;
+import com.vca.store.gateway.MyBatisGatewayStore;
+import com.vca.orchestrator.merchant.GatewayControl;
+import com.vca.orchestrator.merchant.GatewayStore;
 import com.vca.store.mapper.PhoneMerchantMapper;
 import com.vca.store.call.MyBatisCallSummaryStore;
 import com.vca.store.lead.MyBatisLeadStore;
@@ -146,6 +151,8 @@ public class StoreAutoConfiguration {
         addColumnIfMissing(ds, "chat_conversation", "deleted",
                 "TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除 0正常 1已删'");
         addColumnIfMissing(ds, "app_user", "register_ip", "VARCHAR(45) NULL COMMENT '注册 IP'");
+        addColumnIfMissing(ds, "app_user", "role",
+                "VARCHAR(16) NOT NULL DEFAULT 'user' COMMENT '角色 user/admin; admin = 运营管理员(运营后台里授予)'");
         addColumnIfMissing(ds, "app_user", "last_login_at",
                 "DATETIME NULL COMMENT '最近一次成功登录时间'");
         // 会员体系: 老库补列。默认 free, 已有用户全部按免费档(权益只会少不会多)。
@@ -336,12 +343,12 @@ public class StoreAutoConfiguration {
     /** 运营管理员名单(vca.store.admin-user-ids): 门店的线路字段与内部报表只对他们开放 */
     @Bean
     @ConditionalOnMissingBean
-    AdminPolicy adminPolicy(StoreProperties props) {
-        AdminPolicy policy = AdminPolicy.parse(props.getAdminUserIds());
+    AdminPolicy adminPolicy(StoreProperties props, UserService userService) {
+        AdminPolicy policy = AdminPolicy.parse(props.getAdminUserIds()).withGranted(userService::isAdminRole);
         if (policy.size() == 0) {
-            log.warn("未配置运营管理员(VCA_ADMIN_USER_IDS): 无法新建门店、分配接入号, /eval/report 也无人可看");
+            log.warn("未配置超级管理员(VCA_ADMIN_USER_IDS): 运营后台只有在库里被授予管理员的账号能进, 一个都没有时谁也进不去");
         } else {
-            log.info("运营管理员 {} 人", policy.size());
+            log.info("运营管理员: 配置文件里 {} 人(超级管理员), 另有运营后台里授予的", policy.size());
         }
         return policy;
     }
@@ -457,9 +464,15 @@ public class StoreAutoConfiguration {
     org.springframework.web.reactive.function.server.RouterFunction<
             org.springframework.web.reactive.function.server.ServerResponse> merchantRoutes(
             UserService userService, MerchantStore merchantStore, AdminPolicy adminPolicy,
-            PhoneCallSummaryMapper phoneCallSummaryMapper, PhoneLeadMapper phoneLeadMapper, StoreProperties props) {
-        String dir = props.getPhoneRecordingsDir() == null ? "" : props.getPhoneRecordingsDir().strip();
-        java.nio.file.Path recordings = dir.isEmpty() ? null : java.nio.file.Path.of(dir).toAbsolutePath();
+            com.vca.store.merchant.MerchantActivity merchantActivity, GatewayProvisioning gatewayProvisioning) {
+        return MerchantRoutes.create(userService, merchantStore, adminPolicy, merchantActivity, gatewayProvisioning);
+    }
+
+    /** 门店的通话/线索/录音/统计(商家后台与运营后台共用) */
+    @Bean
+    com.vca.store.merchant.MerchantActivity merchantActivity(PhoneCallSummaryMapper phoneCallSummaryMapper,
+                                                             PhoneLeadMapper phoneLeadMapper, StoreProperties props) {
+        java.nio.file.Path recordings = recordingsDir(props);
         if (recordings == null) {
             log.info("商家后台: 未配置录音目录(VCA_PHONE_RECORDINGS_DIR), 不提供录音回放");
         } else if (!java.nio.file.Files.isReadable(recordings)) {
@@ -467,8 +480,87 @@ public class StoreAutoConfiguration {
         } else {
             log.info("商家后台: 录音回放目录 {}", recordings);
         }
-        return MerchantRoutes.create(userService, merchantStore, adminPolicy,
-                new com.vca.store.merchant.MerchantActivity(phoneCallSummaryMapper, phoneLeadMapper, recordings));
+        return new com.vca.store.merchant.MerchantActivity(phoneCallSummaryMapper, phoneLeadMapper, recordings);
+    }
+
+    private static java.nio.file.Path recordingsDir(StoreProperties props) {
+        String dir = props.getPhoneRecordingsDir() == null ? "" : props.getPhoneRecordingsDir().strip();
+        return dir.isEmpty() ? null : java.nio.file.Path.of(dir).toAbsolutePath();
+    }
+
+    // ---- 语音网关: 库里是唯一来源, 运营后台开通/撤销, FreeSWITCH 的分机文件由它生成 ----
+
+    @Bean
+    @ConditionalOnMissingBean
+    PhoneGatewayMapper phoneGatewayMapper(SqlSessionFactory conversationSqlSessionFactory) {
+        return MyBatisSupport.mapper(conversationSqlSessionFactory, PhoneGatewayMapper.class);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(GatewayStore.class)
+    GatewayStore gatewayStore(PhoneGatewayMapper mapper) {
+        return new MyBatisGatewayStore(mapper);
+    }
+
+    /**
+     * 开通/撤销网关。FreeSWITCH 那一侧({@link GatewayControl})由电话模块提供, 没启用电话时是"不可用"。
+     *
+     * <p>门店资料一变(改了接入号、店名, 或删了店)就刷新对应的分机文件。放到单独的线程上做:
+     * FreeSWITCH 暂时连不上时每次要等几秒超时, 不能让商家保存资料跟着卡住。
+     */
+    @Bean(destroyMethod = "")
+    GatewayProvisioning gatewayProvisioning(GatewayStore gatewayStore, MerchantStore merchantStore,
+                                            org.springframework.beans.factory.ObjectProvider<GatewayControl> control) {
+        GatewayProvisioning provisioning = new GatewayProvisioning(gatewayStore, merchantStore,
+                () -> control.getIfAvailable(() -> GatewayControl.UNAVAILABLE));
+        java.util.concurrent.ExecutorService worker = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "vca-gateway-sync");
+            t.setDaemon(true);
+            return t;
+        });
+        merchantStore.addChangeListener(() -> worker.execute(() -> {
+            try {
+                provisioning.refresh();
+            } catch (RuntimeException e) {
+                log.warn("门店变更后刷新网关分机失败: {}", e.getMessage());
+            }
+        }));
+        return provisioning;
+    }
+
+    /** 启动完成后按库重写一遍网关分机文件(容器重建、文件被误删都能自愈) */
+    @Bean
+    org.springframework.context.ApplicationListener<org.springframework.boot.context.event.ApplicationReadyEvent>
+            gatewaySyncOnStartup(GatewayProvisioning gatewayProvisioning) {
+        return event -> new Thread(gatewayProvisioning::syncAll, "vca-gateway-startup-sync").start();
+    }
+
+    /** 运营后台接口(/api/admin/**) */
+    @Bean
+    org.springframework.web.reactive.function.server.RouterFunction<
+            org.springframework.web.reactive.function.server.ServerResponse> adminRoutes(
+            UserService userService, MerchantStore merchantStore, AdminPolicy adminPolicy,
+            com.vca.store.merchant.MerchantActivity merchantActivity, GatewayProvisioning gatewayProvisioning,
+            org.springframework.core.env.Environment env, StoreProperties props) {
+        return com.vca.store.admin.AdminRoutes.create(userService, merchantStore, adminPolicy, merchantActivity,
+                gatewayProvisioning, configMerchants(env), recordingsDir(props));
+    }
+
+    /** 配置文件里的门店(vca.telephony.merchants): 接入号 → 店名。它们不在库里, 但号码已被占用 */
+    record ConfigMerchant(String number, String name) {
+    }
+
+    private static java.util.Map<String, String> configMerchants(org.springframework.core.env.Environment env) {
+        java.util.Map<String, String> out = new java.util.LinkedHashMap<>();
+        org.springframework.boot.context.properties.bind.Binder.get(env)
+                .bind("vca.telephony.merchants",
+                        org.springframework.boot.context.properties.bind.Bindable.listOf(ConfigMerchant.class))
+                .ifBound(list -> list.forEach(m -> {
+                    if (m != null && m.number() != null && !m.number().isBlank()) {
+                        out.put(m.number().strip(), m.name() == null ? "" : m.name());
+                    }
+                }));
+        return out;
     }
 
     // ---- 长期记忆(跨会话个性化): remember 工具写入, 每轮对话回灌上下文(语义召回) ----
