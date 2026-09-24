@@ -37,3 +37,9 @@ build/
 # 电话客服模式的本地参数(商家账号、坐席号码、开场白), 见 start-phone.sh
 .env.phone
 .env.local
+
+# 通话录音回归的输出(含客户声音与说的话, 个人信息), 万一放进了仓库目录也别提交
+tools/call-review/out/
+tools/call-review/**/clips/
+tools/call-review/**/*.wav
+__pycache__/
