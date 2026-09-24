@@ -53,8 +53,11 @@ services:
       # 语音网关(HT813)的两个口各一个分机: LINE 口接电话线(来电进 AI), PHONE 口接话机(转人工)
       ATA_LINE_USER: ${ATA_LINE_USER:-}
       ATA_LINE_PASSWORD: ${ATA_LINE_PASSWORD:-}
+      ATA_LINE_NUMBER: ${ATA_LINE_NUMBER:-}
       ATA_PHONE_USER: ${ATA_PHONE_USER:-}
       ATA_PHONE_PASSWORD: ${ATA_PHONE_PASSWORD:-}
     volumes:
       - ./conf:/conf:ro
       - ./recordings:/recordings
+      # 每台语音网关一个分机文件(add-gateway.sh 生成, 含密码, 不进仓库); 增删后 reloadxml 即生效
+      - ./gateways:/etc/freeswitch/gateways

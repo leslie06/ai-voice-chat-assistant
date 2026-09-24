@@ -61,6 +61,12 @@ public final class FreeSwitchCallLeg implements CallLeg {
     /** 拨号计划里约定的通道变量名(见 deploy/freeswitch/conf/dialplan.xml) */
     static final String VAR_MEDIA_LOCAL_IP = "variable_vca_media_local_ip";
     static final String VAR_MEDIA_REMOTE_HOST = "variable_vca_media_remote_host";
+    /**
+     * 语音网关 LINE 分机在 FreeSWITCH 目录里绑定的接入号(见 deploy/freeswitch/add-gateway.sh)。
+     * 分机认证后目录变量会落到通道上, 有它就以它为准认领门店: 网关上"转 VoIP"那个框是装机时手填的,
+     * 填错了会把 A 店的来电送成 B 店; 而分机账号是开通时按店生成的, 不会错。
+     */
+    static final String VAR_ACCESS_NUMBER = "variable_vca_access_number";
 
     /** 挂机后连接最多再留多久(秒)。只为把挂机事件送到, 不需要长 */
     private static final int LINGER_SECONDS = 10;
@@ -380,7 +386,12 @@ public final class FreeSwitchCallLeg implements CallLeg {
                 callId = uuid;
             }
             peerNumber = blankToNull(data.get("Caller-Caller-ID-Number"));
-            calledNumber = blankToNull(data.get("Caller-Destination-Number"));
+            String dialed = blankToNull(data.get("Caller-Destination-Number"));
+            String bound = blankToNull(data.get(VAR_ACCESS_NUMBER));
+            calledNumber = bound != null ? bound : dialed;
+            if (bound != null && dialed != null && !bound.equals(dialed)) {
+                log.info("[{}] 网关分机绑定接入号 {}, 按它认领门店(网关送来的号码是 {}, 忽略)", callId, bound, dialed);
+            }
             checkCodec(data);
 
             request(EslMessage.command("myevents"), "myevents");

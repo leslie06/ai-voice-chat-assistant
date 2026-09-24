@@ -1,2 +1,4 @@
 recordings/
 .env
+# 语音网关分机(含密码), 由 add-gateway.sh 生成
+gateways/

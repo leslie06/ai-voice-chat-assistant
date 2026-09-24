@@ -25,13 +25,23 @@
 
   <context name="ai-agent">
 
+    <!-- 6000: 回声测试, 不经过 VCA。拨 AI 没声音时先拨它: 听得到自己 = 软电话↔FreeSWITCH 这段没问题 -->
+    <extension name="echo">
+      <condition field="destination_number" expression="^6000$">
+        <action application="answer"/>
+        <action application="echo"/>
+      </condition>
+    </extension>
+
     <!--
-      5000 / 5001: 接入 VCA 语音助手。
-      两个号码是用来演示"多商家"的 —— VCA 按被叫号码(这里就是 5000/5001)决定用哪家的开场白、知识库、
-      坐席和推送地址, 见 vca.telephony.merchants。接真实线路时把这里换成中继送进来的号码。
+      其余任何号码都接入 VCA。VCA 按接入号认领门店(开场白、资料、知识库、坐席、推送地址):
+        语音网关的 LINE 分机在目录里绑了 vca_access_number, 以它为准(见 gateways/ 与 add-gateway.sh);
+        没绑的(软电话、老的 ATA_LINE_USER)才用拨的号码。
+      以前这里写死 500[01], 每开一家店都要改模板、重建容器。能打进来的只有认证过的分机,
+      而拨号计划里没有任何通向外线的出口, 放开号码不会被盗打。
     -->
     <extension name="vca-inbound">
-      <condition field="destination_number" expression="^500[01]$">
+      <condition field="destination_number" expression="^[0-9]{3,20}$">
         <action application="answer"/>
         <action application="execute_extension" data="vca-connect XML ai-agent"/>
       </condition>
@@ -66,14 +76,6 @@
         <action application="record_session" data="/recordings/${uuid}.wav"/>
         <action application="socket" data="@VCA_HOST@:@VCA_PORT@ async full"/>
         <action application="hangup"/>
-      </condition>
-    </extension>
-
-    <!-- 6000: 回声测试, 不经过 VCA。5000 没声音时先拨它: 听得到自己 = 软电话↔FreeSWITCH 这段没问题 -->
-    <extension name="echo">
-      <condition field="destination_number" expression="^6000$">
-        <action application="answer"/>
-        <action application="echo"/>
       </condition>
     </extension>
 

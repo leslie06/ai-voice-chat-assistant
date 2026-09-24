@@ -279,8 +279,8 @@ vca-telephony/src/main/java/com/vca/telephony/
 | 文件 | 内容 |
 |------|------|
 | `freeswitch.xml` | 核心参数、加载的模块、控制台日志、事件套接字、访问名单、SIP profile |
-| `dialplan.xml` | `5000` 接入本项目、`vca-outbound` 外呼回连、`vca-connect` 公共接入段、`6000` 回声测试 |
-| `directory.xml` | 分机 `1000` 与域级 `dial-string` |
+| `dialplan.xml` | `6000` 回声测试、其余 3~20 位号码接入本项目、`vca-outbound` 外呼回连、`vca-connect` 公共接入段 |
+| `directory.xml` | 分机 `1000`、域级 `dial-string`、`.env` 里的老网关分机，以及 include 进来的 `gateways/*.xml`（每台网关一个文件，见 §7.4） |
 
 `@SIP_PASSWORD@` 这类占位符由 `entrypoint.sh` 在容器启动时用 `.env` 渲染，密码不进仓库。
 
@@ -401,9 +401,12 @@ ss -lnup | grep ":5060 " || echo "端口已释放"
 **传文件并启动**（在开发机上执行）：
 
 ```bash
-rsync -az --exclude .env --exclude recordings \
+rsync -az --exclude .env --exclude recordings --exclude gateways \
   deploy/freeswitch/ root@<服务器>:/opt/vca/freeswitch/
 ```
+
+**`gateways/` 一定要排除**：服务器上那份是各家店的网关分机（含密码，由 `add-gateway.sh` 在服务器上生成），
+不排除的话会被开发机上的联调文件覆盖，线上网关全部注册失败。
 
 服务器上写 `/opt/vca/freeswitch/.env`（**与开发机那份是两套独立密钥**，`chmod 600`）：
 
@@ -506,25 +509,39 @@ VCA_TELEPHONY_MERCHANTS_1_GREETING=您好，这里是启明少儿英语，请问
 **为什么两个口各注册一个分机**：网关在诊所路由器后面，家用宽带是动态 IP，按 IP 放行行不通，只能靠注册认证。
 所以它走 `internal`（5060，要认证）那条通道，不是中继用的 `external`。
 
-两个分机的账号密码在**服务器**的 `/opt/vca/freeswitch/.env` 里：
+**开通一家店的网关（2026-09-24 起）**：在服务器上执行
 
 ```bash
-grep ^ATA_ /opt/vca/freeswitch/.env
+cd /opt/vca/freeswitch
+./add-gateway.sh 5002 阳光口腔        # 接入号 + 店名(备注)
+./add-gateway.sh --list               # 已开通的网关, 以及此刻谁注册上来了
+./add-gateway.sh --remove 5002        # 撤销
 ```
+
+脚本给这家店生成一对分机（LINE `8NN1` / PHONE `8NN2`）和随机密码，写进 `gateways/gw-8NN1.xml`，
+然后 `reloadxml` —— **不用重启 FreeSWITCH，在途通话不受影响**。最后打印出 HT813 要填的账号密码，
+以及网页门店表单里"转人工分机"该填的号（PHONE 那个）。
+
+LINE 分机在目录里**绑定了接入号**（`vca_access_number`）：从它进来的电话一律按这家店接待，
+本项目不再只看网关"转 VoIP"框里填的号码 —— 那是装机时手填的，填错了会把 A 店的来电当成 B 店。
+拨号计划也不再写死号码（原来只认 `500[01]`，每开一家店都要改模板、重建容器）。
+
+老的那台网关（`.env` 里的 `ATA_LINE_USER=8001` / `ATA_PHONE_USER=8002`）照常可用；想让它也按分机认领，
+在 `.env` 里加 `ATA_LINE_NUMBER=5000` 后重建容器。
 
 **HT813 侧**（Web 界面），按端口分别配：
 
 | 页面 | 项 | 值 |
 |---|---|---|
 | FXS PORT（PHONE 口） | SIP Server | `<服务器公网 IP>:5060` |
-| FXS PORT | SIP User ID / Authenticate ID | `8002` |
-| FXS PORT | Password | `.env` 里的 `ATA_PHONE_PASSWORD` |
+| FXS PORT | SIP User ID / Authenticate ID | `add-gateway.sh` 打印的 PHONE 分机（老网关是 `8002`） |
+| FXS PORT | Password | 同上打印的密码（老网关是 `.env` 里的 `ATA_PHONE_PASSWORD`） |
 | FXO PORT（LINE 口） | SIP Server | `<服务器公网 IP>:5060` |
-| FXO PORT | SIP User ID / Authenticate ID | `8001` |
-| FXO PORT | Password | `.env` 里的 `ATA_LINE_PASSWORD` |
+| FXO PORT | SIP User ID / Authenticate ID | 打印的 LINE 分机（老网关是 `8001`） |
+| FXO PORT | Password | 同上打印的密码（老网关是 `.env` 里的 `ATA_LINE_PASSWORD`） |
 | FXO PORT | Number of Rings | `2`（响两声自动接，别设 1，会影响来电号码检测） |
 | FXO PORT | PSTN Ring Thru FXS | `No`（否则来电先让座机响，人一接就绕过了 AI） |
-| **BASIC SETTINGS** | **Unconditional Call Forward to VOIP** | 三个框都要填：User ID `5000`（美好口腔）或 `5001`，Sip Server `<服务器公网 IP>`，端口 `5060` |
+| **BASIC SETTINGS** | **Unconditional Call Forward to VOIP** | 三个框都要填：User ID 填这家店的接入号，Sip Server `<服务器公网 IP>`，端口 `5060` |
 | FXO PORT | Enable Current Disconnect | `Yes` |
 | FXO PORT | Enable PSTN Disconnect Tone Detection | `Yes`，Tone 填 `f1=450@-32,f2=450@-32,c=350/350;`（出厂是美国忙音，国内匹配不上） |
 | 两个口 | 语音编码 | 只留 PCMA（或 PCMU），关掉其它 |
@@ -536,8 +553,8 @@ grep ^ATA_ /opt/vca/freeswitch/.env
 **SIP Server 填服务器公网 IP，不是局域网地址。** 网关在诊所、FreeSWITCH 在云上，中间隔着公网。
 
 `Unconditional Call Forward to VOIP` 是关键：FXO 是模拟线，**没有被叫号码这个概念**，
-所以要在网关上写死一个号码送给 FreeSWITCH。它就是 §7.3 里 `MERCHANTS_n_NUMBER` 那个号，
-多商家路由（§12）靠它认领是哪家店。一台网关一家店；多店就多台网关，各填各的号。
+所以要在网关上写死一个号码送给 FreeSWITCH，否则呼不出去。用 `add-gateway.sh` 开通的网关，
+认领门店以分机绑定的接入号为准，这个框填错了也不会串店；老网关（没绑定）仍靠它认领。一台网关一家店。
 
 `Current Disconnect / Busy Tone Disconnect` 决定挂机检测：对端挂断后模拟线要靠极性反转或忙音才能察觉，
 不开的话通话会挂到单通上限（默认 5 分钟）才断。它是最容易漏配、也最容易表现为"电话占线不放"的一项。
@@ -565,8 +582,9 @@ HT813 连不上，这一步必须在阿里云控制台做：
 
 开成 `0.0.0.0/0` 的风险和对策：几分钟内就会有人来扫号。这套配置下扫号者拿不到什么——
 `internal` 通道 `auth-calls=true`、`accept-blind-reg=false`，必须摘要认证；
-拨号计划里只有 `500[01]` 和 `6000` 两个可拨目标，**没有任何通向 PSTN 的网关**，
-所以即使密码被猜中也盗打不了长途。真正要守住的是那两个 ATA 密码够长够随机（24 位十六进制）。
+拨号计划里能拨的只有"接入本项目"和 `6000` 回声测试，**没有任何通向 PSTN 的出口**，
+所以即使密码被猜中也盗打不了长途（最多打进来和 AI 聊天）。真正要守住的是各台网关的分机密码够长够随机
+（`add-gateway.sh` 生成 24 位十六进制）。
 
 验证开没开：
 
@@ -1231,7 +1249,8 @@ docker exec vca-freeswitch fs_cli -p "$P" -x "sofia global siptrace on"         
 | 项 | 状态 |
 |----|------|
 | 真实线路 | 服务器上的 FreeSWITCH 已部署运行（§7.2）；还差安全组、商家配置、HT813 三步，且没有线路可联调 |
-| 多商家自助开通 | 门店资料已进库（§12.1），接入号由运营分配；但拨号计划只认 `500[01]`、网关账号只有一对，第三家店仍要改 FreeSWITCH 配置 |
+| 多商家开通 | 门店资料在库里（§12.1），网关分机用 `add-gateway.sh` 热加载（§7.4），开一家店不改配置、不重启 |
+| 并发路数 | RTP 端口 16384-16402（安全组也只开了这段），约 10 路；转人工一通占两路。超过十来家店要一起放宽 |
 | 电话里的知识库检索 | 已完成（§9），按商家隔离 |
 | 按键进对话（例如按键输入手机号） | 事件已到 `CallSession`，只打日志 |
 | 留资 / 转人工 / 主动挂机 | 已完成（§10）。转人工 2026-09-24 改为先呼坐席再接通 |

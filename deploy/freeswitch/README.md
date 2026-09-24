@@ -51,7 +51,7 @@ VCA_TELEPHONY_ENABLED=true VCA_TELEPHONY_GREETING="您好，请问有什么可�
 
 | 拨号 | 作用 |
 |---|---|
-| `5000` | 接入 VCA 语音助手 |
+| 任意 3~20 位号码 | 接入 VCA 语音助手，按号码认领门店（如 `5000`） |
 | `6000` | 回声测试，不经过 VCA。能听到自己 = 软电话↔FreeSWITCH 这段没问题 |
 
 **务必戴耳机。** 电脑外放时 AI 的声音会被麦克风收回去，VAD 会把它当成你在插话，表现为 AI 说两个字就自己停。
@@ -82,7 +82,8 @@ curl -X POST http://127.0.0.1:8080/telephony/calls \
 服务器用的是另一份编排文件 `docker-compose.server.yml`，与本地那份只差 `network_mode: host`：
 
 ```bash
-rsync -az --exclude .env --exclude recordings deploy/freeswitch/ root@<服务器>:/opt/vca/freeswitch/
+# gateways/ 必须排除: 服务器上那份是线上各家店的网关账号, 同步过去会被开发机的覆盖或删掉
+rsync -az --exclude .env --exclude recordings --exclude gateways deploy/freeswitch/ root@<服务器>:/opt/vca/freeswitch/
 # 服务器上: 写好 .env(密钥、EXTERNAL_IP=公网 IP、国内机器还要 ALPINE_IMAGE 换镜像源)
 cd /opt/vca/freeswitch && docker compose -f docker-compose.server.yml up -d --build
 ```

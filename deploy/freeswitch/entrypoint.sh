@@ -81,19 +81,28 @@ fi
 : "${ATA_PHONE_USER:=}"       # PHONE 口(FXS, 接有绳话机): 转人工时它响
 : "${ATA_PHONE_PASSWORD:=}"
 
+: "${ATA_LINE_NUMBER:=}"      # 可选: LINE 口来电一律按这个接入号认领门店(不配则按网关转过来的号码)
+
 ata_users=""
 ata_user_xml() {
-  # $1=分机号 $2=密码 $3=注释
-  printf '    <!-- %s -->\n    <user id="%s">\n      <params>\n        <param name="password" value="%s"/>\n      </params>\n      <variables>\n        <variable name="user_context" value="ai-agent"/>\n        <variable name="effective_caller_id_number" value="%s"/>\n        <variable name="sip-force-contact" value="NDLB-connectile-dysfunction"/>\n      </variables>\n    </user>\n' "$3" "$1" "$2" "$1"
+  # $1=分机号 $2=密码 $3=注释 $4=绑定的接入号(可空)
+  access=""
+  if [ -n "${4:-}" ]; then
+    access="\n        <variable name=\"vca_access_number\" value=\"$4\"/>"
+  fi
+  printf "    <!-- %s -->\n    <user id=\"%s\">\n      <params>\n        <param name=\"password\" value=\"%s\"/>\n      </params>\n      <variables>\n        <variable name=\"user_context\" value=\"ai-agent\"/>\n        <variable name=\"effective_caller_id_number\" value=\"%s\"/>\n        <variable name=\"sip-force-contact\" value=\"NDLB-connectile-dysfunction\"/>${access}\n      </variables>\n    </user>\n" "$3" "$1" "$2" "$1"
 }
 if [ -n "$ATA_LINE_USER" ]; then
-  ata_users="${ata_users}$(ata_user_xml "$ATA_LINE_USER" "$ATA_LINE_PASSWORD" "语音网关 LINE 口(FXO): 电话线来电从这里进")"
+  ata_users="${ata_users}$(ata_user_xml "$ATA_LINE_USER" "$ATA_LINE_PASSWORD" "语音网关 LINE 口(FXO): 电话线来电从这里进" "$ATA_LINE_NUMBER")"
 fi
 if [ -n "$ATA_PHONE_USER" ]; then
   ata_users="${ata_users}$(ata_user_xml "$ATA_PHONE_USER" "$ATA_PHONE_PASSWORD" "语音网关 PHONE 口(FXS): 转人工时这台话机响")"
 fi
 
-mkdir -p /etc/freeswitch /var/lib/freeswitch/db /var/log/freeswitch /recordings
+mkdir -p /etc/freeswitch /etc/freeswitch/gateways /var/lib/freeswitch/db /var/log/freeswitch /recordings
+# gateways/ 是宿主机挂进来的(每台网关一个文件, 见 add-gateway.sh)。目录里一个文件都没有时,
+# 目录模板里那行通配 include 会匹配不到, 放一个空文件垫着
+[ -e /etc/freeswitch/gateways/00-empty.xml ] || printf '<include></include>\n' > /etc/freeswitch/gateways/00-empty.xml
 for f in /conf/*.xml; do
   sed -e "s|@EXTERNAL_IP@|${EXTERNAL_IP}|g" \
       -e "s|@SIP_PASSWORD@|${SIP_PASSWORD}|g" \

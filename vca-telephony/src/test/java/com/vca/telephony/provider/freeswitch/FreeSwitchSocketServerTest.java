@@ -78,6 +78,20 @@ class FreeSwitchSocketServerTest {
         assertThat(captured.calledAtSetup).isEqualTo("01088886666");
     }
 
+    /**
+     * 语音网关的 LINE 分机绑定了接入号: 以它认领门店, 不看网关送来的号码 ——
+     * 那是装机时在网关上手填的, 填错了会把这家店的来电送成别家。
+     */
+    @Test
+    void gatewayBoundAccessNumberWinsOverTheDialedNumber() throws Exception {
+        start(FreeSwitchConfig.onPort(0));
+        fs.answerHandshake(UUID, "13800138000", "5000", "variable_vca_access_number: 5002\n");
+
+        awaitUntil(() -> captured.calledAtSetup != null);
+        assertThat(captured.calledAtSetup).isEqualTo("5002");
+        assertThat(captured.peerAtSetup).isEqualTo("13800138000");
+    }
+
     /** unicast 命令: UDP、FreeSWITCH 侧端口交给系统分配、地址取自拨号计划的通道变量 */
     @Test
     void unicastCommandUsesDialplanAddressesAndEphemeralPort() throws Exception {

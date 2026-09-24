@@ -41,8 +41,14 @@ final class FakeFreeSwitchChannel implements Closeable {
 
     /** 走完一次标准握手, 返回 unicast 命令 */
     Command answerHandshake(String uuid, String caller, String callee) throws IOException {
+        return answerHandshake(uuid, caller, callee, "");
+    }
+
+    /** @param extraHeaders 额外的通道数据(每行 "名: 值\n"), 如网关分机绑定的 variable_vca_access_number */
+    Command answerHandshake(String uuid, String caller, String callee, String extraHeaders) throws IOException {
         expect("connect");
         send("Event-Name: CHANNEL_DATA\nContent-Type: command/reply\nReply-Text: %2BOK%0A\nSocket-Mode: async\n"
+                + extraHeaders
                 + "Unique-ID: " + uuid + "\nCaller-Caller-ID-Number: " + caller
                 + "\nCaller-Destination-Number: " + callee
                 + "\nChannel-Read-Codec-Name: PCMA\nChannel-Read-Codec-Rate: 8000"

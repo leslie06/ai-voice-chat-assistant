@@ -30,5 +30,10 @@
       两个口各注册一个分机: 网关在诊所路由器后面, 家用宽带是动态 IP, 按 IP 放行行不通, 只能靠注册。
     -->
 @ATA_USERS@
+    <!--
+      一台网关(一家店)一个文件, 由 add-gateway.sh 生成, 放在宿主机挂载进来的 gateways/ 目录。
+      增删之后 reloadxml 即生效, 不用重启 FreeSWITCH(在途通话不受影响)。
+    -->
+    <X-PRE-PROCESS cmd="include" data="gateways/*.xml"/>
   </domain>
 </section>
