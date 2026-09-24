@@ -456,8 +456,19 @@ public class StoreAutoConfiguration {
     @Bean
     org.springframework.web.reactive.function.server.RouterFunction<
             org.springframework.web.reactive.function.server.ServerResponse> merchantRoutes(
-            UserService userService, MerchantStore merchantStore, AdminPolicy adminPolicy) {
-        return MerchantRoutes.create(userService, merchantStore, adminPolicy);
+            UserService userService, MerchantStore merchantStore, AdminPolicy adminPolicy,
+            PhoneCallSummaryMapper phoneCallSummaryMapper, PhoneLeadMapper phoneLeadMapper, StoreProperties props) {
+        String dir = props.getPhoneRecordingsDir() == null ? "" : props.getPhoneRecordingsDir().strip();
+        java.nio.file.Path recordings = dir.isEmpty() ? null : java.nio.file.Path.of(dir).toAbsolutePath();
+        if (recordings == null) {
+            log.info("商家后台: 未配置录音目录(VCA_PHONE_RECORDINGS_DIR), 不提供录音回放");
+        } else if (!java.nio.file.Files.isReadable(recordings)) {
+            log.warn("商家后台: 录音目录 {} 不存在或不可读, 回放会一直 404", recordings);
+        } else {
+            log.info("商家后台: 录音回放目录 {}", recordings);
+        }
+        return MerchantRoutes.create(userService, merchantStore, adminPolicy,
+                new com.vca.store.merchant.MerchantActivity(phoneCallSummaryMapper, phoneLeadMapper, recordings));
     }
 
     // ---- 长期记忆(跨会话个性化): remember 工具写入, 每轮对话回灌上下文(语义召回) ----

@@ -71,7 +71,10 @@
         <action application="set" data="vca_media_remote_host=@VCA_HOST@"/>
         <!-- VCA 挂了或没回挂机指令时的兜底: 停泊超过 15 分钟自动挂断, 不留僵尸通道 -->
         <action application="set" data="park_timeout=900"/>
-        <!-- 联调期留双声道录音: 左 = 来电方说的, 右 = VCA 回的。文件名就是通话 id, 与 VCA 日志和落库记录对得上 -->
+        <!--
+          双声道录音: 左 = 来电方说的, 右 = VCA 回的。文件名就是通话 id, 与 VCA 日志和落库记录对得上。
+          商家后台可回放; 超过保留期由 deploy/ops/vca-cleanup.sh 删除(录音是个人信息, 留存要有上限)
+        -->
         <action application="set" data="RECORD_STEREO=true"/>
         <action application="record_session" data="/recordings/${uuid}.wav"/>
         <action application="socket" data="@VCA_HOST@:@VCA_PORT@ async full"/>

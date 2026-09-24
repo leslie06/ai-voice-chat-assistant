@@ -83,6 +83,12 @@ public class StoreProperties {
      */
     private String adminUserIds = "";
 
+    /**
+     * FreeSWITCH 的录音目录(与 VCA 同机部署时, 服务器上是 /opt/vca/freeswitch/recordings)。
+     * 商家后台据此回放录音; 留空 = 不提供回放。VCA 进程要对它有读权限。
+     */
+    private String phoneRecordingsDir = "";
+
     /** 应用对外基址(如 https://host:8443), 用于拼重置密码链接。留空则邮件只给令牌。 */
     private String baseUrl = "";
 
@@ -219,6 +225,14 @@ public class StoreProperties {
     public void setOssPrefix(String ossPrefix) { this.ossPrefix = ossPrefix; }
     public int getOssPartSizeBytes() { return ossPartSizeBytes; }
     public void setOssPartSizeBytes(int ossPartSizeBytes) { this.ossPartSizeBytes = ossPartSizeBytes; }
+
+    public String getPhoneRecordingsDir() {
+        return phoneRecordingsDir;
+    }
+
+    public void setPhoneRecordingsDir(String phoneRecordingsDir) {
+        this.phoneRecordingsDir = phoneRecordingsDir;
+    }
 
     public String getAdminUserIds() {
         return adminUserIds;

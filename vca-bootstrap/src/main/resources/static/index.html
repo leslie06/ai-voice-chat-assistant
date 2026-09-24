@@ -133,6 +133,16 @@
     .mprev{white-space:pre-wrap;font-size:12.5px;line-height:1.6;background:rgba(127,127,127,.12);
       border-radius:8px;padding:10px 12px;margin-top:8px;max-height:260px;overflow:auto}
     @media (max-width:520px){.mform{grid-template-columns:1fr}}
+    /* 门店的通话与线索 */
+    .mact-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:10px 0 4px;font-size:13px}
+    .mact-head .modelsel.on{font-weight:600;border-color:var(--text)}
+    .mcall{padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;line-height:1.55;overflow-wrap:anywhere}
+    .mcall .meta{color:var(--sub);font-size:12px}
+    .mcall .follow{color:var(--sub);font-size:12.5px}
+    .mcall audio{width:100%;margin-top:6px}
+    .mint{display:inline-block;padding:0 7px;border-radius:999px;font-size:11px;line-height:18px;margin-right:6px;
+      background:rgba(127,127,127,.18);color:var(--text)}
+    .mint.A{background:#e5484d;color:#fff}.mint.B{background:#f5a524;color:#1a1a1a}
     /* 对话区 */
     main{flex:1;overflow-y:auto;padding:20px 0 8px;}
     .wrap{max-width:760px;margin:0 auto;padding:0 16px;}
@@ -679,6 +689,13 @@
             <div class="full field-hint" id="mMsg" style="display:none;margin:0"></div>
             <div class="full mprev" id="mPrevBox" hidden></div>
           </div>
+        </div>
+        <div id="mActivity" hidden>
+          <div class="mact-head"><b id="mActTitle"></b><span style="flex:1"></span>
+            <button class="modelsel" id="mActCalls" style="cursor:pointer">通话</button>
+            <button class="modelsel" id="mActLeads" style="cursor:pointer">线索</button>
+            <button class="modelsel" id="mActClose" style="cursor:pointer">收起</button></div>
+          <div id="mActList"></div>
         </div>
         <div class="field-hint">每家门店一个接入号（网关或线路送来的被叫号码），由运营在装网关时开通；接入号、转人工分机、音色和热词表由运营配置，其余资料你可以随时自己改。选好行业后，AI 会按行业的路数接电话（诊所约面诊、培训机构约试听），资料填进去直接交给电话 AI 作答，改完立即生效，不用重启。价格和时间以这里为准，AI 不会编造资料里没有的信息；店名和项目名会自动进识别热词表，电话里听得更准。</div>
       </div>
@@ -2365,6 +2382,9 @@ function renderMerchantList(list){
     const ind=M_INDUSTRIES.find(i=>i.code===m.industry);
     name.textContent=((M_PLACEHOLDERS[m.industry]||M_PLACEHOLDERS.generic).icon)+' '+(m.name||'未命名')+'  ·  '+(ind?ind.label:'其他商家')+'  ·  接入号 '+m.number+(meAdmin?'  ·  账号 #'+m.ownerId:'')+(m.enabled?'':'  ·  已停用');
     if(!m.enabled) name.classList.add('moff');
+    const act=document.createElement('button'); act.className='iconbtn'; act.textContent='📞'; act.title='通话与线索';
+    act.onclick=()=>openMerchantActivity(m);
+    row.appendChild(act);
     const edit=document.createElement('button'); edit.className='iconbtn'; edit.textContent='✏️'; edit.title='编辑';
     edit.onclick=()=>openMerchantEditor(m);
     const del=document.createElement('button'); del.className='iconbtn'; del.textContent='🗑'; del.title='删除';
@@ -2373,6 +2393,7 @@ function renderMerchantList(list){
   }
 }
 function openMerchantEditor(m){
+  closeMerchantActivity();   // 编辑和看通话二选一, 免得面板叠在一起
   mEditingId=m?m.id:null;
   for(const [el,key] of Object.entries(M_FIELDS)) document.getElementById(el).value=(m&&m[key])||'';
   if(!(m&&m.industry)) document.getElementById('mIndustry').value=M_INDUSTRIES[0]?M_INDUSTRIES[0].code:'generic';
@@ -2415,6 +2436,75 @@ async function previewMerchant(){
   box.textContent=r.ok ? ((r.data&&r.data.prompt)||'（资料为空，AI 只会用通用话术）') : '预览失败';
   box.hidden=false;
 }
+/* ---------- 门店的通话与线索 (对应 /api/merchants/{id}/calls|leads) ----------
+   内容里有客户原话和模型输出, 一律 textContent 渲染, 不拼 innerHTML */
+const M_INTENT={A:'A 已约/要回电',B:'B 有兴趣',C:'C 只是问问',D:'D 无效'};
+let mActShop=null, mActAudioUrl=null;
+function openMerchantActivity(m){
+  mActShop=m; closeMerchantEditor();
+  document.getElementById('mActivity').hidden=false;
+  document.getElementById('mActTitle').textContent=(m.name||m.number)+' · 接入号 '+m.number;
+  loadMerchantActivity('calls');
+}
+function closeMerchantActivity(){
+  document.getElementById('mActivity').hidden=true; mActShop=null;
+  if(mActAudioUrl){ URL.revokeObjectURL(mActAudioUrl); mActAudioUrl=null; }
+}
+function mEl(tag, cls, text){ const e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e; }
+function mTime(at){ return at ? at.replace('T',' ').slice(0,16) : ''; }
+async function loadMerchantActivity(tab){
+  if(!mActShop) return;
+  document.getElementById('mActCalls').classList.toggle('on', tab==='calls');
+  document.getElementById('mActLeads').classList.toggle('on', tab==='leads');
+  const box=document.getElementById('mActList'); box.textContent='加载中…';
+  const r=await api('GET','/api/merchants/'+mActShop.id+'/'+tab);
+  box.textContent='';
+  if(!r.ok){ box.appendChild(mEl('div','field-hint',(r.data&&r.data.error)||'加载失败')); return; }
+  const list=r.data||[];
+  if(!list.length){
+    box.appendChild(mEl('div','field-hint', tab==='calls'?'最近 30 天没有 10 秒以上的来电。':'最近 90 天没有留资。'));
+    return;
+  }
+  for(const x of list) box.appendChild(tab==='calls'?renderCall(x):renderLead(x));
+}
+function renderCall(c){
+  const row=mEl('div','mcall');
+  const head=mEl('div');
+  head.appendChild(mEl('span','mint '+(c.intent||''), M_INTENT[c.intent]||('意向 '+(c.intent||'?'))));
+  head.appendChild(mEl('span','meta', mTime(c.at)+'  ·  '+(c.peerNumber||'未知号码')+'  ·  '+(c.durationSec||0)+' 秒'));
+  row.appendChild(head);
+  if(c.summary) row.appendChild(mEl('div',null,c.summary));
+  if(c.followUp) row.appendChild(mEl('div','follow','待跟进：'+c.followUp));
+  if(c.hasRecording){
+    const btn=mEl('button','modelsel','▶ 听录音'); btn.style.cursor='pointer'; btn.style.marginTop='4px';
+    btn.onclick=()=>playRecording(c.callId, row, btn);
+    row.appendChild(btn);
+  }
+  return row;
+}
+function renderLead(l){
+  const row=mEl('div','mcall');
+  row.appendChild(mEl('div',null,[l.name||'未留称呼', l.phone||l.peerNumber||'', l.intent||''].filter(Boolean).join('  ·  ')));
+  const meta=[mTime(l.at)]; if(l.preferredTime) meta.push('期望：'+l.preferredTime);
+  row.appendChild(mEl('div','meta',meta.join('  ·  ')));
+  if(l.note) row.appendChild(mEl('div','follow',l.note));
+  return row;
+}
+/* audio 标签带不了登录令牌: 用 fetch 取回再播放, 同一时间只留一段 */
+async function playRecording(callId, row, btn){
+  btn.disabled=true; btn.textContent='加载中…';
+  try{
+    const r=await fetch('/api/merchants/'+mActShop.id+'/calls/'+encodeURIComponent(callId)+'/recording',{headers:authHeaders()});
+    if(!r.ok){ btn.textContent='录音不存在或已过保留期'; return; }
+    if(mActAudioUrl){ URL.revokeObjectURL(mActAudioUrl); document.querySelectorAll('#mActList audio').forEach(a=>a.remove()); }
+    mActAudioUrl=URL.createObjectURL(await r.blob());
+    const audio=document.createElement('audio'); audio.controls=true; audio.src=mActAudioUrl;
+    row.appendChild(audio); btn.remove(); audio.play().catch(()=>{});
+  }catch(e){ btn.textContent='加载失败'; btn.disabled=false; }
+}
+document.getElementById('mActCalls').onclick=()=>loadMerchantActivity('calls');
+document.getElementById('mActLeads').onclick=()=>loadMerchantActivity('leads');
+document.getElementById('mActClose').onclick=closeMerchantActivity;
 document.getElementById('mNew').onclick=()=>openMerchantEditor(null);
 document.getElementById('mSave').onclick=saveMerchant;
 document.getElementById('mCancel').onclick=closeMerchantEditor;

@@ -8,6 +8,7 @@
 | `vca-watch.sh check` | 每 5 分钟 | VCA 健康、FreeSWITCH、各店网关是否在线、磁盘。连续失败到阈值报一次警，恢复再报一次，中间不刷屏 |
 | `vca-watch.sh daily` | 每天 9:00 | 昨天共多少通来电；各接入号有小结的通话数、A/B 意向数、留资数；还有哪些告警没恢复 |
 | `vca-backup.sh` | 每天 3:30 | 数据库（`mysqldump --single-transaction`，不锁表）+ 电话侧配置（网关分机、FreeSWITCH 密钥、`/etc/vca.env`），保留 7 天；失败推群 |
+| `vca-cleanup.sh` | 每天 4:00 | 删除超过 `RECORDING_KEEP_DAYS`（默认 90 天）的通话录音。录音是个人信息，留存要有上限；小结和线索是文字，不受影响 |
 
 ## 安装
 

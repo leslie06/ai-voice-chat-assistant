@@ -6,7 +6,7 @@ cd "$(dirname "$(readlink -f "$0")")"
 DEST=/opt/vca/ops
 
 install -d -m 755 "$DEST"
-install -m 755 lib.sh vca-watch.sh vca-backup.sh "$DEST/"
+install -m 755 lib.sh vca-watch.sh vca-backup.sh vca-cleanup.sh "$DEST/"
 
 if [ ! -f /etc/vca-watch.env ]; then
   install -m 600 vca-watch.env.example /etc/vca-watch.env
@@ -22,6 +22,7 @@ SHELL=/bin/bash
 */5 * * * * root $DEST/vca-watch.sh check  >> /var/log/vca-ops.log 2>&1
 0 9 * * *   root $DEST/vca-watch.sh daily  >> /var/log/vca-ops.log 2>&1
 30 3 * * *  root $DEST/vca-backup.sh       >> /var/log/vca-ops.log 2>&1
+0 4 * * *   root $DEST/vca-cleanup.sh      >> /var/log/vca-ops.log 2>&1
 CRON
 chmod 644 /etc/cron.d/vca-ops
 
@@ -36,6 +37,6 @@ cat > /etc/logrotate.d/vca-ops <<'ROT'
 }
 ROT
 
-echo "✓ 已安装到 $DEST, 定时任务 /etc/cron.d/vca-ops(每 5 分钟值守、每天 9 点日报、每天 3:30 备份)"
+echo "✓ 已安装到 $DEST, 定时任务 /etc/cron.d/vca-ops(每 5 分钟值守、每天 9 点日报、3:30 备份、4:00 清理过期录音)"
 echo "  验证推送: $DEST/vca-watch.sh test"
 echo "  立即备份: $DEST/vca-backup.sh && ls -lh /var/backups/vca"

@@ -267,6 +267,7 @@ vca-telephony/src/main/java/com/vca/telephony/
 | `transfer-dial-string` | `VCA_TELEPHONY_TRANSFER_DIAL_STRING` | 空 | 转人工呼哪里；留空则不下发该工具。库里的门店不继承它 |
 | `transfer-failed-prompt` | `VCA_TELEPHONY_TRANSFER_FAILED_PROMPT` | "同事这会儿没接到…" | 坐席没接时说的话（预合成），说完 AI 接着聊 |
 | `vca.store.admin-user-ids` | `VCA_ADMIN_USER_IDS` | 空 | 运营管理员账号 id，见 §12.1 |
+| `vca.store.phone-recordings-dir` | `VCA_PHONE_RECORDINGS_DIR` | 空 | FreeSWITCH 录音目录，商家后台据此回放，见 §11.1 |
 | `summary.enabled` | `VCA_TELEPHONY_SUMMARY_ENABLED` | `true` | 通话后小结，见 §11 |
 | `summary.min-duration-sec` | `VCA_TELEPHONY_SUMMARY_MIN_SEC` | `10` | 短于此的通话不摘要 |
 | `summary.webhook-url` | `VCA_TELEPHONY_SUMMARY_WEBHOOK` | 空 | 小结推送地址（企业微信/钉钉群机器人 URL 直接填） |
@@ -849,6 +850,29 @@ vca:
   默认跟对话用同一个厂商与模型。
 
 **落库与推送各自兜异常**：两件事互不依赖，而群里那条消息比留档重要，数据库挂了不能连带把通知也吞掉。
+
+### 11.1 商家后台：通话、线索、录音（2026-09-24）
+
+群推送会被刷掉、没配推送地址的店干脆收不到，所以网页上也要能查。门店所属账号（或运营管理员）在
+"设置 → 电话客服"的门店列表里点 📞，可以看：
+
+| 页签 | 内容 | 接口 |
+|---|---|---|
+| 通话 | 最近 30 天的通话小结：时间、来电号码、时长、意向等级、摘要、待跟进；有录音的可以直接听 | `GET /api/merchants/{id}/calls?days=30` |
+| 线索 | 最近 90 天 AI 记下的称呼、电话、意向、期望时间 | `GET /api/merchants/{id}/leads?days=90` |
+| 录音 | 双声道 wav（左 = 来电方，右 = AI） | `GET /api/merchants/{id}/calls/{callId}/recording` |
+
+几处取舍：
+
+- **按"接入号 + 所属账号"两个条件取**。接入号会回收再分配，只按号码查，新店会看到旧店客户的电话和手机号。
+- **录音只给这家店名下有记录的通话**，通话 id 必须是 uuid 形状（它会拼进文件路径）。浏览器的 audio 标签带不了登录令牌，
+  网页用 fetch 带令牌取回再播放，不开"凭链接就能听"的口子。
+- 只有 10 秒以上的通话有小结，所以列表里看不到秒挂、拨错的电话。
+- 页面里的摘要和线索来自客户原话和模型输出，一律按纯文本渲染。
+- 录音目录由 `VCA_PHONE_RECORDINGS_DIR` 指定（服务器上 `/opt/vca/freeswitch/recordings`），VCA 以 `vca` 用户运行，要能读这个目录；
+  启动日志会打"录音回放目录 …"或"不可读"。
+- **录音保留期**：`deploy/ops/vca-cleanup.sh` 每天删除超过 `RECORDING_KEEP_DAYS`（默认 90 天）的录音。录音里是客户的声音和手机号，
+  留存要有上限；小结与线索是文字，不受影响。
 
 ---
 

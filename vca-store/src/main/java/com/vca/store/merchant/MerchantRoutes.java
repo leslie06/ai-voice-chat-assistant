@@ -11,9 +11,13 @@ import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.http.MediaType;
+import org.springframework.web.reactive.function.BodyInserters;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +38,9 @@ import static org.springframework.web.reactive.function.server.RequestPredicates
  *   PUT    /api/merchants/{id}      {profile} → profile  整体覆盖(没传的字段按空处理)
  *   DELETE /api/merchants/{id}      → {ok}
  *   GET    /api/merchants/{id}/preview → {prompt}        看 AI 实际会拿到的机构资料文本(调试用)
+ *   GET    /api/merchants/{id}/calls?days=30 → [call]     通话小结(摘要、意向、跟进建议、有没有录音)
+ *   GET    /api/merchants/{id}/leads?days=90 → [lead]     AI 记下的线索(称呼、电话、意向、期望时间)
+ *   GET    /api/merchants/{id}/calls/{callId}/recording → audio/wav   双声道录音(左 = 来电方, 右 = AI)
  *   GET    /api/merchants/industries   → [industry]       可选的行业及各字段在该行业里的叫法(网页表单用)
  * </pre>
  *
@@ -56,19 +63,30 @@ public final class MerchantRoutes {
     private final UserService users;
     private final MerchantStore store;
     private final AdminPolicy admins;
+    /** 通话/线索/录音; null = 没有这些表(只用门店资料的部署), 相关接口返回空 */
+    private final MerchantActivity activity;
 
-    private MerchantRoutes(UserService users, MerchantStore store, AdminPolicy admins) {
+    private MerchantRoutes(UserService users, MerchantStore store, AdminPolicy admins, MerchantActivity activity) {
         this.users = users;
         this.store = store;
         this.admins = admins == null ? AdminPolicy.NONE : admins;
+        this.activity = activity;
     }
 
     public static RouterFunction<ServerResponse> create(UserService users, MerchantStore store, AdminPolicy admins) {
-        MerchantRoutes r = new MerchantRoutes(users, store, admins);
+        return create(users, store, admins, null);
+    }
+
+    public static RouterFunction<ServerResponse> create(UserService users, MerchantStore store, AdminPolicy admins,
+                                                        MerchantActivity activity) {
+        MerchantRoutes r = new MerchantRoutes(users, store, admins, activity);
         return RouterFunctions.route(GET("/api/merchants"), r::list)
                 .andRoute(POST("/api/merchants"), r::createOne)
                 .andRoute(GET("/api/merchants/industries"), r::industries)
                 .andRoute(GET("/api/merchants/{id}/preview"), r::preview)
+                .andRoute(GET("/api/merchants/{id}/calls"), r::calls)
+                .andRoute(GET("/api/merchants/{id}/leads"), r::leads)
+                .andRoute(GET("/api/merchants/{id}/calls/{callId}/recording"), r::recording)
                 .andRoute(GET("/api/merchants/{id}"), r::get)
                 .andRoute(PUT("/api/merchants/{id}"), r::update)
                 .andRoute(DELETE("/api/merchants/{id}"), r::delete);
@@ -118,6 +136,91 @@ public final class MerchantRoutes {
         return blocking(() -> store.findById(id).filter(p -> canSee(uid, p)))
                 .flatMap(opt -> opt.map(p -> json(200, Map.of("prompt", p.renderProfile())))
                         .orElseGet(() -> json(404, Map.of("error", "商家不存在"))));
+    }
+
+    // ---- 通话 / 线索 / 录音: 门店所属账号或管理员能看 ----
+
+    private Mono<ServerResponse> calls(ServerRequest req) {
+        return withShop(req, shop -> {
+            LocalDateTime since = since(req, 30);
+            return activity.calls(shop, since).stream().map(c -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("callId", c.getCallId());
+                m.put("at", c.getCreatedAt() == null ? null : c.getCreatedAt().toString());
+                m.put("peerNumber", c.getPeerNumber());
+                m.put("durationSec", c.getDurationSec());
+                m.put("turns", c.getTurns());
+                m.put("intent", c.getIntent());
+                m.put("summary", c.getSummary());
+                m.put("followUp", c.getFollowUp());
+                m.put("hasRecording", activity.hasRecording(c.getCallId()));
+                return m;
+            }).toList();
+        });
+    }
+
+    private Mono<ServerResponse> leads(ServerRequest req) {
+        return withShop(req, shop -> activity.leads(shop, since(req, 90)).stream().map(l -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("callId", l.getCallId());
+            m.put("at", l.getCreatedAt() == null ? null : l.getCreatedAt().toString());
+            m.put("name", l.getName());
+            m.put("phone", l.getPhone());
+            m.put("peerNumber", l.getPeerNumber());
+            m.put("intent", l.getIntent());
+            m.put("preferredTime", l.getPreferredTime());
+            m.put("note", l.getNote());
+            return m;
+        }).toList());
+    }
+
+    /**
+     * 录音文件。浏览器的 audio 标签带不了 Authorization 头, 所以网页是用 fetch 取回 blob 再播放 ——
+     * 这里照常按 Bearer 鉴权, 不开"凭链接就能听"的口子(录音里是客户的声音和手机号)。
+     */
+    private Mono<ServerResponse> recording(ServerRequest req) {
+        Long uid = userId(req);
+        if (uid == null) {
+            return unauthorized();
+        }
+        if (activity == null) {
+            return json(404, Map.of("error", "录音不存在"));
+        }
+        long id = longOf(req.pathVariable("id"));
+        String callId = req.pathVariable("callId");
+        return blocking(() -> store.findById(id).filter(p -> canSee(uid, p))
+                        .flatMap(shop -> activity.recording(shop, callId)))
+                .flatMap(opt -> opt.<Mono<ServerResponse>>map(file -> ServerResponse.ok()
+                                .contentType(MediaType.parseMediaType("audio/wav"))
+                                .header("Cache-Control", "private, no-store")
+                                .body(BodyInserters.fromResource(new FileSystemResource(file))))
+                        .orElseGet(() -> json(404, Map.of("error", "录音不存在或已过保留期"))));
+    }
+
+    /** 取门店(不是自己的当不存在), 再在阻塞线程上跑查询 */
+    private Mono<ServerResponse> withShop(ServerRequest req,
+                                          java.util.function.Function<MerchantProfile, Object> query) {
+        Long uid = userId(req);
+        if (uid == null) {
+            return unauthorized();
+        }
+        long id = longOf(req.pathVariable("id"));
+        return blocking(() -> store.findById(id).filter(p -> canSee(uid, p))
+                        .map(shop -> activity == null ? (Object) List.of() : query.apply(shop)))
+                .flatMap(opt -> opt.map(body -> json(200, body))
+                        .orElseGet(() -> json(404, Map.of("error", "商家不存在"))));
+    }
+
+    /** ?days=N, 默认 fallbackDays, 封顶一年 */
+    private static LocalDateTime since(ServerRequest req, int fallbackDays) {
+        int days = req.queryParam("days").map(v -> {
+            try {
+                return Integer.parseInt(v);
+            } catch (NumberFormatException e) {
+                return fallbackDays;
+            }
+        }).orElse(fallbackDays);
+        return LocalDateTime.now().minusDays(Math.max(1, Math.min(days, 366)));
     }
 
     @SuppressWarnings("unchecked")
