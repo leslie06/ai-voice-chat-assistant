@@ -42,6 +42,11 @@ class PhoneSkillsTest {
         }
 
         @Override
+        public boolean supportsTransfer() {
+            return transferable;
+        }
+
+        @Override
         public boolean transfer(String dialString) {
             transfers.add(dialString);
             return transferable;
@@ -68,8 +73,12 @@ class PhoneSkillsTest {
     }
 
     private static CallContext context(StubLeg leg, Runnable endCall) {
+        return context(leg, endCall, leg::transfer);
+    }
+
+    private static CallContext context(StubLeg leg, Runnable endCall, java.util.function.Consumer<String> transfer) {
         return new CallContext(leg.callId(), leg.peerNumber(), leg.calledNumber(), leg, endCall,
-                new Merchant("01088886666", "美好口腔", "您好", "", "11", "user/1000", "", ""));
+                new Merchant("01088886666", "美好口腔", "您好", "", "11", "user/1000", "", ""), transfer);
     }
 
     /** 通话事实(通话 id/来电号码/商家)由系统填, 模型只填它从客户那听来的 */
@@ -118,28 +127,35 @@ class PhoneSkillsTest {
         assertThat(r.content()).contains("回电");
     }
 
+    /**
+     * 转人工只登记, 不当场桥接: 确认语是工具返回后才合成的, 立刻桥接客户就只听见回铃音。
+     * 真正的桥接由通话会话在播完之后做(见 CallSessionTest)。
+     */
     @Test
-    void transferBridgesTheCall() {
+    void transferIsDeferredUntilTheConfirmationIsSpoken() {
         StubLeg leg = new StubLeg();
+        List<String> scheduled = new CopyOnWriteArrayList<>();
 
-        SkillResult r = new TransferToHumanSkill(context(leg, () -> { }), "user/1000")
+        SkillResult r = new TransferToHumanSkill(context(leg, () -> { }, scheduled::add), "user/1000")
                 .execute(Map.of("reason", "客户要投诉")).block();
 
-        assertThat(leg.transfers).containsExactly("user/1000");
+        assertThat(scheduled).containsExactly("user/1000");
+        assertThat(leg.transfers).as("工具执行时不该直接桥接").isEmpty();
         assertThat(r.terminal()).isTrue();
         assertThat(r.content()).contains("转接");
     }
 
-    /** 桥接失败(线路问题)时不能假装转成功 */
+    /** 接入层不支持转接(如 Asterisk AudioSocket)时不能说"请稍等" —— 客户会对着转不出去的电话干等 */
     @Test
-    void transferFailureIsNotHiddenFromTheCustomer() {
+    void transferOnALegThatCannotBridgeOffersACallback() {
         StubLeg leg = new StubLeg();
         leg.transferable = false;
+        List<String> scheduled = new CopyOnWriteArrayList<>();
 
-        SkillResult r = new TransferToHumanSkill(context(leg, () -> { }), "user/1000")
+        SkillResult r = new TransferToHumanSkill(context(leg, () -> { }, scheduled::add), "user/1000")
                 .execute(Map.of()).block();
 
-        assertThat(r.content()).contains("没成功");
+        assertThat(scheduled).isEmpty();
         assertThat(r.content()).contains("回电");
     }
 

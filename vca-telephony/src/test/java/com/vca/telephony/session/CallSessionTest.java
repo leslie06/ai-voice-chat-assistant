@@ -57,10 +57,23 @@ class CallSessionTest {
         final List<byte[]> written = Collections.synchronizedList(new ArrayList<>());
         volatile String hangupReason;
         volatile boolean continuousMedia;
+        final List<String> transfers = Collections.synchronizedList(new ArrayList<>());
+        volatile boolean transferSendOk = true;
 
         @Override
         public boolean needsContinuousMedia() {
             return continuousMedia;
+        }
+
+        @Override
+        public boolean supportsTransfer() {
+            return true;
+        }
+
+        @Override
+        public boolean transfer(String dialString) {
+            transfers.add(dialString);
+            return transferSendOk;
         }
 
         @Override
@@ -306,6 +319,89 @@ class CallSessionTest {
         assertThat(call.isClosed()).isTrue();
         assertThat(leg.hangupReason).isEqualTo("agent-ended");
         assertThat(leg.written).isNotEmpty();     // 告别语确实播出去了
+    }
+
+    // ---- 转人工 ----
+
+    /**
+     * 转人工要等"请稍等"播完才去呼坐席(同 end_call 的理由); 坐席振铃期间给客户放回铃音、不听上行;
+     * 接通后通话归坐席 —— 不再出声、不因单通时长挂机, 只等挂机事件。
+     */
+    @Test
+    void transferWaitsForTheConfirmationThenLeavesTheCallToTheAgent() {
+        FakeCallLeg leg = new FakeCallLeg();
+        leg.continuousMedia = true;
+        AtomicInteger turns = new AtomicInteger();
+        CallSession call = callSession(leg, fakeAsr("我想了解一下", turns), new byte[640], null);   // 2 帧确认语
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        call.transferAfterPlayback("user/8002@vca.local");
+        call.tick();
+        call.tick();
+        assertThat(leg.transfers).as("确认语没播完不能转").isEmpty();
+        call.tick();
+        assertThat(leg.transfers).containsExactly("user/8002@vca.local");
+
+        leg.written.clear();
+        speakThenPause(leg);                      // 振铃期间客户说话: 不起回合
+        for (int i = 0; i < 50; i++) {
+            call.tick();
+        }
+        assertThat(turns.get()).as("转接中不该再起回合").isZero();
+        assertThat(leg.written).as("振铃期间每拍一帧回铃音").hasSize(50);
+        assertThat(leg.written.get(0)).as("响 1 秒: 开头是 450Hz 的音, 不是静音")
+                .isNotEqualTo(new byte[FRAME_BYTES]);
+
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.TRANSFER_CONNECTED));
+        leg.written.clear();
+        for (int i = 0; i < 50; i++) {
+            call.tick();
+        }
+        assertThat(leg.written).as("接给坐席后不再往线路写任何东西").isEmpty();
+        assertThat(call.isClosed()).isFalse();
+
+        leg.events.tryEmitNext(CallEvent.hangup("hangup:NORMAL_CLEARING"));
+        assertThat(call.isClosed()).isTrue();
+    }
+
+    /** 前台没接: 说一句"同事没接到, 留个称呼让他们回电", 然后回到正常对话 */
+    @Test
+    void unansweredTransferFallsBackToTheAi() {
+        FakeCallLeg leg = new FakeCallLeg();
+        AtomicInteger turns = new AtomicInteger();
+        CallSession call = callSession(leg, fakeAsr("我姓王", turns), null, null);
+        call.transferFailedPrompt(new byte[FRAME_BYTES * 3]);
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        call.transferAfterPlayback("user/8002@vca.local");
+        call.tick();
+        assertThat(leg.transfers).hasSize(1);
+
+        leg.events.tryEmitNext(new CallEvent(CallEvent.Type.TRANSFER_FAILED, "NO_ANSWER"));
+        for (int i = 0; i < 5; i++) {
+            call.tick();
+        }
+        assertThat(leg.written).as("兜底话术要播出去").hasSize(3);
+
+        speakThenPause(leg);
+        assertThat(turns.get()).as("回到 AI 后客户说话照常成轮").isEqualTo(1);
+    }
+
+    /** 桥接指令都没发出去(连接已坏): 同样回到 AI, 不能让客户对着静音等 */
+    @Test
+    void transferThatCannotBeSentFallsBackImmediately() {
+        FakeCallLeg leg = new FakeCallLeg();
+        leg.transferSendOk = false;
+        CallSession call = callSession(leg, new AtomicInteger(), null);
+        call.transferFailedPrompt(new byte[FRAME_BYTES * 2]);
+        leg.events.tryEmitNext(CallEvent.of(CallEvent.Type.ANSWERED));
+
+        call.transferAfterPlayback("user/8002@vca.local");
+        for (int i = 0; i < 4; i++) {
+            call.tick();
+        }
+        assertThat(leg.written).hasSize(2);
+        assertThat(call.isClosed()).isFalse();
     }
 
     /** 客户开口 → 成一轮 → 回复经降采样进缓冲, 且只按实时节奏出去 */

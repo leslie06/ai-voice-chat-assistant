@@ -2,8 +2,11 @@ package com.vca.store.merchant;
 
 import com.vca.orchestrator.merchant.Industry;
 import com.vca.orchestrator.merchant.MerchantProfile;
+import com.vca.orchestrator.merchant.MerchantRules;
 import com.vca.orchestrator.merchant.MerchantStore;
+import com.vca.store.account.AdminPolicy;
 import com.vca.store.account.UserService;
+import com.vca.store.entity.AppUser;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerRequest;
@@ -22,12 +25,11 @@ import static org.springframework.web.reactive.function.server.RequestPredicates
 import static org.springframework.web.reactive.function.server.RequestPredicates.PUT;
 
 /**
- * 商家资料 REST: 诊所用自己的账号登录, 维护自己名下的店。与 {@code KnowledgeRoutes} 同款鉴权
- * ({@code Authorization: Bearer <token>} → userId), 所有操作按账号隔离 —— 只能看和改自己名下的。
+ * 商家资料 REST。鉴权同 {@code KnowledgeRoutes}({@code Authorization: Bearer <token>} → userId)。
  *
  * <pre>
- *   GET    /api/merchants           → [profile]          我名下的全部商家(含停用)
- *   POST   /api/merchants           {profile} → profile  新建; number 必填且全局唯一
+ *   GET    /api/merchants           → [profile]          我名下的门店(含停用); 管理员看全部
+ *   POST   /api/merchants           {profile} → profile  新建 —— 仅管理员。ownerAccount(手机号/邮箱)指定归属账号
  *   GET    /api/merchants/{id}      → profile
  *   PUT    /api/merchants/{id}      {profile} → profile  整体覆盖(没传的字段按空处理)
  *   DELETE /api/merchants/{id}      → {ok}
@@ -35,21 +37,34 @@ import static org.springframework.web.reactive.function.server.RequestPredicates
  *   GET    /api/merchants/industries   → [industry]       可选的行业及各字段在该行业里的叫法(网页表单用)
  * </pre>
  *
+ * <p><b>两种角色</b>: 门店的所属账号只能改自己店的资料, 而接入号、转人工拨号串、热词表、音色这几项直通电话线路,
+ * 只有运营管理员({@link AdminPolicy})能填 —— 注册是开放的, 让谁都能认领接入号, 等于谁都能把别家的来电接走。
+ * 商家更新时这几项沿用库里的原值, 规则见 {@link MerchantRules}。
+ *
  * <p>字段名与 {@link MerchantProfile} 一致(驼峰)。{@code ownerId}/{@code createdAt}/{@code updatedAt} 由服务端定,
  * 请求里传了也忽略。保存成功后存储层会通知电话注册表作废缓存, 下一通电话就用新资料。
  */
 public final class MerchantRoutes {
 
-    private final UserService users;
-    private final MerchantStore store;
-
-    private MerchantRoutes(UserService users, MerchantStore store) {
-        this.users = users;
-        this.store = store;
+    /** 一次请求的处理结果: 阻塞查库与鉴权判断都在同一个 callable 里做完, 再统一转成响应 */
+    private record Outcome(int status, Object body) {
+        static Outcome error(int status, String message) {
+            return new Outcome(status, Map.of("error", message));
+        }
     }
 
-    public static RouterFunction<ServerResponse> create(UserService users, MerchantStore store) {
-        MerchantRoutes r = new MerchantRoutes(users, store);
+    private final UserService users;
+    private final MerchantStore store;
+    private final AdminPolicy admins;
+
+    private MerchantRoutes(UserService users, MerchantStore store, AdminPolicy admins) {
+        this.users = users;
+        this.store = store;
+        this.admins = admins == null ? AdminPolicy.NONE : admins;
+    }
+
+    public static RouterFunction<ServerResponse> create(UserService users, MerchantStore store, AdminPolicy admins) {
+        MerchantRoutes r = new MerchantRoutes(users, store, admins);
         return RouterFunctions.route(GET("/api/merchants"), r::list)
                 .andRoute(POST("/api/merchants"), r::createOne)
                 .andRoute(GET("/api/merchants/industries"), r::industries)
@@ -64,7 +79,7 @@ public final class MerchantRoutes {
         if (uid == null) {
             return unauthorized();
         }
-        return blocking(() -> store.listByOwner(uid))
+        return blocking(() -> admins.isAdmin(uid) ? store.listAll() : store.listByOwner(uid))
                 .flatMap(list -> json(200, list.stream().map(MerchantRoutes::dto).toList()));
     }
 
@@ -89,7 +104,7 @@ public final class MerchantRoutes {
             return unauthorized();
         }
         long id = longOf(req.pathVariable("id"));
-        return blocking(() -> store.findById(id).filter(p -> p.ownerId() == uid))
+        return blocking(() -> store.findById(id).filter(p -> canSee(uid, p)))
                 .flatMap(opt -> opt.map(p -> json(200, dto(p)))
                         .orElseGet(() -> json(404, Map.of("error", "商家不存在"))));
     }
@@ -100,7 +115,7 @@ public final class MerchantRoutes {
             return unauthorized();
         }
         long id = longOf(req.pathVariable("id"));
-        return blocking(() -> store.findById(id).filter(p -> p.ownerId() == uid))
+        return blocking(() -> store.findById(id).filter(p -> canSee(uid, p)))
                 .flatMap(opt -> opt.map(p -> json(200, Map.of("prompt", p.renderProfile())))
                         .orElseGet(() -> json(404, Map.of("error", "商家不存在"))));
     }
@@ -127,13 +142,52 @@ public final class MerchantRoutes {
     }
 
     private Mono<ServerResponse> save(long uid, Long id, Map<String, Object> body) {
-        MerchantProfile profile = fromBody(uid, id, body);
-        if (profile.number().isEmpty()) {
-            return json(400, Map.of("error", "接入号(number)不能为空"));
+        return blocking(() -> id == null ? createAsAdmin(uid, body) : updateExisting(uid, id, body))
+                .flatMap(o -> json(o.status(), o.body()));
+    }
+
+    /** 新建门店 = 分配接入号, 只有运营能做 */
+    private Outcome createAsAdmin(long uid, Map<String, Object> body) {
+        if (!admins.isAdmin(uid)) {
+            return Outcome.error(403, "新建门店需要运营开通(接入号由运营分配)");
         }
-        return blocking(() -> store.save(profile))
-                .flatMap(saved -> json(200, dto(saved)))
-                .onErrorResume(IllegalArgumentException.class, e -> json(409, Map.of("error", e.getMessage())));
+        long ownerId = uid;
+        String account = str(body, "ownerAccount").strip();
+        if (!account.isEmpty()) {
+            AppUser owner = users.findByUsernameOrEmail(account);
+            if (owner == null) {
+                return Outcome.error(400, "找不到账号 " + account + ", 请让商家先注册");
+            }
+            ownerId = owner.getId();
+        }
+        long owner = ownerId;
+        return persist(() -> MerchantRules.checkedByAdmin(fromBody(owner, null, body)));
+    }
+
+    private Outcome updateExisting(long uid, long id, Map<String, Object> body) {
+        MerchantProfile existing = store.findById(id).filter(p -> canSee(uid, p)).orElse(null);
+        if (existing == null) {
+            return Outcome.error(404, "商家不存在");
+        }
+        MerchantProfile incoming = fromBody(existing.ownerId(), id, body);
+        return persist(() -> admins.isAdmin(uid)
+                ? MerchantRules.checkedByAdmin(incoming)
+                : MerchantRules.checkedByOwner(incoming, existing));
+    }
+
+    /** 校验不过是 400(填错了); 存储层拒绝是 409(号码被占) */
+    private Outcome persist(java.util.function.Supplier<MerchantProfile> checked) {
+        MerchantProfile profile;
+        try {
+            profile = checked.get();
+        } catch (IllegalArgumentException e) {
+            return Outcome.error(400, e.getMessage());
+        }
+        try {
+            return new Outcome(200, dto(store.save(profile)));
+        } catch (IllegalArgumentException e) {
+            return Outcome.error(409, e.getMessage());
+        }
     }
 
     private Mono<ServerResponse> delete(ServerRequest req) {
@@ -142,8 +196,14 @@ public final class MerchantRoutes {
             return unauthorized();
         }
         long id = longOf(req.pathVariable("id"));
-        return blocking(() -> store.delete(uid, id))
+        return blocking(() -> store.findById(id).filter(p -> canSee(uid, p))
+                        .map(p -> store.delete(p.ownerId(), id)).orElse(false))
                 .flatMap(ok -> ok ? json(200, Map.of("ok", true)) : json(404, Map.of("error", "商家不存在")));
+    }
+
+    /** 自己名下的店, 或者自己是运营管理员 */
+    private boolean canSee(long uid, MerchantProfile p) {
+        return p.ownerId() == uid || admins.isAdmin(uid);
     }
 
     // ---- 编解码 ----
@@ -164,6 +224,7 @@ public final class MerchantRoutes {
     static Map<String, Object> dto(MerchantProfile p) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", p.id());
+        m.put("ownerId", p.ownerId());
         m.put("number", p.number());
         m.put("name", p.name());
         m.put("enabled", p.enabled());

@@ -165,6 +165,12 @@ public class TelephonyProperties {
     private String errorPrompt = "不好意思，我这边没太听清，您再说一遍好吗？";
 
     /**
+     * 转人工没人接(前台忙、座机没响应、坐席不在线)时说的话, 同样启动时预合成。说完 AI 接着聊 ——
+     * 客户留下称呼和需求, 模型自己会调留资。留空则不说话直接回到聆听。
+     */
+    private String transferFailedPrompt = "不好意思，同事这会儿没接到。您留个称呼和需求，我让他们尽快回电给您，好吗？";
+
+    /**
      * 电话链路专用的识别模型。默认用阿里云的 8kHz 窄带模型。
      *
      * <p>电话线是 8kHz 采样、G.711 编码, 3.4kHz 以上的声音根本不存在。宽带模型
@@ -1033,6 +1039,14 @@ public class TelephonyProperties {
         this.hotWordPrefix = v == null || v.isBlank() ? "vca" : v.strip();
     }
 
+    public String getTransferFailedPrompt() {
+        return transferFailedPrompt;
+    }
+
+    public void setTransferFailedPrompt(String transferFailedPrompt) {
+        this.transferFailedPrompt = transferFailedPrompt == null ? "" : transferFailedPrompt;
+    }
+
     public String getErrorPrompt() {
         return errorPrompt;
     }
@@ -1111,6 +1125,11 @@ public class TelephonyProperties {
      * 库里的商家资料 → 一通电话用的配置。留空的项回退到顶层默认; 结构化资料渲染进人设,
      * 顺序是 电话人设(通道硬约束) → 机构资料(事实) → 商家自己的补充(语气与禁忌)。
      * 知识库归属就是资料的所属账号: 诊所用哪个账号登录填的资料, 就查哪个账号上传的文档。
+     *
+     * <p><b>转人工不回退到顶层</b>: 顶层那个分机是某一家店的前台, 别家没配自己的分机时回退过去,
+     * 就是把 A 店的客户转到 B 店的座机上。没配就不下发转人工工具(AI 会改说"让同事回电")。
+     * 拨号串与推送地址在这里再过一遍 {@link com.vca.orchestrator.merchant.MerchantRules}: 接口层已经校验过,
+     * 但库里可能有校验上线之前存进去的值, 而这两项一个进 FreeSWITCH 命令、一个让服务器往外发请求。
      */
     public com.vca.telephony.merchant.Merchant toMerchant(com.vca.orchestrator.merchant.MerchantProfile p) {
         String profile = p.renderProfile();
@@ -1122,11 +1141,25 @@ public class TelephonyProperties {
                 orDefault(p.greeting(), defaultGreeting(p.name())),
                 mergePrompt(systemPrompt, merchantPart),
                 String.valueOf(p.ownerId()),
-                orDefault(p.transferDialString(), transferDialString),
-                orDefault(p.summaryWebhook(), summary.getWebhookUrl()),
+                safeFromStore(p, "转人工拨号串", p.transferDialString(),
+                        com.vca.orchestrator.merchant.MerchantRules::dialString),
+                orDefault(safeFromStore(p, "小结推送地址", p.summaryWebhook(),
+                        com.vca.orchestrator.merchant.MerchantRules::webhook), summary.getWebhookUrl()),
                 orDefault(p.ttsVoice(), ttsVoice),
                 p.industryPreset(),
                 p.asrVocabularyId());
+    }
+
+    /** 库里取出的线路相关值过一遍校验; 不合规就当没填, 记一行 warn 提醒运营去改 */
+    private static String safeFromStore(com.vca.orchestrator.merchant.MerchantProfile p, String what, String value,
+                                        java.util.function.UnaryOperator<String> rule) {
+        try {
+            return rule.apply(value);
+        } catch (IllegalArgumentException e) {
+            org.slf4j.LoggerFactory.getLogger(TelephonyProperties.class)
+                    .warn("门店 {}({}) 的{}不合规, 已忽略: {}", p.label(), p.number(), what, e.getMessage());
+            return "";
+        }
     }
 
     /** 没写开场白的店按店名生成一句; 连店名都没有才退到全局开场白 */

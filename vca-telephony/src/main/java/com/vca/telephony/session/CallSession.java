@@ -72,6 +72,20 @@ public final class CallSession {
     private volatile boolean closed;
     /** AI 说完这句就挂机(由 end_call 工具置位) —— 必须等缓冲播完, 否则客户听不到告别语 */
     private volatile boolean hangupAfterPlayback;
+    /** AI 说完这句就转人工(由 transfer_to_human 置位, 值是拨号串) —— 同样要等"请稍等"播完 */
+    private volatile String transferAfterPlayback;
+    /**
+     * 转人工进行到哪了。{@link Transfer#RINGING}: 正在呼坐席, 客户这一路还在我们手里, 给他放回铃音、不听上行;
+     * {@link Transfer#CONNECTED}: 已接给坐席, 不再出声、不计单通时长(真人聊多久是他们的事), 只等挂机。
+     * 坐席没接时 {@link CallEvent.Type#TRANSFER_FAILED} 把状态放回 {@link Transfer#NONE}, AI 接着聊。
+     */
+    private enum Transfer { NONE, RINGING, CONNECTED }
+
+    private Transfer transfer = Transfer.NONE;
+    /** 回铃音放到第几帧了(按节流拍数计, 决定"响 1 秒停 4 秒"的节奏) */
+    private int ringbackFrame;
+    /** 转人工没接通时说的话(预合成); null = 不说, 直接回到聆听 */
+    private volatile byte[] transferFailedPrompt;
     /** 通话结束时的回调(事后摘要); 默认不做事 */
     private volatile Consumer<EndedCall> onEnded = ended -> { };
 
@@ -189,6 +203,11 @@ public final class CallSession {
         this.onEnded = handler == null ? ended -> { } : handler;
     }
 
+    /** 转人工没接通时说的话, 已是线路采样率的 PCM(预合成) */
+    public void transferFailedPrompt(byte[] pcm) {
+        this.transferFailedPrompt = pcm;
+    }
+
     /** 订阅媒体与信令, 并起节流器。生产入口。 */
     public void start() {
         attach();
@@ -220,6 +239,8 @@ public final class CallSession {
             case ANSWERED -> onAnswered();
             case HANGUP -> close(event.detail() == null ? "peer-hangup" : event.detail());
             case DTMF -> log.info("[{}] DTMF: {}", leg.callId(), event.detail());
+            case TRANSFER_FAILED -> onTransferFailed(event.detail());
+            case TRANSFER_CONNECTED -> onTransferConnected();
             // 早期媒体(彩铃/运营商提示音)不进对话: 人还没接, 跑 ASR/LLM/TTS 是纯烧钱
             case EARLY_MEDIA, RINGING -> log.debug("[{}] 信令: {}", leg.callId(), event.type());
         }
@@ -252,7 +273,7 @@ public final class CallSession {
 
     /** 上行音频。未接通前一律丢弃(见 {@link CallEvent.Type#EARLY_MEDIA})。 */
     private synchronized void onInboundAudio(byte[] pcm) {
-        if (!answered || closed) {
+        if (!answered || closed || transfer != Transfer.NONE) {
             return;
         }
         // 接通保护期: 摘机瞬间线上有个冲击脉冲, 响度时长都够得上"开口", 会把开场白当成被插话清掉。
@@ -391,37 +412,89 @@ public final class CallSession {
      */
     public void tick() {
         byte[] frame;
+        String transferTo = null;
         synchronized (this) {
-            if (closed) {
+            if (closed || transfer == Transfer.CONNECTED) {
                 return;
             }
-            if (cfg.maxCallSeconds() > 0
-                    && System.currentTimeMillis() - startedAtMs > cfg.maxCallSeconds() * 1000L) {
-                log.info("[{}] 达单通时长上限, 挂机", leg.callId());
-                close("max-duration");
-                return;
+            if (transfer == Transfer.RINGING) {
+                frame = ringbackFrame();   // 坐席振铃期间给客户放回铃音, 别让他以为断线了
+            } else {
+                frame = nextFrame();
+                if (closed) {
+                    return;
+                }
+                // 与挂机同理: "好的, 我帮您转接"播完才去呼坐席
+                if (frame == null && transferAfterPlayback != null && turnSubscription == null) {
+                    transferTo = transferAfterPlayback;
+                    transferAfterPlayback = null;
+                    transfer = Transfer.RINGING;
+                    ringbackFrame = 0;
+                }
+                // 要转接时停在这里: VAD 保持"机器人说话中", 转接失败后说完兜底话术再回到聆听
+                if (frame == null && transferTo == null && resumeEpoch >= 0 && resumeEpoch == epoch) {
+                    resumeEpoch = -1;
+                    vad.resumeListening();   // 已播完, 现在回到聆听才不会关掉打断窗口
+                }
+                if (frame == null && transferTo == null && answered && silenceFrame != null) {
+                    frame = silenceFrame;    // 没话说也保持 RTP 连续, 见 CallLeg#needsContinuousMedia
+                }
             }
-            if (greetingTicksLeft > 0 && --greetingTicksLeft == 0 && turnSubscription == null) {
-                pacing.offer(greeting);   // 客户要是在等待期就开口了(turnSubscription != null), 开场白就不放了
-            }
-            frame = pacing.nextFrame();
-            // 必须同时满足"本轮已产完"与"缓冲已排空"。只看缓冲是不够的: 工具是在回合<b>进行中</b>
-            // 置的位, 那一刻告别语还没合成出来、缓冲本来就是空的, 只看缓冲会立刻挂断, 客户一个字都听不到。
-            if (frame == null && hangupAfterPlayback && turnSubscription == null) {
-                log.info("[{}] 告别语已播完, 按 AI 的判断挂机", leg.callId());
-                close("agent-ended");
-                return;
-            }
-            if (frame == null && resumeEpoch >= 0 && resumeEpoch == epoch) {
-                resumeEpoch = -1;
-                vad.resumeListening();   // 已播完, 现在回到聆听才不会关掉打断窗口
-            }
-            if (frame == null && answered && silenceFrame != null) {
-                frame = silenceFrame;    // 没话说也保持 RTP 连续, 见 CallLeg#needsContinuousMedia
-            }
+        }
+        if (transferTo != null) {
+            startTransfer(transferTo);   // 网络 IO 放锁外
+            return;
         }
         if (frame != null) {
             leg.writeAudio(frame);   // 网络 IO 放锁外
+        }
+    }
+
+    /** 正常对话时的一拍: 单通时长、开场白倒计时、取缓冲、播完挂机。调用方持锁; 可能已 close */
+    private byte[] nextFrame() {
+        if (cfg.maxCallSeconds() > 0
+                && System.currentTimeMillis() - startedAtMs > cfg.maxCallSeconds() * 1000L) {
+            log.info("[{}] 达单通时长上限, 挂机", leg.callId());
+            close("max-duration");
+            return null;
+        }
+        if (greetingTicksLeft > 0 && --greetingTicksLeft == 0 && turnSubscription == null) {
+            pacing.offer(greeting);   // 客户要是在等待期就开口了(turnSubscription != null), 开场白就不放了
+        }
+        byte[] frame = pacing.nextFrame();
+        // 必须同时满足"本轮已产完"与"缓冲已排空"。只看缓冲是不够的: 工具是在回合<b>进行中</b>
+        // 置的位, 那一刻告别语还没合成出来、缓冲本来就是空的, 只看缓冲会立刻挂断, 客户一个字都听不到。
+        if (frame == null && hangupAfterPlayback && turnSubscription == null) {
+            log.info("[{}] 告别语已播完, 按 AI 的判断挂机", leg.callId());
+            close("agent-ended");
+            return null;
+        }
+        return frame;
+    }
+
+    private void startTransfer(String dialString) {
+        log.info("[{}] 确认语已播完, 转人工: {}", leg.callId(), dialString);
+        if (!leg.transfer(dialString)) {
+            onTransferFailed("send-failed");
+        }
+    }
+
+    /**
+     * 坐席没接通, 通话回到 AI: 说一句"同事没接到, 留个称呼我让他们回电", 播完回到聆听。
+     * 对话历史里 AI 说过"帮您转接", 客户接下来报称呼和需求, 模型会顺着去调留资。
+     */
+    private synchronized void onTransferFailed(String cause) {
+        if (transfer == Transfer.NONE || closed) {
+            return;
+        }
+        transfer = Transfer.NONE;
+        log.warn("[{}] 转人工没接通({}), 回到 AI 接待", leg.callId(), cause);
+        byte[] prompt = transferFailedPrompt;
+        if (prompt != null && prompt.length > 0) {
+            pacing.offer(prompt);
+        }
+        if (vad.isActive()) {
+            resumeEpoch = epoch;   // 说完再回到聆听, 期间客户开口照样能打断
         }
     }
 
@@ -431,6 +504,44 @@ public final class CallSession {
      */
     public void hangupAfterPlayback() {
         hangupAfterPlayback = true;
+    }
+
+    private synchronized void onTransferConnected() {
+        if (transfer == Transfer.RINGING && !closed) {
+            transfer = Transfer.CONNECTED;
+            log.info("[{}] 已接给坐席, 之后的对话不再经过 AI", leg.callId());
+        }
+    }
+
+    /** 国内回铃音: 450Hz, 响 1 秒停 4 秒。电平取约 -12dBFS, 与开场白响度相当而不刺耳 */
+    private byte[] ringbackFrame() {
+        int frameBytes = pacing.frameBytes();
+        int samples = frameBytes / 2;
+        int framesPerCycle = 5000 / Math.max(1, cfg.pacingMs());
+        int onFrames = 1000 / Math.max(1, cfg.pacingMs());
+        int idx = ringbackFrame++;
+        byte[] pcm = new byte[frameBytes];
+        if (idx % framesPerCycle >= onFrames) {
+            return pcm;
+        }
+        double amp = 0.25 * 32767;
+        long base = (long) idx * samples;
+        for (int i = 0; i < samples; i++) {
+            short v = (short) (amp * Math.sin(2 * Math.PI * 450 * (base + i) / mediaRate));
+            pcm[2 * i] = (byte) (v & 0xff);
+            pcm[2 * i + 1] = (byte) ((v >> 8) & 0xff);
+        }
+        return pcm;
+    }
+
+    /**
+     * 说完当前这段就转人工。给 {@code transfer_to_human} 用: 确认语是工具返回之后才生成、合成的,
+     * 立刻桥接的话客户一个字都听不到, 只听见突然响起的回铃音。
+     */
+    public void transferAfterPlayback(String dialString) {
+        if (dialString != null && !dialString.isBlank()) {
+            transferAfterPlayback = dialString;
+        }
     }
 
     /** 机器人此刻是否还在出声 —— 缓冲里还有没有货就是精确答案, 不用估算。 */

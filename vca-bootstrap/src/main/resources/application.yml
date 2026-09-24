@@ -332,6 +332,9 @@ vca:
     oss-part-size-bytes: ${VCA_OSS_PART_SIZE_BYTES:5242880}
     # 登录令牌签名密钥: 生产务必经 VCA_STORE_TOKEN_SECRET 设一个随机串; 改了会让已登录用户全部失效。
     token-secret: ${VCA_STORE_TOKEN_SECRET:vca-default-secret-change-me}
+    # 运营管理员账号 id(app_user.id, 逗号分隔)。门店的接入号、转人工分机、热词表、音色只有他们能改 ——
+    # 这几项直通电话线路, 让注册用户自己填等于谁都能认领别家的号码。也只有他们能看 /eval/report。
+    admin-user-ids: ${VCA_ADMIN_USER_IDS:}
     # 找回/修改密码邮件。dev-echo=true 时把重置令牌回显给前端(便于无邮件时联调); 配好 SMTP 后建议设 false。
     base-url: ${VCA_STORE_BASE_URL:}
     mail-dev-echo: ${VCA_STORE_MAIL_DEV_ECHO:true}

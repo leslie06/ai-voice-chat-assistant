@@ -71,6 +71,13 @@ public final class FreeSwitchCallLeg implements CallLeg {
     private static final int MEDIA_REBUILD_TRIES = 3;
     /** 主动挂机后等 FreeSWITCH 自己断开的上限: 超过就强关, 不留半开连接 */
     private static final long CLOSE_GRACE_MS = 3_000;
+    /**
+     * 转人工时坐席振铃多久没接算失败(秒)。前台可能正在招呼别的客人, 20 秒约响五六声;
+     * 再长客户就在听回铃音干等了, 不如回到 AI 这边留个回电。
+     */
+    static final int TRANSFER_RING_SECONDS = 20;
+    /** 坐席号码显示用的来电号码: 只放纯号码, 其余不带(它会拼进 originate 命令) */
+    private static final java.util.regex.Pattern CALLER_ID = java.util.regex.Pattern.compile("^\\+?[0-9]{3,20}$");
 
     private final Socket socket;
     private final FreeSwitchConfig cfg;
@@ -96,6 +103,17 @@ public final class FreeSwitchCallLeg implements CallLeg {
     /** 锁定的 FreeSWITCH 媒体地址(首包来源); null = 还没收到媒体 */
     private volatile SocketAddress mediaPeer;
     private volatile boolean strayLogged;
+    /**
+     * 已经和坐席接上(下发了 uuid_bridge)。桥接会重置客户这一路的媒体, unicast 随之拆掉、不再送音频 ——
+     * 这是正常现象, 媒体泵不能当成断流去重建、更不能挂机, 否则接起电话的前台聊不到十秒就被切断。
+     */
+    private volatile boolean bridging;
+    /** 正在呼叫的坐席那一路(我们指定的 uuid); null = 没有在转接 */
+    private volatile String agentUuid;
+    /** 呼坐席、接通两路这两个后台任务的 Job-UUID, 用来认领 BACKGROUND_JOB 结果 */
+    private volatile String originateJob;
+    private volatile String bridgeJob;
+    private volatile boolean jobEventsSubscribed;
 
     public FreeSwitchCallLeg(Socket socket, FreeSwitchConfig cfg) throws IOException {
         this.socket = socket;
@@ -161,7 +179,7 @@ public final class FreeSwitchCallLeg implements CallLeg {
     public void writeAudio(byte[] pcm) {
         SocketAddress peer = mediaPeer;
         DatagramSocket sock = media;
-        if (finished.get() || peer == null || sock == null || pcm == null || pcm.length == 0) {
+        if (finished.get() || bridging || peer == null || sock == null || pcm == null || pcm.length == 0) {
             return;
         }
         try {
@@ -174,33 +192,145 @@ public final class FreeSwitchCallLeg implements CallLeg {
         }
     }
 
+    @Override
+    public boolean supportsTransfer() {
+        return true;
+    }
+
     /**
-     * 转人工: 让 FreeSWITCH 把这一路桥接到坐席。
+     * 转人工: 先<b>单独</b>呼坐席, 坐席接起来再把两路接上。
      *
-     * <p>用 {@code sendmsg execute bridge} 而不是 {@code uuid_transfer}: bridge 直接在本通道上执行,
-     * 用的就是我们这条已经建好的连接, 不需要另开 ESL(呼入场景可能根本没开外呼那条连接)。
+     * <p>不能直接在客户这一路上执行 {@code bridge}: 桥接(以及任何让通道重置媒体的操作)会拆掉 unicast,
+     * 而 FreeSWITCH 的停泊循环把 unicast 连接缓存在局部变量里, 同一次停泊内重新下发的 unicast 会被它当成旧连接
+     * 立刻拆掉(读过 switch_ivr.c 的 switch_ivr_park 确认, 本机实测也是"Created unicast"紧跟着被拆)。
+     * 所以前台没接的话, 这通电话的媒体就再也接不回来, 客户只能被挂断。
      *
-     * <p>桥接之后通道离开停泊状态, unicast 随之停止, 本进程不再收发音频 —— 这正是我们要的:
-     * 剩下的对话归坐席。挂机事件仍会从这条信令连接上来, 会话照常收尾、照常落库。
+     * <p>现在的做法: 客户这一路一直停泊着不动, AI 这边继续出声(放回铃音); 另起一路
+     * {@code bgapi originate … &park()} 呼坐席:
+     * <ul>
+     *   <li>坐席接了 → {@code uuid_bridge} 两路接上, 此后对话归坐席;</li>
+     *   <li>坐席没接 / 忙 / 没注册 → 客户这一路从头到尾没动过, 发 {@link CallEvent.Type#TRANSFER_FAILED}, AI 接着聊;</li>
+     *   <li>振铃期间客户挂了 → 把坐席那一路也杀掉, 不让前台接起一个没人的电话。</li>
+     * </ul>
+     * 结果都经 BACKGROUND_JOB 事件回来: 套接字连接开了 myevents 之后, 本连接发起的后台任务结果仍会投递过来
+     * (mod_event_socket 按 Job-Owner-UUID 放行)。
+     *
+     * @return true = 已开始呼坐席; 结果异步到达
      */
     @Override
     public boolean transfer(String dialString) {
-        if (finished.get() || dialString == null || dialString.isBlank()) {
+        if (finished.get() || dialString == null || dialString.isBlank() || agentUuid != null) {
             return false;
+        }
+        String dial = dialString.strip();
+        if (dial.chars().anyMatch(Character::isWhitespace)) {
+            log.warn("[{}] 转人工拨号串含空白, 拒绝: {}", callId, dial);
+            return false;
+        }
+        String agent = java.util.UUID.randomUUID().toString();
+        String job = java.util.UUID.randomUUID().toString();
+        agentUuid = agent;
+        originateJob = job;
+        try {
+            synchronized (writeLock) {
+                if (!jobEventsSubscribed) {
+                    out.write(EslMessage.command("event plain BACKGROUND_JOB"));
+                    jobEventsSubscribed = true;
+                }
+                // 坐席聊完挂机, 客户这边跟着挂; 不设的话客户会回到拨号计划
+                out.write(EslMessage.command("bgapi uuid_setvar " + callId + " hangup_after_bridge true"));
+                out.write(EslMessage.command("bgapi " + originateCommand(agent, dial), "Job-UUID", job));
+                out.flush();
+            }
+            log.info("[{}] 转人工: 呼叫坐席 {}(坐席通道 {})", callId, dial, agent);
+            return true;
+        } catch (IOException | RuntimeException e) {
+            agentUuid = null;
+            originateJob = null;
+            log.warn("[{}] 转人工失败: {}", callId, e.toString());
+            return false;
+        }
+    }
+
+    /** 呼坐席的 originate: 坐席接起后先停泊, 等我们 uuid_bridge。来电显示为客户号码, 前台一看就知道是谁 */
+    String originateCommand(String agent, String dial) {
+        StringBuilder vars = new StringBuilder("origination_uuid=").append(agent)
+                .append(",originate_timeout=").append(TRANSFER_RING_SECONDS)
+                .append(",ignore_early_media=true");
+        String peer = peerNumber;
+        if (peer != null && CALLER_ID.matcher(peer).matches()) {
+            vars.append(",origination_caller_id_number=").append(peer);
+        }
+        // 拨号串自带 {变量} 时并进同一个块: 两个块连写 FreeSWITCH 不认
+        String target = dial.startsWith("{") ? "{" + vars + "," + dial.substring(1) : "{" + vars + "}" + dial;
+        return "originate " + target + " &park()";
+    }
+
+    /** 呼坐席 / 接通两路 的后台任务结果 */
+    private void onBackgroundJob(EslMessage event) {
+        String job = event.get("Job-UUID");
+        String result = event.body().strip();
+        boolean ok = result.startsWith("+OK");
+        String cause = ok ? "" : (result.startsWith("-ERR") ? result.substring(4).strip() : result);
+        if (job != null && job.equals(originateJob)) {
+            originateJob = null;
+            String agent = agentUuid;
+            if (!ok) {
+                agentUuid = null;
+                log.warn("[{}] 转人工没接通({}), 通话继续由 AI 接待", callId, cause.isEmpty() ? "UNKNOWN" : cause);
+                emitEvent(new CallEvent(CallEvent.Type.TRANSFER_FAILED, cause.isEmpty() ? "UNKNOWN" : cause));
+                return;
+            }
+            if (finished.get() || agent == null) {
+                killAgent(agent);   // 坐席接起来时客户已经挂了
+                return;
+            }
+            String bj = java.util.UUID.randomUUID().toString();
+            bridgeJob = bj;
+            bridging = true;   // 先置位: 两路一接上客户这边的 unicast 就停了
+            try {
+                synchronized (writeLock) {
+                    out.write(EslMessage.command("bgapi uuid_bridge " + callId + " " + agent, "Job-UUID", bj));
+                    out.flush();
+                }
+                log.info("[{}] 坐席已接听, 接通两路", callId);
+            } catch (IOException e) {
+                log.warn("[{}] 接通坐席失败: {}", callId, e.toString());
+            }
+            return;
+        }
+        if (job != null && job.equals(bridgeJob)) {
+            bridgeJob = null;
+            if (ok) {
+                log.info("[{}] 已转给坐席", callId);
+                emitEvent(CallEvent.of(CallEvent.Type.TRANSFER_CONNECTED));
+                return;
+            }
+            // 没接上(多半是客户刚好挂了): 坐席那一路别留着空响
+            String agent = agentUuid;
+            agentUuid = null;
+            bridging = false;
+            killAgent(agent);
+            if (!finished.get()) {
+                log.warn("[{}] 接通坐席失败({}), 通话继续由 AI 接待", callId, cause);
+                emitEvent(new CallEvent(CallEvent.Type.TRANSFER_FAILED, cause.isEmpty() ? "BRIDGE_FAILED" : cause));
+            }
+        }
+    }
+
+    /** 杀掉坐席那一路(还在振铃或接起来没人)。尽力而为: 连接已断就算了, 它会按 originate_timeout 自己结束 */
+    private void killAgent(String agent) {
+        if (agent == null) {
+            return;
         }
         try {
             synchronized (writeLock) {
-                out.write(EslMessage.command("sendmsg",
-                        "call-command", "execute",
-                        "execute-app-name", "bridge",
-                        "execute-app-arg", dialString));
+                out.write(EslMessage.command("bgapi uuid_kill " + agent));
                 out.flush();
             }
-            log.info("[{}] 转人工: bridge {}", callId, dialString);
-            return true;
+            log.info("[{}] 已撤回对坐席的呼叫", callId);
         } catch (IOException | RuntimeException e) {
-            log.warn("[{}] 转人工失败: {}", callId, e.toString());
-            return false;
+            log.debug("[{}] 撤回坐席呼叫失败: {}", callId, e.toString());
         }
     }
 
@@ -213,6 +343,10 @@ public final class FreeSwitchCallLeg implements CallLeg {
     public void hangup(String reason) {
         if (finished.get()) {
             return;
+        }
+        if (agentUuid != null && !bridging) {
+            killAgent(agentUuid);   // 必须在半关连接之前发, 之后就写不出去了
+            agentUuid = null;
         }
         boolean sent = false;
         try {
@@ -398,6 +532,10 @@ public final class FreeSwitchCallLeg implements CallLeg {
                 finish("hangup:" + event.getOrDefault("Hangup-Cause", "UNKNOWN"), true);
                 return false;
             }
+            case "BACKGROUND_JOB" -> {
+                onBackgroundJob(event);
+                return true;
+            }
             default -> {
                 return true;
             }
@@ -428,6 +566,10 @@ public final class FreeSwitchCallLeg implements CallLeg {
                                 callId, cfg.mediaWaitMs(), cfg.mediaBindAddress());
                         hangup("media-timeout");
                         return;
+                    }
+                    if (bridging) {
+                        silentRounds = 0;   // 桥接中本来就没有媒体, 不是断流; 通话结束靠信令上的挂机事件
+                        continue;
                     }
                     if (everHadMedia && !rebuildMedia(++silentRounds)) {
                         return;
@@ -461,6 +603,13 @@ public final class FreeSwitchCallLeg implements CallLeg {
      *
      * <p>重建时必须把 {@code mediaPeer} 清掉: 新的 unicast 会从 FreeSWITCH 的另一个端口发过来,
      * 不清就会被"非 FreeSWITCH 来源"那条规则全部丢弃。
+     *
+     * <p><b>已知局限(2026-09-24 读源码并本机实测确认)</b>: 重建在同一次停泊里<b>救不回来</b>。
+     * {@code switch_ivr_park} 把 unicast 连接缓存在局部变量里, 只在进入停泊时取一次; 通道重置媒体
+     * ({@code switch_core_session_reset}, 重协商打包时长、桥接都会触发)拆掉旧连接后, 新下发的 unicast
+     * 会被循环拿着旧连接发包失败而立刻拆掉(日志 "Created unicast connection" 紧跟
+     * "Attempting to join thread that does not exist")。所以这里实际起的作用是: 三次之后挂断, 别让客户对着哑电话等。
+     * 根治靠不让媒体重置发生 —— 网关打包时长固定 20ms; 转人工不在本通道上 bridge(见 {@link #transfer})。
      *
      * @return false 表示已经放弃并挂断, 调用方应结束媒体泵
      */
@@ -530,6 +679,10 @@ public final class FreeSwitchCallLeg implements CallLeg {
     private void finish(String reason, boolean closeNow) {
         if (!finished.compareAndSet(false, true)) {
             return;
+        }
+        if (agentUuid != null && !bridging) {
+            killAgent(agentUuid);   // 客户在坐席振铃时挂了: 别让前台接起一个没人的电话
+            agentUuid = null;
         }
         synchronized (eventLock) {
             events.tryEmitNext(CallEvent.hangup(reason));

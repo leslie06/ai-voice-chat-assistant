@@ -85,6 +85,19 @@ final class FakeFreeSwitchChannel implements Closeable {
         return new Command(first, headers);
     }
 
+    /** 在 {@code timeoutMs} 内等一条命令; 没等到返回 null(用来断言"什么都没发") */
+    Command pollCommand(int timeoutMs) throws IOException {
+        int old = socket.getSoTimeout();
+        socket.setSoTimeout(timeoutMs);
+        try {
+            return readCommand();
+        } catch (SocketTimeoutException e) {
+            return null;
+        } finally {
+            socket.setSoTimeout(old);
+        }
+    }
+
     void reply(String text) throws IOException {
         send("Content-Type: command/reply\nReply-Text: " + text + "\n\n");
     }

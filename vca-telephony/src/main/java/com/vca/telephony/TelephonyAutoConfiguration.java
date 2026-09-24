@@ -337,10 +337,20 @@ public class TelephonyAutoConfiguration {
                         s.hangupAfterPlayback();
                     }
                 },
-                merchant);
+                merchant,
+                dialString -> {
+                    CallSession s = self.get();
+                    if (s != null) {
+                        s.transferAfterPlayback(dialString);
+                    }
+                });
         CallSession call = new CallSession(leg, conversations.create(ctx),
                 props.toVadConfig(), vadDetectorFactory.get(), props.toCallConfig(), greeting, errorPrompt);
         self.set(call);
+        // 只有能转人工的店才需要这句; 取缓存未命中时会现合成, 别让不转接的通话白等
+        if (merchant.transferDialString() != null && !merchant.transferDialString().isBlank()) {
+            call.transferFailedPrompt(prompts.get(props.getTransferFailedPrompt()));
+        }
         call.onEnded(ended -> aftermath.onCallEnded(ended, merchant));
         call.start();
     }
@@ -355,6 +365,7 @@ public class TelephonyAutoConfiguration {
         texts.add(props.getGreeting());
         // 兜底话术也要提前合成: 真出事的时候 TTS 可能正是挂掉的那一环, 现合成等于没有兜底
         texts.add(props.getErrorPrompt());
+        texts.add(props.getTransferFailedPrompt());
         merchants.all().forEach(m -> texts.add(m.greeting()));
         for (String text : texts) {
             if (text != null && !text.isBlank()) {

@@ -264,7 +264,9 @@ vca-telephony/src/main/java/com/vca/telephony/
 | `tools` | `VCA_TELEPHONY_TOOLS` | 空 | 电话回合下发的工具白名单，默认一个都不发 |
 | `knowledge-owner` | `VCA_TELEPHONY_KNOWLEDGE_OWNER` | 空 | 按谁的知识库作答（商家账号 id），见 §9 |
 | `agent-tools` | `VCA_TELEPHONY_AGENT_TOOLS` | 三个全开 | 电话专用工具，见 §10 |
-| `transfer-dial-string` | `VCA_TELEPHONY_TRANSFER_DIAL_STRING` | 空 | 转人工桥接到哪里；留空则不下发该工具 |
+| `transfer-dial-string` | `VCA_TELEPHONY_TRANSFER_DIAL_STRING` | 空 | 转人工呼哪里；留空则不下发该工具。库里的门店不继承它 |
+| `transfer-failed-prompt` | `VCA_TELEPHONY_TRANSFER_FAILED_PROMPT` | "同事这会儿没接到…" | 坐席没接时说的话（预合成），说完 AI 接着聊 |
+| `vca.store.admin-user-ids` | `VCA_ADMIN_USER_IDS` | 空 | 运营管理员账号 id，见 §12.1 |
 | `summary.enabled` | `VCA_TELEPHONY_SUMMARY_ENABLED` | `true` | 通话后小结，见 §11 |
 | `summary.min-duration-sec` | `VCA_TELEPHONY_SUMMARY_MIN_SEC` | `10` | 短于此的通话不摘要 |
 | `summary.webhook-url` | `VCA_TELEPHONY_SUMMARY_WEBHOOK` | 空 | 小结推送地址（企业微信/钉钉群机器人 URL 直接填） |
@@ -716,7 +718,7 @@ curl -X POST http://<服务地址>/api/knowledge \
 | 工具 | 什么时候触发 | 做了什么 |
 |---|---|---|
 | `save_lead` | 客户要预约、要回电，或留了姓名/电话/项目/时间 | 写进 `phone_lead` 表（归属到商家账号），结果回灌给模型，由它用自己的话确认 |
-| `transfer_to_human` | 客户要找真人，或问到投诉、退费、病情判断 | 让 FreeSWITCH `bridge` 到坐席，之后本进程不再参与对话 |
+| `transfer_to_human` | 客户要找真人，或问到投诉、退费、病情判断 | 说完"请稍等"后呼坐席，接起来再接通两路；没人接就回到 AI 留资 |
 | `end_call` | 客户说"没别的了""再见" | **说完告别语再挂**，不是立刻挂 |
 
 ```yaml
@@ -729,11 +731,31 @@ vca:
 **主动挂机为什么要等两个条件。** 告别语是在工具返回之后才生成、合成的，工具执行的那一刻下行缓冲本来就是空的。
 只看"缓冲空了"就挂，客户一个字都听不到（实测复现过）。所以条件是**本轮已产完（`turnSubscription == null`）且缓冲已排空**。
 
-**转人工用 `bridge` 而不是 `uuid_transfer`。** bridge 直接在本通道上执行，用的就是 socket 应用那条已建好的连接，
-不需要另开一条 ESL——呼入场景可能根本没开外呼那条。桥接后通道离开停泊状态，unicast 随之停止，正是我们要的：
-剩下的对话归坐席，而挂机事件仍从信令连接回来，会话照常收尾落库。
+**转人工：先单独呼坐席，接起来再接通两路（2026-09-24 重做）。**
 
-**没配坐席号码时不下发这个工具**，AI 会说"我让同事回电给您"，而不是假装转接、让客户对着静音等。
+```
+"好的，我帮您转接人工，请稍等"播完
+  → bgapi uuid_setvar <客户通道> hangup_after_bridge true      坐席聊完挂机, 客户跟着挂
+  → bgapi originate {origination_uuid=<坐席通道>,originate_timeout=20,…}<拨号串> &park()
+       客户这一路仍停泊在我们手里, AI 给他放回铃音(450Hz 响 1 停 4)
+  ├─ 坐席接了   → bgapi uuid_bridge <客户通道> <坐席通道>, 此后对话归坐席, 不计单通时长
+  ├─ 坐席没接   → 客户这一路从头到尾没动过, AI 说"同事这会儿没接到, 留个称呼让他们回电", 接着聊(模型会调留资)
+  └─ 客户先挂了 → bgapi uuid_kill <坐席通道>, 不让前台接起一个没人的电话
+```
+
+**为什么不直接在客户这一路上执行 `bridge`**（2026-09-18 的做法）。本机实测两个问题：
+
+1. **坐席不在线时客户被直接挂断**。`bridge` 失败默认会把主叫一起挂掉（原因 `USER_NOT_REGISTERED`），
+   要设 `continue_on_fail` 才会回来——但回来了也没用，见下一条。
+2. **媒体接不回来**。任何让通道重置媒体的操作（`bridge`、中途改打包时长）都会拆掉 unicast；而
+   `switch_ivr_park` 把 unicast 连接缓存在局部变量里、只在进入停泊时取一次，同一次停泊内重新下发的 unicast
+   会被它拿着旧连接发包失败而立刻拆掉（FreeSWITCH 日志 `Created unicast connection` 紧跟
+   `Attempting to join thread that does not exist`，读 `switch_ivr.c` 确认）。客户的电话就成了两头哑。
+3. 另外，旧做法在桥接**成功**时也有问题：桥接后 unicast 停止，媒体泵把它当断流，重建三次后挂断——
+   前台接起来聊不到十秒电话就断了。
+
+现在的做法让客户这一路在接通坐席之前完全不动，这三个问题都不存在。坐席的结果经 `BACKGROUND_JOB` 回来：
+socket 连接开了 `myevents` 之后只收本通道事件，但本连接发起的后台任务结果（`Job-Owner-UUID` 是本通道）照样投递。
 
 **实测（本机）：**
 
@@ -889,13 +911,30 @@ VCA_TELEPHONY_MERCHANTS_0_KNOWLEDGE_OWNER=11
 所属行业的表 → 全局 `VCA_TELEPHONY_ASR_VOCABULARY_ID`。厂商接口不通只记 warn，旧表继续用。
 换识别模型（`asr-model`）会自动重建：热词表与模型绑定，绑错模型的旧表会被删掉。
 
-**接口**（`MerchantRoutes`，与知识库接口同样的 `Authorization: Bearer <token>` 鉴权，只能看改自己名下的）：
+**两种角色（2026-09-24）**。注册是开放的，而门店资料里有几项直通电话线路，不能让注册用户自助：
+
+| 字段 | 谁能改 | 为什么 |
+|---|---|---|
+| 接入号 `number` | 仅运营管理员（新建门店也只有管理员能做） | 库里优先于配置文件：谁能认领 5000，打给那家店的电话就归谁 |
+| 转人工 `transferDialString` | 仅管理员；只收分机号（`8002`，自动补成 `user/8002@vca.local`）、`user/…@…`、`sofia/gateway/…/号码` | 原样进 FreeSWITCH 命令：带 `{变量}` 的串能在新通道上执行命令、能呼到任意 SIP 地址 |
+| 音色 `ttsVoice`、热词表 `asrVocabularyId` | 仅管理员 | 音色可能是别人复刻的真人声音 |
+| 小结推送 `summaryWebhook` | 门店自己，只收企业微信 / 钉钉机器人的 https 地址 | 否则服务器会替人往任意地址（含本机管理口）发请求 |
+| 其余资料 | 门店自己 | |
+
+管理员是配置出来的：`VCA_ADMIN_USER_IDS=<账号 id,…>`（`app_user.id`）。门店更新资料时上表前四项沿用库里的原值，
+请求里改了也不算；规则见 `MerchantRules`，电话侧从库里取资料时会再校验一遍（库里可能存着校验上线前的值）。
+另外，**库里的门店没配转人工时不再回退到顶层那个分机**——那是别家店的前台。
+
+开通一家店的流程：商家自己注册账号 → 运营装好网关、在网页上新建门店（填商家的手机号作归属账号、接入号、
+转人工分机）→ 商家登录后自己维护资料和推送地址。
+
+**接口**（`MerchantRoutes`，与知识库接口同样的 `Authorization: Bearer <token>` 鉴权）：
 
 ```
-GET    /api/merchants              我名下的门店
-POST   /api/merchants              新建, number 必填; 号被别家占了返回 409
+GET    /api/merchants              我名下的门店; 管理员看全部
+POST   /api/merchants              新建 —— 仅管理员; ownerAccount(手机号/邮箱)指定归属账号; 号被占返回 409
 GET    /api/merchants/{id}
-PUT    /api/merchants/{id}         整体覆盖
+PUT    /api/merchants/{id}         整体覆盖; 非管理员改不了运营字段
 DELETE /api/merchants/{id}
 GET    /api/merchants/{id}/preview AI 实际拿到的机构资料文本, 调试用
 ```
@@ -1192,10 +1231,11 @@ docker exec vca-freeswitch fs_cli -p "$P" -x "sofia global siptrace on"         
 | 项 | 状态 |
 |----|------|
 | 真实线路 | 服务器上的 FreeSWITCH 已部署运行（§7.2）；还差安全组、商家配置、HT813 三步，且没有线路可联调 |
-| 多商家自助开通 | 已实现按号码路由（§12），但配置驱动、加一家要重启；自助开通需要改成查库 |
+| 多商家自助开通 | 门店资料已进库（§12.1），接入号由运营分配；但拨号计划只认 `500[01]`、网关账号只有一对，第三家店仍要改 FreeSWITCH 配置 |
 | 电话里的知识库检索 | 已完成（§9），按商家隔离 |
 | 按键进对话（例如按键输入手机号） | 事件已到 `CallSession`，只打日志 |
-| 留资 / 转人工 / 主动挂机 | 已完成（§10） |
+| 留资 / 转人工 / 主动挂机 | 已完成（§10）。转人工 2026-09-24 改为先呼坐席再接通 |
+| 媒体中途断流 | 同一次停泊内重建不了（§10），只能三次后挂断；靠网关打包时长固定 20ms 避免 |
 | 通话后小结 + 推送 | 已完成（§11）。邮件/短信通道未做，目前只有 webhook |
 | 意向分级的准确率 | 只在本机用几通模拟通话看过，真实通话需要积累样本再调分级标准 |
 | 并发路数上限 | 未实现，批量外呼前必须补 |

@@ -72,8 +72,17 @@ public interface CallLeg {
     /** 信令事件流 */
     Flux<CallEvent> events();
 
+    /** 这个接入层能不能转人工。不能的话技能层直接告诉客户"让同事回电", 而不是说"请稍等"再转不出去 */
+    default boolean supportsTransfer() {
+        return false;
+    }
+
     /**
      * 转人工: 把这一路通话桥接到 {@code dialString} 指定的分机/号码, 之后本进程不再参与对话。
+     *
+     * <p>转接是异步的: 返回 true 只表示已开始呼坐席。坐席没接时实现方发 {@link CallEvent.Type#TRANSFER_FAILED},
+     * 且<b>客户这一路的媒体必须完好</b>(AI 要接着聊); 接通时发 {@link CallEvent.Type#TRANSFER_CONNECTED},
+     * 此后媒体停止属于正常, 实现方不得把它当成断流去挂机。振铃期间客户挂了, 实现方负责撤回对坐席的呼叫。
      *
      * <p>{@code dialString} 是<b>媒体服务器的拨号串</b>(如 {@code sofia/gateway/trunk/13800138000}),
      * 由接入层按配置拼好 —— 号码怎么拨出去是线路的事, 技能层只知道"转给谁"。

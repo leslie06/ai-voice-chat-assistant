@@ -23,6 +23,12 @@ public record CallEvent(Type type, String detail) {
         ANSWERED,
         /** 用户按键 */
         DTMF,
+        /**
+         * 转人工没接通(坐席没接、忙、没注册), 通话仍在我们手里。detail 是媒体服务器给的原因。
+         */
+        TRANSFER_FAILED,
+        /** 坐席接了, 两路已接通。此后的对话归坐席, 直到 {@link #HANGUP} */
+        TRANSFER_CONNECTED,
         /** 通话结束(任一方挂机 / 线路异常 / 超时) */
         HANGUP
     }

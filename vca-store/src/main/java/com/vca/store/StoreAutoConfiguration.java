@@ -8,6 +8,7 @@ import com.vca.orchestrator.memory.MemoryStore;
 import com.vca.orchestrator.recorder.ConversationRecorder;
 import com.vca.orchestrator.recorder.AudioRecordingService;
 import com.vca.store.account.AccountRoutes;
+import com.vca.store.account.AdminPolicy;
 import com.vca.store.account.ConversationService;
 import com.vca.store.account.EmailSender;
 import com.vca.store.account.LogEmailSender;
@@ -259,8 +260,8 @@ public class StoreAutoConfiguration {
     @Bean
     org.springframework.web.reactive.function.server.RouterFunction<
             org.springframework.web.reactive.function.server.ServerResponse> evaluationRoute(
-            ConversationEvaluator conversationEvaluator) {
-        return EvaluationRoute.create(conversationEvaluator);
+            ConversationEvaluator conversationEvaluator, UserService userService, AdminPolicy adminPolicy) {
+        return EvaluationRoute.create(conversationEvaluator, userService::userIdOf, adminPolicy::isAdmin);
     }
 
     // ---- 账号 + 服务端会话(类 ChatGPT, 按用户隔离): 暴露 /api/** ----
@@ -330,6 +331,19 @@ public class StoreAutoConfiguration {
     @ConditionalOnMissingBean
     UserService userService(AppUserMapper appUserMapper, TokenUtil tokenUtil) {
         return new UserService(appUserMapper, tokenUtil);
+    }
+
+    /** 运营管理员名单(vca.store.admin-user-ids): 门店的线路字段与内部报表只对他们开放 */
+    @Bean
+    @ConditionalOnMissingBean
+    AdminPolicy adminPolicy(StoreProperties props) {
+        AdminPolicy policy = AdminPolicy.parse(props.getAdminUserIds());
+        if (policy.size() == 0) {
+            log.warn("未配置运营管理员(VCA_ADMIN_USER_IDS): 无法新建门店、分配接入号, /eval/report 也无人可看");
+        } else {
+            log.info("运营管理员 {} 人", policy.size());
+        }
+        return policy;
     }
 
     /** 用户令牌校验器: 接入层(WS)据此用同一套登录令牌鉴权, 不再需要独立的共享 token。 */
@@ -442,8 +456,8 @@ public class StoreAutoConfiguration {
     @Bean
     org.springframework.web.reactive.function.server.RouterFunction<
             org.springframework.web.reactive.function.server.ServerResponse> merchantRoutes(
-            UserService userService, MerchantStore merchantStore) {
-        return MerchantRoutes.create(userService, merchantStore);
+            UserService userService, MerchantStore merchantStore, AdminPolicy adminPolicy) {
+        return MerchantRoutes.create(userService, merchantStore, adminPolicy);
     }
 
     // ---- 长期记忆(跨会话个性化): remember 工具写入, 每轮对话回灌上下文(语义召回) ----
@@ -521,8 +535,8 @@ public class StoreAutoConfiguration {
     org.springframework.web.reactive.function.server.RouterFunction<
             org.springframework.web.reactive.function.server.ServerResponse> accountRoutes(
             UserService userService, ConversationService conversationService,
-            PasswordResetService passwordResetService) {
-        return AccountRoutes.create(userService, conversationService, passwordResetService);
+            PasswordResetService passwordResetService, AdminPolicy adminPolicy) {
+        return AccountRoutes.create(userService, conversationService, passwordResetService, adminPolicy);
     }
 
     /** 用户听歌统计 REST：实际开始播放后累计该用户、该歌曲的次数。 */

@@ -58,6 +58,11 @@ public interface MerchantStore {
     /** 全部启用的商家; 启动时预合成开场白用 */
     List<MerchantProfile> listEnabled();
 
+    /** 全部商家(含停用), 按创建顺序; 运营管理员的列表用 */
+    default List<MerchantProfile> listAll() {
+        return listEnabled();
+    }
+
     /**
      * 新建或更新。id 为空则新建并回填 id; 接入号与别家冲突时抛 {@link IllegalArgumentException}。
      *

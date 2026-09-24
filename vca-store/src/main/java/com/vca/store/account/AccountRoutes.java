@@ -28,7 +28,7 @@ import static org.springframework.web.reactive.function.server.RequestPredicates
  * <pre>
  *   POST /api/register {username(手机号),email,password} → {token,username(脱敏显示名)}
  *   POST /api/login    {username(手机号),password}       → {token,username(脱敏显示名)}
- *   GET  /api/me                          → {username(脱敏显示名),tier(free/vip),memberExpiresAt}
+ *   GET  /api/me                          → {username(脱敏显示名),tier(free/vip),memberExpiresAt,admin}
  *   POST /api/password/forgot {account}               → {ok} (dev 附 devToken)  发重置邮件
  *   POST /api/password/reset  {token,password}        → {ok}                    凭令牌设新密码
  *   POST /api/password/change-request                 → {ok} (dev 附 devToken)  已登录, 发重置邮件到本人邮箱
@@ -44,16 +44,24 @@ public final class AccountRoutes {
     private final UserService users;
     private final ConversationService convs;
     private final PasswordResetService reset;
+    private final AdminPolicy admins;
 
-    private AccountRoutes(UserService users, ConversationService convs, PasswordResetService reset) {
+    private AccountRoutes(UserService users, ConversationService convs, PasswordResetService reset,
+                          AdminPolicy admins) {
         this.users = users;
         this.convs = convs;
         this.reset = reset;
+        this.admins = admins == null ? AdminPolicy.NONE : admins;
     }
 
     public static RouterFunction<ServerResponse> create(UserService users, ConversationService convs,
                                                         PasswordResetService reset) {
-        AccountRoutes r = new AccountRoutes(users, convs, reset);
+        return create(users, convs, reset, AdminPolicy.NONE);
+    }
+
+    public static RouterFunction<ServerResponse> create(UserService users, ConversationService convs,
+                                                        PasswordResetService reset, AdminPolicy admins) {
+        AccountRoutes r = new AccountRoutes(users, convs, reset, admins);
         return RouterFunctions.route(POST("/api/register"), r::register)
                 .andRoute(POST("/api/login"), r::login)
                 .andRoute(GET("/api/me"), r::me)
@@ -133,13 +141,13 @@ public final class AccountRoutes {
             return unauthorized();
         }
         // 注意: Mono.fromCallable 对 null 结果会发空(不是 null 元素), 故用户不存在走 switchIfEmpty
-        return blocking(() -> meDto(users.findById(uid)))
+        return blocking(() -> meDto(users.findById(uid), admins.isAdmin(uid)))
                 .flatMap(dto -> json(200, dto))
                 .switchIfEmpty(unauthorized());
     }
 
     /** 用户不存在返回 null, 由上游 switchIfEmpty 转 401。 */
-    private static Map<String, Object> meDto(AppUser user) {
+    private static Map<String, Object> meDto(AppUser user, boolean admin) {
         if (user == null) {
             return null;
         }
@@ -149,6 +157,8 @@ public final class AccountRoutes {
         m.put("tier", UserService.tierOf(user).code());
         m.put("memberExpiresAt", user.getMemberExpiresAt() == null
                 ? 0 : user.getMemberExpiresAt().toInstant(ZoneOffset.UTC).toEpochMilli());
+        // 网页据此决定门店表单里接入号/转人工这些运营字段能不能改; 真正的拦截在 MerchantRoutes
+        m.put("admin", admin);
         return m;
     }
 

@@ -305,11 +305,107 @@ class FreeSwitchSocketServerTest {
         assertThat(captured.audio.poll(2, TimeUnit.SECONDS)).isNotNull();
 
         // 连着应答几次重建请求, 但始终不发音频
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 4; i++) {
             fs.expect("sendmsg");
             fs.reply("+OK");
         }
         assertThat(captured.completions.poll(3, TimeUnit.SECONDS))
                 .as("重建无效后应结束这路通话").isNotNull();
+    }
+
+    // ---- 转人工 ----
+
+    /** 发起转人工, 按顺序读掉三条命令, 返回坐席通道 uuid 与呼坐席的 Job-UUID */
+    private String[] startTransfer() throws Exception {
+        assertThat(captured.leg.transfer("user/8002@vca.local")).isTrue();
+        assertThat(fs.readCommand().line()).isEqualTo("event plain BACKGROUND_JOB");
+        assertThat(fs.readCommand().line()).isEqualTo("bgapi uuid_setvar " + UUID + " hangup_after_bridge true");
+        FakeFreeSwitchChannel.Command originate = fs.readCommand();
+        String line = originate.line();
+        assertThat(line).startsWith("bgapi originate {origination_uuid=")
+                .contains("originate_timeout=20").contains("origination_caller_id_number=13800138000")
+                .endsWith("}user/8002@vca.local &park()");
+        String agent = line.substring(line.indexOf("origination_uuid=") + 17, line.indexOf(','));
+        return new String[]{agent, originate.headers().get("Job-UUID")};
+    }
+
+    private void backgroundJob(String jobUuid, String result) throws Exception {
+        fs.event("Event-Name: BACKGROUND_JOB\nJob-UUID: " + jobUuid + "\nJob-Owner-UUID: " + UUID
+                + "\nContent-Length: " + result.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+                + "\n\n" + result);
+    }
+
+    /**
+     * 坐席接了 → uuid_bridge 两路 → 通知上层已接通。接通后客户这一路的 unicast 被桥接拆掉, 没有媒体是正常的:
+     * 媒体泵不能当成断流去重建、更不能挂机, 否则接起电话的前台聊不到十秒就被切断。
+     */
+    @Test
+    void answeredAgentIsBridgedAndSilenceIsNotTreatedAsMediaLoss() throws Exception {
+        start(FreeSwitchConfig.onPort(0).withMediaWaitMs(200));
+        fs.answerHandshake(UUID, "13800138000", "5000");
+        fs.sendAudio(new byte[320]);
+        assertThat(take(captured.events).type()).isEqualTo(CallEvent.Type.ANSWERED);
+
+        String[] t = startTransfer();
+        backgroundJob(t[1], "+OK " + t[0] + "\n");
+
+        FakeFreeSwitchChannel.Command bridge = fs.readCommand();
+        assertThat(bridge.line()).isEqualTo("bgapi uuid_bridge " + UUID + " " + t[0]);
+        backgroundJob(bridge.headers().get("Job-UUID"), "+OK\n");
+        assertThat(take(captured.events).type()).isEqualTo(CallEvent.Type.TRANSFER_CONNECTED);
+
+        // 桥接后一个媒体包都没有, 等过好几个 mediaWait 周期
+        assertThat(fs.pollCommand(1200)).as("桥接中不该重建 unicast, 也不该挂机").isNull();
+        assertThat(captured.completions).isEmpty();
+        assertThat(captured.leg.isFinished()).isFalse();
+    }
+
+    /**
+     * 前台没接: 客户这一路从头到尾没动过, 媒体照常 —— AI 接着聊。
+     * (旧做法是在客户这一路上直接 bridge, 失败后 unicast 再也接不回来, 本机实测客户直接被挂断)
+     */
+    @Test
+    void unansweredAgentLeavesTheCustomerLegUntouched() throws Exception {
+        startAndHandshake();
+        fs.sendAudio(pattern(320));
+        assertThat(take(captured.events).type()).isEqualTo(CallEvent.Type.ANSWERED);
+        take(captured.audio);
+
+        String[] t = startTransfer();
+        backgroundJob(t[1], "-ERR NO_ANSWER\n");
+
+        CallEvent failed = take(captured.events);
+        assertThat(failed.type()).isEqualTo(CallEvent.Type.TRANSFER_FAILED);
+        assertThat(failed.detail()).isEqualTo("NO_ANSWER");
+        assertThat(fs.pollCommand(300)).as("客户这一路不需要任何修补").isNull();
+        byte[] later = pattern(320);
+        fs.sendAudio(later);
+        assertThat(take(captured.audio)).as("媒体一直通着").containsExactly(later);
+    }
+
+    /** 坐席还在振铃客户就挂了: 撤回对坐席的呼叫, 不让前台接起一个没人的电话 */
+    @Test
+    void customerHangingUpWhileAgentRingsCancelsTheAgentCall() throws Exception {
+        startAndHandshake();
+        fs.sendAudio(pattern(320));
+        take(captured.events);
+        String[] t = startTransfer();
+
+        fs.send("Content-Type: text/disconnect-notice\nContent-Disposition: linger\nContent-Length: 0\n\n");
+        fs.event("Event-Name: CHANNEL_HANGUP\nHangup-Cause: NORMAL_CLEARING\n\n");
+
+        assertThat(fs.readCommand().line()).isEqualTo("bgapi uuid_kill " + t[0]);
+        assertThat(take(captured.events).type()).isEqualTo(CallEvent.Type.HANGUP);
+    }
+
+    /** 坐席接起来的那一刻客户已经挂了: 同样把坐席那一路收掉 */
+    @Test
+    void agentAnsweringAfterTheCustomerLeftIsHungUp() throws Exception {
+        startAndHandshake();
+        fs.sendAudio(pattern(320));
+        take(captured.events);
+        String[] t = startTransfer();
+        fs.event("Event-Name: CHANNEL_HANGUP\nHangup-Cause: NORMAL_CLEARING\n\n");
+        assertThat(fs.readCommand().line()).isEqualTo("bgapi uuid_kill " + t[0]);
     }
 }

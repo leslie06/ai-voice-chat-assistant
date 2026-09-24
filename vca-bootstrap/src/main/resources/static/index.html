@@ -652,7 +652,8 @@
         <div id="mEditor" hidden>
           <div class="mform">
             <div><label>行业</label><select id="mIndustry"></select></div>
-            <div><label>接入号 *</label><input id="mNumber" placeholder="网关转接的号码，如 5000"></div>
+            <div id="mOwnerRow" hidden><label>归属账号（商家注册用的手机号或邮箱，留空=自己）</label><input id="mOwner" placeholder="13800138000"></div>
+            <div><label>接入号 *（运营分配）</label><input id="mNumber" placeholder="网关转接的号码，如 5000"></div>
             <div><label id="mNameLabel">门店名称 *</label><input id="mName" placeholder="美好口腔东城店"></div>
             <div><label>开场白（留空则按名称生成）</label><input id="mGreeting" placeholder="您好，这里是美好口腔，请问有什么可以帮您？"></div>
             <div><label>营业时间</label><input id="mHours" placeholder="每天 9:00-20:00，除夕初一休息"></div>
@@ -664,9 +665,9 @@
             <div class="full"><label id="mBookingLabel">预约规则</label><textarea id="mBooking" placeholder="留下称呼、手机号和希望的时间段，前台 1 小时内回电确认；改期请提前 4 小时"></textarea></div>
             <div class="full"><label>其他要让 AI 知道的</label><textarea id="mNotes" placeholder="停车怎么免费、医保哪些能报、常见顾虑怎么答……"></textarea></div>
             <div class="full"><label>语气与禁忌（可选）</label><textarea id="mPrompt" placeholder="称呼客户为您；不承诺任何治疗效果；被问到别家诊所一律不评价"></textarea></div>
-            <div><label>转人工分机</label><input id="mTransfer" placeholder="user/8002@vca.local"></div>
-            <div><label>小结推送地址</label><input id="mWebhook" placeholder="企业微信 / 钉钉机器人 webhook"></div>
-            <div><label>音色（可选）</label><input id="mVoice" placeholder="留空用系统默认"></div>
+            <div><label>转人工分机（运营配置）</label><input id="mTransfer" placeholder="网关话机口的分机号，如 8002"></div>
+            <div><label>小结推送地址</label><input id="mWebhook" placeholder="企业微信 / 钉钉群机器人的 https 地址"></div>
+            <div><label>音色（运营配置）</label><input id="mVoice" placeholder="留空用系统默认"></div>
             <div><label>识别热词表 ID（运营配置，一般留空）</label><input id="mVocab" placeholder="留空则用本行业自动维护的热词表"></div>
             <div class="full" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <label style="margin:0;display:flex;align-items:center;gap:6px;color:var(--text);font-size:13px"><input type="checkbox" id="mEnabled" checked style="width:auto">启用</label>
@@ -679,7 +680,7 @@
             <div class="full mprev" id="mPrevBox" hidden></div>
           </div>
         </div>
-        <div class="field-hint">每家门店一个接入号（网关或线路送来的被叫号码）。选好行业后，AI 会按行业的路数接电话（诊所约面诊、培训机构约试听），资料填进去直接交给电话 AI 作答，改完立即生效，不用重启。价格和时间以这里为准，AI 不会编造资料里没有的信息；店名和项目名会自动进识别热词表，电话里听得更准。</div>
+        <div class="field-hint">每家门店一个接入号（网关或线路送来的被叫号码），由运营在装网关时开通；接入号、转人工分机、音色和热词表由运营配置，其余资料你可以随时自己改。选好行业后，AI 会按行业的路数接电话（诊所约面诊、培训机构约试听），资料填进去直接交给电话 AI 作答，改完立即生效，不用重启。价格和时间以这里为准，AI 不会编造资料里没有的信息；店名和项目名会自动进识别热词表，电话里听得更准。</div>
       </div>
       <div class="field">
         <label>对话记录</label>
@@ -1516,9 +1517,13 @@ function showLanding(){
 }
 /* ---------- 会员等级(free/vip): 标识与权益都以后端 /api/me 的 tier 为准 ---------- */
 let meTier='free';
+/* 运营管理员: 能新建门店、分配接入号和转人工分机。只影响表单能不能填, 真正的拦截在后端 */
+let meAdmin=false;
 function applyMe(data){
   me=data.username;
+  meAdmin=!!data.admin;
   renderTier(data.tier, data.memberExpiresAt);
+  applyMerchantRole();
 }
 function renderTier(tier, expiresAt){
   meTier = tier==='vip' ? 'vip' : 'free';
@@ -2309,6 +2314,15 @@ const M_PLACEHOLDERS={
     notes:'常见问题怎么答、哪些事要转给同事……',prompt:'称呼客户为您；不确定的事不要承诺',icon:'🏪'}};
 let M_INDUSTRIES=[];
 let mEditingId=null;
+/* 直通电话线路的字段(接入号/转人工/音色/热词表): 只有运营能改, 商家这里只读。
+   名单写在函数里: applyMe 可能在脚本走到这里之前就被调用, 顶层 const 会撞上暂时性死区 */
+function applyMerchantRole(){
+  document.getElementById('mNew').hidden=!meAdmin;
+  for(const id of ['mNumber','mTransfer','mVoice','mVocab']){
+    const el=document.getElementById(id); el.readOnly=!meAdmin;
+    el.title=meAdmin?'':'由运营配置，如需修改请联系我们';
+  }
+}
 async function loadIndustries(){
   if(M_INDUSTRIES.length) return;
   const r=await api('GET','/api/merchants/industries');
@@ -2339,12 +2353,17 @@ async function refreshMerchants(){
 function renderMerchantList(list){
   const box=document.getElementById('mList'); if(!box) return;
   box.innerHTML='';
-  if(!list.length){ box.innerHTML='<div class="field-hint" style="margin:0">（还没有门店。添加后，打到该接入号的电话就由 AI 用这里的资料接听）</div>'; return; }
+  if(!list.length){
+    box.innerHTML='<div class="field-hint" style="margin:0">'+(meAdmin
+      ? '（还没有门店。添加后，打到该接入号的电话就由 AI 用这里的资料接听）'
+      : '（还没有门店。接入号由运营开通，开通后你的门店会出现在这里，资料由你自己维护）')+'</div>';
+    return;
+  }
   for(const m of list){
     const row=document.createElement('div'); row.className='mrow';
     const name=document.createElement('span'); name.className='mname';
     const ind=M_INDUSTRIES.find(i=>i.code===m.industry);
-    name.textContent=((M_PLACEHOLDERS[m.industry]||M_PLACEHOLDERS.generic).icon)+' '+(m.name||'未命名')+'  ·  '+(ind?ind.label:'其他商家')+'  ·  接入号 '+m.number+(m.enabled?'':'  ·  已停用');
+    name.textContent=((M_PLACEHOLDERS[m.industry]||M_PLACEHOLDERS.generic).icon)+' '+(m.name||'未命名')+'  ·  '+(ind?ind.label:'其他商家')+'  ·  接入号 '+m.number+(meAdmin?'  ·  账号 #'+m.ownerId:'')+(m.enabled?'':'  ·  已停用');
     if(!m.enabled) name.classList.add('moff');
     const edit=document.createElement('button'); edit.className='iconbtn'; edit.textContent='✏️'; edit.title='编辑';
     edit.onclick=()=>openMerchantEditor(m);
@@ -2359,6 +2378,8 @@ function openMerchantEditor(m){
   if(!(m&&m.industry)) document.getElementById('mIndustry').value=M_INDUSTRIES[0]?M_INDUSTRIES[0].code:'generic';
   applyIndustry();
   document.getElementById('mEnabled').checked=m?m.enabled!==false:true;
+  document.getElementById('mOwner').value='';
+  document.getElementById('mOwnerRow').hidden=!(meAdmin&&!m);   // 归属账号只在运营新建时指定
   document.getElementById('mPrevBox').hidden=true; setMerchantMsg('');
   document.getElementById('mEditor').hidden=false;
   document.getElementById('mName').focus();
@@ -2377,6 +2398,7 @@ async function saveMerchant(){
   if(!b.name){ setMerchantMsg('名称不能为空', false); return; }
   if(!b.number){ setMerchantMsg('接入号不能为空', false); return; }
   const btn=document.getElementById('mSave'); btn.disabled=true;
+  if(!mEditingId) b.ownerAccount=document.getElementById('mOwner').value.trim();
   const r= mEditingId ? await api('PUT','/api/merchants/'+mEditingId, b) : await api('POST','/api/merchants', b);
   btn.disabled=false;
   if(r.ok){ setMerchantMsg('已保存，下一通电话即生效', true); mEditingId=r.data.id; await refreshMerchants(); setTimeout(closeMerchantEditor, 900); }

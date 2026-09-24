@@ -59,16 +59,16 @@ public final class TransferToHumanSkill implements Skill {
     public Mono<SkillResult> execute(Map<String, Object> args) {
         return Mono.fromSupplier(() -> {
             String reason = args == null ? null : String.valueOf(args.getOrDefault("reason", ""));
-            if (dialString == null || dialString.isBlank()) {
-                log.info("[{}] 请求转人工但未配坐席号码, 原因={}", call.callId(), reason);
+            if (dialString == null || dialString.isBlank() || !call.session().supportsTransfer()) {
+                log.info("[{}] 请求转人工但{}, 原因={}", call.callId(),
+                        dialString == null || dialString.isBlank() ? "未配坐席号码" : "接入层不支持转接", reason);
                 return SkillResult.reply("不好意思，现在没法直接转接，我把您的号码记下来，稍后让同事回电给您可以吗？");
             }
             log.info("[{}] 转人工, 原因={}", call.callId(), reason);
-            // 先让确认语进缓冲, 桥接由媒体服务器接管后本进程就不再出声了
-            boolean ok = call.session().transfer(dialString);
-            return SkillResult.reply(ok
-                    ? "好的，我帮您转接人工，请稍等。"
-                    : "不好意思，转接没成功，我把您的情况记下来，稍后让同事回电给您可以吗？");
+            // 只登记, 由通话会话在确认语播完之后再桥接 —— 桥接之后本进程的声音就送不出去了。
+            // 坐席没接的话通话会回到 AI 这边, 由会话补一句"留个称呼, 让同事回电"。
+            call.transfer().accept(dialString);
+            return SkillResult.reply("好的，我帮您转接人工，请稍等。");
         });
     }
 }

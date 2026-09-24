@@ -252,4 +252,28 @@ class MerchantRegistryTest {
         MerchantRegistry registry = p.toMerchantRegistry(broken, m -> { });
         assertThat(registry.resolve("5000").label()).as("查库失败退回配置文件, 电话照接").isEqualTo("配置里的店");
     }
+
+    /**
+     * 库里的门店没配转人工时不能回退到顶层那个分机 —— 那是另一家店的前台座机。
+     * 库里存着不合规的拨号串/推送地址(校验上线前存进去的)时当作没填, 不能交给 FreeSWITCH。
+     */
+    @Test
+    void storeMerchantNeverInheritsAnotherShopsDeskAndDropsUnsafeValues() {
+        TelephonyProperties p = baseProps();   // 顶层 transfer = user/9000
+        MemStore store = new MemStore();
+        store.put(new com.vca.orchestrator.merchant.MerchantProfile(1L, 21, "5000", "美好口腔", true, "dental",
+                "", "", "", "", "", "", "", "", "", "", "", "", "", "", null, null));
+        store.put(new com.vca.orchestrator.merchant.MerchantProfile(2L, 22, "5001", "坏数据", true, "dental",
+                "", "", "{api_on_answer=system reboot}user/8002@vca.local", "http://127.0.0.1:2019/load",
+                "", "", "", "", "", "", "", "", "", "", null, null));
+        store.put(new com.vca.orchestrator.merchant.MerchantProfile(3L, 23, "5002", "阳光口腔", true, "dental",
+                "", "", "8003", "", "", "", "", "", "", "", "", "", "", "", null, null));
+        MerchantRegistry registry = p.toMerchantRegistry(store, m -> { });
+
+        assertThat(registry.resolve("5000").transferDialString()).as("没配 → 不转, 而不是转到别家").isEmpty();
+        assertThat(registry.resolve("5001").transferDialString()).isEmpty();
+        assertThat(registry.resolve("5001").summaryWebhook()).as("不合规的推送地址回退到顶层")
+                .isEqualTo("https://hook/default");
+        assertThat(registry.resolve("5002").transferDialString()).isEqualTo("user/8003@vca.local");
+    }
 }

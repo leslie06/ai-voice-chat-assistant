@@ -77,6 +77,12 @@ public class StoreProperties {
     /** 登录令牌 HMAC 签名密钥。生产务必经 env 设一个随机串; 改了它会让已签发令牌全部失效。 */
     private String tokenSecret = "vca-default-secret-change-me";
 
+    /**
+     * 运营管理员的账号 id(app_user.id), 逗号分隔。只有他们能给门店分配接入号、配转人工分机、热词表和音色,
+     * 也只有他们能看 {@code /eval/report}。留空 = 没有管理员, 这些操作一律拒绝。
+     */
+    private String adminUserIds = "";
+
     /** 应用对外基址(如 https://host:8443), 用于拼重置密码链接。留空则邮件只给令牌。 */
     private String baseUrl = "";
 
@@ -213,6 +219,14 @@ public class StoreProperties {
     public void setOssPrefix(String ossPrefix) { this.ossPrefix = ossPrefix; }
     public int getOssPartSizeBytes() { return ossPartSizeBytes; }
     public void setOssPartSizeBytes(int ossPartSizeBytes) { this.ossPartSizeBytes = ossPartSizeBytes; }
+
+    public String getAdminUserIds() {
+        return adminUserIds;
+    }
+
+    public void setAdminUserIds(String adminUserIds) {
+        this.adminUserIds = adminUserIds;
+    }
 
     public String getTokenSecret() {
         return tokenSecret;

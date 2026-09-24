@@ -52,6 +52,12 @@ public class MyBatisMerchantStore implements MerchantStore {
     }
 
     @Override
+    public List<MerchantProfile> listAll() {
+        return mapper.selectList(Wrappers.<PhoneMerchant>query().orderByAsc("id"))
+                .stream().map(MyBatisMerchantStore::toProfile).toList();
+    }
+
+    @Override
     public List<MerchantProfile> listEnabled() {
         return mapper.selectList(Wrappers.<PhoneMerchant>query().eq("enabled", true).orderByAsc("id"))
                 .stream().map(MyBatisMerchantStore::toProfile).toList();
